@@ -503,6 +503,26 @@ ${LOGIN_CSS}
 </body></html>`;
 }
 
+export function recoverGatePage(nonce, { error } = {}) {
+  return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>QQ Bot · 配置恢复</title><meta name="robots" content="noindex"><style nonce="${nonce}">
+${LOGIN_CSS}
+</style></head><body>
+<div class="login">
+  <div class="logo">${ROBOT_ICON}</div>
+  <h1>配置恢复</h1>
+  <p class="sub">先验证管理员密钥，再查看恢复步骤</p>
+  <form method="post" action="/recover">
+    <div class="field">
+      <input name="token" type="password" placeholder="请输入 ADMIN_TOKEN" autocomplete="current-password" autofocus>
+    </div>
+    <button class="btn primary" type="submit">验 证</button>
+    <p class="msg">${error ? escapeAttribute(error) : ''}</p>
+  </form>
+  <p class="foot">恢复页只对管理员开放，避免把内部状态暴露给任何访客</p>
+</div>
+</body></html>`;
+}
+
 export function keyRecoveryPage(nonce, { hasKey }) {
   const title = hasKey ? '加密主密钥对不上' : '加密主密钥丢失';
   const lead = hasKey
@@ -524,9 +544,12 @@ ${LOGIN_CSS}
     <h2>怎么办</h2>
     <ol>
       ${first}
-      <li><b>彻底重置</b>：如果原密钥确实找不回来了，就直接把 CONFIG_ENC_KEY 换成一个新值。旧的密文会作废，需要重新登录后台把 QQ 凭据和 AI 接口再填一遍。聊天记录不受影响。</li>
+      <li><b>彻底重置</b>：如果原密钥确实找不回来了，就把 CONFIG_ENC_KEY 换成一个新值，再回到本页点下面的「清空旧配置」，然后重新登录后台把 QQ 凭据和 AI 接口填一遍。聊天记录不受影响。</li>
     </ol>
-    <p class="warn-line">出现这个页面通常意味着 CONFIG_ENC_KEY 被换成了另一个值，或者 Worker 被删掉重建过。数据库里的聊天记录、登录会话都不受影响。</p>
+    <form method="post" action="/recover/reset">
+      <button class="btn" type="submit">清空旧配置，用当前密钥重新开始</button>
+    </form>
+    <p class="warn-line">清空会删掉 QQ Secret、AI Key 和 AI 列表这三类加密值，聊天记录、登录会话和对话行为设置都保留。确认已经换好 CONFIG_ENC_KEY 再点，否则清完还是打不开。</p>
   </div>
 </div>
 </body></html>`;

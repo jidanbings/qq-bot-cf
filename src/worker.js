@@ -1,4 +1,4 @@
-import { adminPage, homePage, loginPage, setupPage, keyRecoveryPage } from './html.js';
+import { adminPage, homePage, loginPage, setupPage, keyRecoveryPage, recoverGatePage } from './html.js';
 import {
   clearChatLogs,
   createSession,
@@ -13,6 +13,7 @@ import {
   normalizeUrl,
   purgeExpiredSessions,
   randomHex,
+  resetEncryptedConfig,
   saveAiProviders,
   saveConfig,
   toPublicConfig,
@@ -35,7 +36,14 @@ import {
   safeEqual,
   assertSameOrigin,
   readJson,
+  RECOVERY_COOKIE,
+  RECOVERY_TTL_MS,
+  recoveryCookie,
+  clearRecoveryCookie,
+  makeRecoveryToken,
+  checkRecoveryToken,
 } from './utils/security.js';
+import { redact } from './utils/redact.js';
 
 export { QQBotDO } from './qq-bot-do.js';
 export { RateLimiter } from './rate-limit-do.js';
@@ -244,37 +252,52 @@ async function handleApi(request, env, url) {
   return jsonFail(404, 'not_found', `没有这个接口: ${method} ${path}`);
 }
 
-async function handle(request, env) {
+async function handleRecover(request, env, keyState) {
   const url = new URL(request.url);
-  const path = url.pathname;
+  const nonce = randomHex(16);
+  const authed = await checkRecoveryToken(env, getCookie(request, RECOVERY_COOKIE));
 
-  let keyState = { action: 'ok', key: '' };
-  if (env.DB) {
-    try {
-      const schema = await initSchema(env);
-      if (!schema.ok) {
-        console.error('自动建表失败:', schema.error);
-      }
-      keyState = await ensureKey(env);
-    } catch (err) {
-      console.error('schema/ensureKey failed:', err && err.stack ? err.stack : err);
-    }
+  if (request.method === 'POST' && url.pathname === '/recover/reset') {
+    if (!authed) return redirect('/recover');
+    const removed = await resetEncryptedConfig(env);
+    console.log('Recovery reset: removed', removed, 'encrypted keys');
+    return redirect('/login', 303, { 'Set-Cookie': clearRecoveryCookie() });
   }
 
-  if (keyState.action === 'mismatch' || keyState.action === 'missing') {
-    if (path.startsWith('/api/')) {
-      return jsonFail(
-        503,
-        'enc_key_mismatch',
-        'CONFIG_ENC_KEY 与数据库里已加密的数据对不上，请访问首页按提示恢复。'
-      );
+  if (request.method === 'POST') {
+    const ip = request.headers.get('cf-connecting-ip') || '0.0.0.0';
+    const limit = await hitRateLimit(env, `recover:${ip}`, LOGIN_LIMIT);
+    if (!limit.allowed) {
+      const mins = Math.max(1, Math.ceil((limit.resetAt - Date.now()) / 60000));
+      return htmlResponse(recoverGatePage(nonce, { error: `尝试次数过多，请 ${mins} 分钟后再试` }), nonce);
     }
-    const nonce = randomHex(16);
+    let token = '';
+    try {
+      const form = await request.formData();
+      token = String(form.get('token') || '');
+    } catch {
+
+    }
+    if (token && (await safeEqual(token, env.ADMIN_TOKEN))) {
+      await resetRateLimit(env, [`recover:${ip}`]);
+      const value = await makeRecoveryToken(env);
+      return redirect('/recover', 303, {
+        'Set-Cookie': recoveryCookie(value, Math.floor(RECOVERY_TTL_MS / 1000)),
+      });
+    }
     return htmlResponse(
-      keyRecoveryPage(nonce, { hasKey: keyState.action === 'mismatch' }),
+      recoverGatePage(nonce, { error: token ? '管理员密钥不正确' : '请输入管理员密钥' }),
       nonce
     );
   }
+
+  if (!authed) return htmlResponse(recoverGatePage(nonce, {}), nonce);
+  return htmlResponse(keyRecoveryPage(nonce, { hasKey: keyState.action === 'mismatch' }), nonce);
+}
+
+async function handle(request, env) {
+  const url = new URL(request.url);
+  const path = url.pathname;
 
   const missingSecrets = ['ADMIN_TOKEN', 'CONFIG_ENC_KEY'].filter((k) => !env[k]);
 
@@ -289,6 +312,37 @@ async function handle(request, env) {
     const nonce = randomHex(16);
     return htmlResponse(setupPage(nonce, missingSecrets), nonce);
   }
+
+  let keyState = { action: 'ok', key: '' };
+  if (env.DB) {
+    try {
+      const schema = await initSchema(env);
+      if (!schema.ok) {
+        console.error('自动建表失败:', redact(schema.error));
+      }
+      keyState = await ensureKey(env);
+    } catch (err) {
+      console.error('schema/ensureKey failed:', redact(err && err.stack ? err.stack : err));
+    }
+  }
+
+  const keyBroken = keyState.action === 'mismatch' || keyState.action === 'missing';
+
+  if (keyBroken) {
+    if (path.startsWith('/api/')) {
+      return jsonFail(
+        503,
+        'enc_key_mismatch',
+        'CONFIG_ENC_KEY 与数据库里已加密的数据对不上，请打开 /recover 验证后处理。'
+      );
+    }
+    if (path === '/recover' || path === '/recover/reset') {
+      return handleRecover(request, env, keyState);
+    }
+    return redirect('/recover');
+  }
+
+  if (path === '/recover' || path === '/recover/reset') return redirect('/');
 
   if (path === '/' && request.method === 'GET') {
     const nonce = randomHex(16);

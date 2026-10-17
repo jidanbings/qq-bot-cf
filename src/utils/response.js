@@ -44,10 +44,10 @@ export function htmlResponse(body, nonce) {
   });
 }
 
-export function redirect(location) {
+export function redirect(location, status = 302, extraHeaders = {}) {
   return new Response(null, {
-    status: 302,
-    headers: { ...SECURITY_HEADERS, Location: location }
+    status,
+    headers: { ...SECURITY_HEADERS, Location: location, ...extraHeaders }
   });
 }
 

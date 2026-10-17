@@ -48,6 +48,7 @@
 - **官方网关**：WebSocket 长连接，断线自动重连，每分钟巡检一次；部署后新版本会自己接管，无需手动重启
 - **多 AI 容错**：后台「AI 对话」可加多套 Base URL / Key / 模型，按顺序尝试，前一个超时或报错自动切下一个
 - **密钥加密**：QQ Secret 与 AI Key 以 AES-256-GCM 加密后入库，后台不回显明文
+- **日志脱敏**：写日志前统一抹掉 `sk-` 开头的 Key、Bearer 令牌、32 位十六进制串和 JSON 里的 secret 字段，报错内容也不会原样带出密钥
 - **标识脱敏**：会话 openid 入库前先做 SHA-256 指纹，只留 8 位十六进制，原始 openid 不落库、不入日志
 - **零运行时依赖**：`dependencies` 是空的，只有 `wrangler` 一个开发依赖
 
@@ -83,9 +84,9 @@
 
 `wrangler deploy` 不会删 Secret，通常是：Worker 被删掉重建、控制台手动删过 Secret、或部署到了另一个 Worker 名。去控制台 Variables and Secrets 补上即可，`CONFIG_ENC_KEY` 必须用原来那个值。
 
-**页面显示「加密主密钥需要处理」**
+**提示「加密主密钥需要处理」**
 
-`CONFIG_ENC_KEY` 和库里已加密的数据对不上（多半是换了值）。改回最初的值即可，数据都还在。找不回原值就换新值，重新填一遍 QQ 凭据和 AI 接口（聊天记录不受影响）。
+`CONFIG_ENC_KEY` 和库里已加密的数据对不上（多半是换了值）。这时打开任何页面都会被引导到 `/recover`，**需要先输入 `ADMIN_TOKEN` 验证身份**才会显示恢复步骤：验证后可以把 `CONFIG_ENC_KEY` 改回最初的值，也可以换新值后点「清空旧配置」重新开始——清空只删 QQ Secret、AI Key 和 AI 列表，聊天记录、登录会话和对话行为设置都保留。
 
 **部署报错 `10021 binding DB must have a valid database_id`**
 

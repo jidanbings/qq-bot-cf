@@ -216,6 +216,26 @@ console.log('\n旧字段清理：');
     !('aiBaseUrl' in cfg) && !('aiApiKey' in cfg) && !('replyAt' in cfg));
 }
 
+console.log('\n日志脱敏：');
+{
+  const { redact } = await import('../src/utils/redact.js');
+  const { Logger } = await import('../src/utils/logger.js');
+  check('sk- 开头的 Key 被抹掉', !redact('boom sk-abcdef123456 tail').includes('sk-abcdef123456'));
+  const hex32 = '0123456789abcdef'.repeat(2);
+  check('32 位十六进制被抹掉', !redact(`secret=${hex32}`).includes('0123456789abcdef'));
+  check('Bearer 令牌被抹掉', !redact('Authorization: Bearer abc.def.ghi').includes('abc.def.ghi'));
+  check('JSON 里的 secret 字段被抹掉', !redact('{"client_secret":"qqsecretvalue"}').includes('qqsecretvalue'));
+  check('普通文本不受影响', redact('Replied to group chat') === 'Replied to group chat');
+
+  const log = new Logger('T', 5);
+  log.info('key sk-zzzzzzzzzzzz end');
+  check('Logger 写入前就脱敏', !log.getLogs(1)[0].text.includes('sk-zzzzzzzzzzzz'));
+
+  const src = readFileSync(new URL('../src/qq-bot-do.js', import.meta.url), 'utf8');
+  check('日志里没有直接拼接密钥字段',
+    !/logger\.(info|warn|error)\(`[^`]*(?:\.secret|apiKey|clientSecret)/.test(src));
+}
+
 console.log('\n版本不一致自动让位：');
 {
   const inst = Object.create(QQBotDO.prototype);

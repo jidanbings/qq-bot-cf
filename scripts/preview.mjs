@@ -1,6 +1,6 @@
 
 import { createServer } from 'node:http';
-import { adminPage, homePage, loginPage, setupPage } from '../src/html.js';
+import { adminPage, homePage, loginPage, setupPage, recoverGatePage, keyRecoveryPage } from '../src/html.js';
 import { randomHex } from '../src/db.js';
 
 const PORT = Number(process.argv[2]) || 8788;
@@ -30,6 +30,8 @@ const ROUTES = {
   '/admin': adminPage,
   
   '/setup': (nonce, url) => setupPage(nonce, ['ADMIN_TOKEN', 'CONFIG_ENC_KEY']),
+  '/recover': (nonce) => recoverGatePage(nonce, {}),
+  '/recover/authed': (nonce) => keyRecoveryPage(nonce, { hasKey: true }),
 };
 
 const DEMO_CONFIG = {

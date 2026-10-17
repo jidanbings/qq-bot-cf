@@ -19,6 +19,55 @@ export function clearSessionCookie() {
   return `bot_session=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0`;
 }
 
+export const RECOVERY_COOKIE = 'bot_recovery';
+export const RECOVERY_TTL_MS = 60 * 60 * 1000;
+
+function toHex(bytes) {
+  let out = '';
+  for (const b of bytes) out += b.toString(16).padStart(2, '0');
+  return out;
+}
+
+async function signRecovery(env, ts) {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(env.ADMIN_TOKEN || ''),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const sig = await crypto.subtle.sign(
+    'HMAC',
+    key,
+    new TextEncoder().encode(`qqbot-recover:v1:${ts}`)
+  );
+  return toHex(new Uint8Array(sig));
+}
+
+export async function makeRecoveryToken(env) {
+  const ts = Date.now();
+  return `${ts}.${await signRecovery(env, ts)}`;
+}
+
+export async function checkRecoveryToken(env, value) {
+  if (!env.ADMIN_TOKEN || !value) return false;
+  const idx = value.indexOf('.');
+  if (idx <= 0) return false;
+  const ts = Number(value.slice(0, idx));
+  if (!Number.isFinite(ts)) return false;
+  const age = Date.now() - ts;
+  if (age < 0 || age > RECOVERY_TTL_MS) return false;
+  return safeEqual(await signRecovery(env, ts), value.slice(idx + 1));
+}
+
+export function recoveryCookie(value, maxAgeSeconds) {
+  return `${RECOVERY_COOKIE}=${value}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${maxAgeSeconds}`;
+}
+
+export function clearRecoveryCookie() {
+  return `${RECOVERY_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0`;
+}
+
 export async function safeEqual(a, b) {
   const enc = new TextEncoder();
   const [ha, hb] = await Promise.all([

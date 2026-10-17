@@ -1,4 +1,6 @@
 
+import { redact } from './redact.js';
+
 const TZ_OFFSET_MS = 8 * 60 * 60 * 1000;
 
 function stamp(ms) {
@@ -19,7 +21,7 @@ export class Logger {
 
   log(msg, level = 'info') {
     const ms = Date.now();
-    const text = `${this.prefix ? `[${this.prefix}] ` : ''}${msg}`;
+    const text = redact(`${this.prefix ? `[${this.prefix}] ` : ''}${msg}`);
 
     console.log(`[${new Date(ms).toISOString()}] [${level.toUpperCase()}] ${text}`);
 

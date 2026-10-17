@@ -462,6 +462,14 @@ export async function saveConfig(env, patch) {
   return { ok: true, saved };
 }
 
+export async function resetEncryptedConfig(env) {
+  const raw = await readRawConfig(env);
+  const keys = Object.keys(raw).filter((k) => k === KEY_CHECK_KEY || isEncrypted(raw[k]));
+  if (!keys.length) return 0;
+  await env.DB.batch(keys.map((k) => env.DB.prepare('DELETE FROM config WHERE key = ?1').bind(k)));
+  return keys.length;
+}
+
 export async function createSession(env, meta = {}) {
   const id = randomHex(32);
   const now = Date.now();
