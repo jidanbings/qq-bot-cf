@@ -1,0 +1,1102 @@
+
+export const ADMIN_JS = `
+/* ============================== 基础工具 ============================== */
+function esc(v){
+  return String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+function $(id){return document.getElementById(id);}
+
+var IX={
+  check:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
+  alert:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="12" y1="7.5" x2="12" y2="13"/><circle cx="12" cy="16.6" r="0.9" fill="currentColor" stroke="none"/></svg>',
+  dot:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2" fill="currentColor" stroke="none"/></svg>',
+  info:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="12" y1="11" x2="12" y2="16.5"/><circle cx="12" cy="7.6" r="0.9" fill="currentColor" stroke="none"/></svg>',
+  bot:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8" width="18" height="13" rx="3"/><path d="M12 2a3.5 3.5 0 0 1 3.5 3.5V8h-7V5.5A3.5 3.5 0 0 1 12 2z"/><circle cx="9" cy="14" r="1.3" fill="currentColor" stroke="none"/><circle cx="15" cy="14" r="1.3" fill="currentColor" stroke="none"/></svg>',
+  link:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7 0l2-2a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-2 2a5 5 0 0 0 7 7l1-1"/></svg>',
+  key:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="4.5"/><path d="M11 12 20 3"/><path d="M16.5 6.5 19 9"/></svg>',
+  gauge:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 18a9 9 0 1 1 17 0"/><line x1="12" y1="14" x2="16.5" y2="9.5"/></svg>',
+  chat:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.4 8.4 0 0 1-8.5 8.5 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7A8.4 8.4 0 0 1 4 11.5 8.5 8.5 0 0 1 12.5 3 8.4 8.4 0 0 1 21 11.5z"/></svg>',
+  shield:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>',
+  spark:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M18 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"/></svg>',
+  filter:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h18l-7 8v6l-4 2v-8z"/></svg>',
+  refresh:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 4 21 10 15 10"/><path d="M20.5 14a8.5 8.5 0 1 1-2-8.9L21 8"/></svg>',
+  play:'<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M8 5v14l11-7z"/></svg>',
+  stop:'<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>',
+  trash:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>',
+  arrow:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>'
+};
+
+/**
+ * 右下角提示。kind 为 'ok' 时整条绿色，'bad' 时整条红色，不传就是中性蓝色。
+ * 悬停会暂停倒计时，点一下可以立刻关掉；最多同时留 4 条，多了挤掉最旧的。
+ */
+function toast(text,kind){
+  var box=$('toast');
+  if(!box)return;
+  var el=document.createElement('div');
+  el.className='toast'+(kind?' '+kind:'');
+  el.innerHTML=(kind==='ok'?IX.check:(kind==='bad'?IX.alert:IX.info))+'<span>'+esc(text)+'</span>';
+  el.title='点击关闭';
+  box.appendChild(el);
+
+  var alive=box.querySelectorAll('.toast');
+  if(alive.length>4)box.removeChild(alive[0]);
+
+  var life=kind==='bad'?5200:3200;
+  var left=life;
+  var tick=null;
+  var gone=false;
+  function close(){
+    if(gone)return;
+    gone=true;
+    if(tick)clearInterval(tick);
+    el.style.transition='opacity .2s ease,transform .2s ease';
+    el.style.opacity='0';
+    el.style.transform='translateY(8px)';
+    setTimeout(function(){ if(el.parentNode)el.parentNode.removeChild(el); },220);
+  }
+  // 失败信息通常更长，也停留得更久；鼠标移上去就暂停，方便读完或复制
+  el.addEventListener('mouseenter',function(){ if(tick)clearInterval(tick); tick=null; });
+  el.addEventListener('mouseleave',function(){ if(!gone)start(); });
+  el.addEventListener('click',close);
+  function start(){
+    if(tick)clearInterval(tick);
+    tick=setInterval(function(){
+      left-=100;
+      if(left<=0)close();
+    },100);
+  }
+  start();
+}
+
+function api(method,path,body){
+  var opt={method:method,headers:{'Accept':'application/json'},credentials:'same-origin'};
+  if(body!==undefined){opt.headers['Content-Type']='application/json';opt.body=JSON.stringify(body);}
+  return fetch(path,opt).then(function(r){
+    return r.text().then(function(text){
+      var data=null;
+      try{data=JSON.parse(text);}catch(e){}
+      if(r.status===401&&path.indexOf('/api/auth/')!==0){location.replace('/login');return null;}
+      if(!r.ok||!data||data.ok!==true){
+        var msg=(data&&data.error&&data.error.message)||('请求失败 HTTP '+r.status);
+        throw new Error(msg);
+      }
+      return data.data;
+    });
+  });
+}
+
+/* ------------------------------ 时间格式 ------------------------------ */
+function pad2(n){return (n<10?'0':'')+n;}
+function fmtClock(ts){
+  if(!ts)return '—';
+  var d=new Date(ts);
+  if(isNaN(d.getTime()))return '—';
+  return pad2(d.getMonth()+1)+'-'+pad2(d.getDate())+' '+pad2(d.getHours())+':'+pad2(d.getMinutes());
+}
+function fmtDur(ms){
+  if(ms==null||!isFinite(ms)||ms<=0)return '—';
+  var t=Math.round(ms/1000);
+  var d=Math.floor(t/86400),h=Math.floor(t%86400/3600),m=Math.floor(t%3600/60),s=t%60;
+  if(d)return d+' 天 '+h+' 小时';
+  if(h)return h+' 小时 '+m+' 分';
+  if(m)return m+' 分 '+(s?s+' 秒':'');
+  return s+' 秒';
+}
+function ago(ms){
+  if(!ms)return '—';
+  var diff=Date.now()-ms;
+  if(diff<0)return '刚刚';
+  return fmtDur(diff)+'前';
+}
+/** 记录里的时间戳是 UTC（D1 里存的是 ISO），后台按本地时间显示 */
+function fmtEntryTime(iso){
+  var d=new Date(iso);
+  if(isNaN(d.getTime()))return String(iso||'').replace('T',' ').slice(0,19);
+  return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate())+' '+pad2(d.getHours())+':'+pad2(d.getMinutes());
+}
+
+/* ============================== 外壳联动 ============================== */
+var META={
+  status:{title:'运行状态',crumb:'概览 / 运行状态'},
+  config:{title:'机器人配置',crumb:'设置 / 机器人配置'},
+  ai:{title:'AI 对话',crumb:'设置 / AI 对话'},
+  logs:{title:'聊天记录',crumb:'数据 / 聊天记录'}
+};
+var currentTab='status';
+
+function setActive(tab){
+  var links=document.querySelectorAll('.tabs a');
+  for(var i=0;i<links.length;i++){
+    links[i].classList.toggle('active',links[i].getAttribute('data-tab')===tab);
+  }
+  var meta=META[tab]||META.status;
+  var crumb=$('crumb-title');
+  if(crumb)crumb.textContent=meta.crumb;
+  var mt=$('m-title');
+  if(mt)mt.textContent=meta.title;
+  document.title='QQ Bot 管理后台 · '+meta.title;
+}
+
+function setPill(text,kind){
+  var pill=$('pill');
+  var m=$('m-state');
+  var cls='pill-state'+(kind?' '+kind:'');
+  var html='<i></i>'+esc(text);
+  if(pill){pill.className=cls;pill.innerHTML=html;}
+  if(m){m.className=cls;m.innerHTML=html;}
+}
+
+function setTopActions(html){
+  var box=$('top-actions');
+  if(box)box.innerHTML=html||'';
+}
+
+/* ------------------------------ 外观 ------------------------------ */
+function currentTheme(){
+  var t='light';
+  try{ t=localStorage.getItem('botAdminTheme')==='dark'?'dark':'light'; }catch(e){}
+  return t;
+}
+function applyTheme(t){
+  document.documentElement.setAttribute('data-theme',t);
+  var label=$('side-theme');
+  if(label)label.textContent=(t==='dark'?'深色外观':'浅色外观');
+  var btn=$('theme-toggle');
+  if(btn)btn.setAttribute('aria-pressed',t==='dark'?'true':'false');
+}
+function toggleTheme(){
+  var next=currentTheme()==='dark'?'light':'dark';
+  try{ localStorage.setItem('botAdminTheme',next); }catch(e){}
+  applyTheme(next);
+}
+
+/* ============================== 运行状态 ============================== */
+var WS_STATE={0:'连接中',1:'已连接',2:'关闭中',3:'已关闭'};
+var statusTimer=null;
+var autoRefresh=true;
+try{ autoRefresh=localStorage.getItem('botAutoRefresh')!=='0'; }catch(e){}
+
+var S={};             // 最近一次状态数据
+var rendered=false;   // 状态页是否已经渲染过骨架
+
+function stateOf(s){
+  if(!s)return {text:'读取中',kind:''};
+  if(s.fatalStop)return {text:'已停机',kind:'bad'};
+  if(s.quotaWaitUntil&&s.quotaWaitUntil>Date.now())return {text:'配额等待中',kind:'warn'};
+  if(s.running)return {text:'运行中',kind:'ok'};
+  return {text:'已停止',kind:'bad'};
+}
+
+function banners(s){
+  var now=Date.now(),out=[];
+  if(s.fatalStop)out.push(['bad','已停机',s.fatalStop+'　先去 QQ 开放平台处理，再点「启动」重新尝试。']);
+  if(s.quotaWaitUntil&&s.quotaWaitUntil>now){
+    out.push(['warn','会话配额已用尽',
+      '预计 '+fmtClock(s.quotaWaitUntil)+' 恢复（还有 '+fmtDur(s.quotaWaitUntil-now)+'）。已经停止无效重连，到点会自动起来，不需要手动操作。']);
+  }
+  if(!s.qqReady)out.push(['bad','QQ 凭据不完整','缺少 AppID 或 Secret。到「机器人配置」填好并保存，机器人才能连上网关。']);
+  else if(!s.aiReady)out.push(['bad','AI 未配置完整','Base URL / API Key / 模型三者缺一，机器人收到了消息也回不出来。到「机器人配置」补全后保存并重启。']);
+  if(s.running&&!s.tokenExpiry)out.push(['bad','Access Token 未获取','到「机器人配置」确认 AppID / Secret 与开放平台一致。']);
+  else if((s.identifyFailures||0)>=5&&!(s.quotaWaitUntil&&s.quotaWaitUntil>now)){
+    out.push(['warn','连续鉴权失败 '+s.identifyFailures+' 次',
+      '网关持续拒绝 IDENTIFY（op9）。机器人还没上线时，到「机器人配置」把「沙箱环境」打开再试。']);
+  }
+  if(!s.running&&!out.length)out.push(['info','机器人已停止','点下面「启动」恢复运行。自动保活'+(s.desiredRunning?'仍在等待':'已关闭')+'。']);
+  var h='';
+  for(var i=0;i<out.length;i++){
+    var k=out[i][0];
+    h+='<div class="banner '+k+'"><span class="b-ico">'+(k==='bad'||k==='warn'?IX.alert:IX.info)+'</span>'
+      +'<span class="b-text"><strong>'+esc(out[i][1])+'</strong>'+esc(out[i][2])+'</span></div>';
+  }
+  return h;
+}
+
+function statCard(id,icon,label,value,cls,sub){
+  return '<div class="stat" id="'+id+'">'
+    +'<span class="stat-ico">'+icon+'</span>'
+    +'<span class="stat-label">'+esc(label)+'</span>'
+    +'<span class="stat-value '+(cls||'')+'">'+value+'</span>'
+    +'<span class="stat-sub">'+(sub||'')+'</span></div>';
+}
+
+function logsHtml(logs){
+  if(!logs||!logs.length)return '<p class="muted">暂时没有日志。</p>';
+  var h='';
+  for(var i=0;i<logs.length;i++){
+    var it=logs[i];
+    var lv=String(it.level||'info').toLowerCase();
+    h+='<div class="logline '+(lv==='error'?'error':(lv==='warn'?'warn':''))+'">'
+      +'<span class="ts">'+esc(it.time||'')+'</span>'
+      +'<span class="lv">'+esc(lv)+'</span>'
+      +'<span>'+esc(it.text||'')+'</span></div>';
+  }
+  return h;
+}
+
+function skField(wide){
+  return '<div class="sk-field'+(wide?' wide':'')+'">'
+    +'<span class="sk-bar sk-w25"></span><span class="sk-input"></span></div>';
+}
+
+function skeletonConfig(){
+  var counts=[3,3,2];
+  var h='';
+  for(var s=0;s<counts.length;s++){
+    h+='<div class="card"><div class="sk-head"><span class="sk-block sk-ico"></span>'
+      +'<div class="sk-head-txt"><span class="sk-bar sk-w25"></span><span class="sk-bar sk-w40"></span></div></div>'
+      +'<div class="sk-row">';
+    for(var i=0;i<counts[s];i++)h+=skField(i===0);
+    h+='</div></div>';
+  }
+  return h;
+}
+
+function skeletonAi(){
+  var h='<div class="card"><div class="sk-head"><span class="sk-block sk-ico"></span>'
+    +'<div class="sk-head-txt"><span class="sk-bar sk-w20"></span><span class="sk-bar sk-w35"></span></div></div>';
+  for(var i=0;i<2;i++){
+    h+='<div class="prov"><div class="prov-head"><span class="sk-block sk-no"></span>'
+      +'<span class="sk-bar sk-w20"></span></div><div class="sk-row">'
+      +skField(true)+skField(false)+skField(false)+'</div></div>';
+  }
+  h+='</div>';
+  return h;
+}
+
+function skeletonLogs(){
+  var h='<div class="card">';
+  for(var i=0;i<5;i++){
+    h+='<div class="entry"><div class="entry-head">'
+      +'<span class="sk-bar sk-w15"></span><span class="sk-bar sk-w25"></span><span class="sk-bar sk-w10"></span>'
+      +'</div><div class="entry-body"><div class="sk-field">'
+      +'<span class="sk-bar sk-w90"></span><span class="sk-bar sk-w70"></span>'
+      +'</div></div></div>';
+  }
+  return h+'</div>';
+}
+
+function skDetailRows(n){
+  var h='';
+  for(var i=0;i<n;i++){
+    h+='<dt><span class="sk-bar sk-w50"></span></dt>'
+      +'<dd><span class="sk-bar '+(i%2?'sk-w40':'sk-w60')+'"></span></dd>';
+  }
+  return h;
+}
+
+function skLogLines(n){
+  var h='';
+  for(var i=0;i<n;i++){
+    h+='<div class="sk-field"><span class="sk-bar '+(i%2?'sk-w80':'sk-w90')+'"></span></div>';
+  }
+  return h;
+}
+
+function statusSkeleton(){
+  var h='<div id="banners"></div>';
+  h+='<div class="stats">';
+  h+=statCard('stat-bot',IX.bot,'机器人','<span class="sk-bar sk-w60"></span>','','');
+  h+=statCard('stat-ws',IX.link,'网关连接','<span class="sk-bar sk-w50"></span>','','');
+  h+=statCard('stat-token',IX.key,'Access Token','<span class="sk-bar sk-w70"></span>','','');
+  h+=statCard('stat-quota',IX.gauge,'会话配额（24h）','<span class="sk-bar sk-w60"></span>','','');
+  h+='</div>';
+
+  h+='<div class="card"><div class="card-head"><h3>控制</h3><span class="hint" id="start-hint"></span></div>'
+    +'<div class="btn-row">'
+    +'<button class="btn success" id="b-start" type="button">'+IX.play+'<span>启动机器人</span></button>'
+    +'<button class="btn danger" id="b-stop" type="button">'+IX.stop+'<span>停止</span></button>'
+    +'<button class="btn" id="b-restart" type="button">'+IX.refresh+'<span>重启</span></button>'
+    +'<button class="btn ghost" id="b-rl" type="button">'+IX.shield+'<span>重置本机限流</span></button>'
+    +'</div>'
+    +'<p class="btn-hint">启动 / 停止立即生效；重启会先断开再重连，用来套用新配置。重置限流只清掉本机（当前 IP）的登录与接口计数，不影响 QQ 那边的配额。</p></div>';
+
+  h+='<div class="card"><div class="card-head"><h3>连接详情</h3><span class="hint" id="detail-hint"></span></div>'
+    +'<dl class="dl" id="details">'
+    +skDetailRows(6)
+    +'</dl>'
+    +'<p class="tip"><b>会话配额统计的是登录网关的次数</b>，不是聊天条数：长连接在线、心跳、收发消息都不消耗；只有新建会话（IDENTIFY）才 +1，断线重连走 RESUME 不消耗。</p></div>';
+
+  h+='<div class="card"><div class="card-head"><h3>运行日志</h3><span class="hint">最近 30 条 · 本地时间</span></div>'
+    +'<div class="console"><div class="console-bar"><span class="live"></span><span>live</span><span class="grow"></span>'
+    +'<button class="btn sm" id="b-copy-log" type="button">复制</button>'
+    +'<button class="btn sm" id="b-auto" type="button">自动刷新：开</button>'
+    +'<button class="btn sm" id="b-refresh" type="button">'+IX.refresh+'<span>刷新</span></button></div>'
+    +'<div class="console-body" id="logbody">'
+    +skLogLines(5)
+    +'</div></div></div>';
+
+  h+='<div id="last-error"></div>';
+  return h;
+}
+
+function paintStatus(s){
+  if(!rendered)return;
+  var now=Date.now();
+  var st=stateOf(s);
+  setPill(st.text,st.kind);
+  var nav=$('nav-state');
+  if(nav)nav.textContent=st.text;
+
+  var b=$('banners');
+  if(b)b.innerHTML=banners(s);
+
+  var ws=s.wsState==null?'未连接':(WS_STATE[s.wsState]||String(s.wsState));
+  var lim=s.sessionLimit;
+  var left=lim?(Number(lim.remaining)||0):null;
+  var total=lim?(Number(lim.total)||0):null;
+  var waiting=!!(s.quotaWaitUntil&&s.quotaWaitUntil>now);
+
+  var el=$('stat-bot');
+  if(el){
+    el.querySelector('.stat-value').innerHTML=(s.running?'<i class="dot ok"></i>运行中':'<i class="dot bad"></i>已停止');
+    el.querySelector('.stat-value').className='stat-value '+(s.running?'ok':'bad');
+    el.querySelector('.stat-sub').textContent='自动保活'+(s.desiredRunning?'已开启':'已关闭')
+      +(s.lastStartAt?' · 启动于 '+fmtClock(s.lastStartAt):'');
+  }
+  el=$('stat-ws');
+  if(el){
+    el.querySelector('.stat-value').innerHTML=esc(ws);
+    el.querySelector('.stat-value').className='stat-value '+((s.wsState===1)?'ok':'');
+    el.querySelector('.stat-sub').textContent=(s.sessionId?'会话已建立':'会话未建立')
+      +' · 内存会话 '+esc(s.sessionCount==null?0:s.sessionCount)+' 个';
+  }
+  el=$('stat-token');
+  if(el){
+    var tokCls=s.tokenValid?'ok':(s.tokenExpiry?'bad':'');
+    var tokTxt=s.tokenValid?'有效':(s.tokenExpiry?'已过期':'未获取');
+    el.querySelector('.stat-value').innerHTML=esc(tokTxt);
+    el.querySelector('.stat-value').className='stat-value '+tokCls;
+    el.querySelector('.stat-sub').textContent=s.tokenExpiry
+      ?(s.tokenValid?('过期时间 '+fmtClock(s.tokenExpiry)+'（'+fmtDur(s.tokenExpiry-now)+'）· 到期自动换新')
+                   :'已到期 · 下次收发消息或重连时自动换新')
+      :'还没取到凭证';
+  }
+  el=$('stat-quota');
+  if(el){
+    var qCls=left==null?'':(left<=0?'bad':(left<100?'warn':'ok'));
+    el.querySelector('.stat-value').innerHTML=left==null?'未知':(esc(left)+(total?' <span>/ '+esc(total)+'</span>':''));
+    el.querySelector('.stat-value').className='stat-value '+qCls;
+    el.querySelector('.stat-sub').textContent=waiting
+      ?('等待恢复至 '+fmtClock(s.quotaWaitUntil)+'（'+fmtDur(s.quotaWaitUntil-now)+'）')
+      :(lim?('重置还有 '+fmtDur(Number(lim.reset_after))):'尚未取得配额信息');
+  }
+
+  var hint=$('start-hint');
+  if(hint)hint.textContent=s.desiredRunning?'自动保活已开启，断了会自己重连':'自动保活已关闭';
+
+  var d=$('details');
+  if(d){
+    var wv=s.workerVersion||'';
+    var dv=s.version||'';
+    var sameVer=!!(wv&&dv&&wv===dv);
+    var verTxt='Worker '+(wv?'v'+wv:'未上报')+' · DO '+(dv?'v'+dv:'未上报');
+    if(!sameVer&&wv&&dv)verTxt+='（约 1 分钟内自动切换）';
+    var rows=[
+      ['版本',verTxt,sameVer?'ok':'warn'],
+      ['运行环境',s.sandbox?'沙箱环境':'正式环境',''],
+      ['API 域名',s.apiBase||'—',''],
+      ['会话 ID',s.sessionId||'尚未建立（还没成功登录过）',''],
+      ['活跃模型',s.aiModel||'未选择',s.aiModel?'ok':'bad'],
+      ['并发上限',lim&&lim.max_concurrency?('每 5 秒 '+lim.max_concurrency+' 个会话'):'—',''],
+      ['配额等待至',waiting?(fmtClock(s.quotaWaitUntil)+'（还有 '+fmtDur(s.quotaWaitUntil-now)+'）'):'无',waiting?'warn':''],
+      ['连续鉴权失败',(s.identifyFailures||0)+' 次',(s.identifyFailures||0)>=5?'bad':''],
+      ['最后关闭码',s.lastClose?('code='+s.lastClose.code+(s.lastClose.meaning?'　'+s.lastClose.meaning:'')+(s.lastClose.reason?'　'+s.lastClose.reason:'')+(s.lastClose.at?'　('+fmtClock(s.lastClose.at)+')':'')):'无',s.lastClose?'bad':''],
+      ['停机原因',s.fatalStop||'无',s.fatalStop?'bad':'']
+    ];
+    var dh='';
+    for(var i=0;i<rows.length;i++){
+      dh+='<dt>'+esc(rows[i][0])+'</dt><dd class="'+rows[i][2]+'">'+esc(rows[i][1])+'</dd>';
+    }
+    d.innerHTML=dh;
+  }
+  var dHint=$('detail-hint');
+  if(dHint)dHint.textContent='更新于 '+fmtClock(now);
+
+  var lb=$('logbody');
+  if(lb){
+    var atBottom=(lb.scrollHeight-lb.scrollTop-lb.clientHeight)<30;
+    lb.innerHTML=logsHtml(s.logs);
+    if(atBottom)lb.scrollTop=lb.scrollHeight;
+  }
+
+  var lasterr=$('last-error');
+  if(lasterr){
+    lasterr.innerHTML=s.lastError
+      ?'<div class="card"><div class="card-head"><h3>最后错误</h3></div><p class="error-text">'+esc(s.lastError)+'</p></div>'
+      :'';
+  }
+
+  var auto=$('b-auto');
+  if(auto)auto.textContent='自动刷新：'+(autoRefresh?'开':'关');
+  document.body.classList.toggle('outage',!s.running);
+}
+
+function stopStatusTimer(){
+  if(statusTimer){clearInterval(statusTimer);statusTimer=null;}
+}
+function startStatusTimer(){
+  stopStatusTimer();
+  if(!autoRefresh)return;
+  statusTimer=setInterval(function(){
+    if(currentTab==='status'&&rendered)refreshStatus(true);
+  },15000);
+}
+
+function bindStatusEvents(){
+  var bind=function(id,fn){
+    var el=$(id);
+    if(el)el.addEventListener('click',fn);
+  };
+  bind('b-start',function(){botAction('start','机器人已启动');});
+  bind('b-stop',function(){botAction('stop','机器人已停止');});
+  bind('b-restart',function(){botAction('restart','机器人已重启');});
+  bind('b-rl',resetLimits);
+  bind('b-refresh',function(){refreshStatus(false);});
+  bind('b-auto',function(){
+    autoRefresh=!autoRefresh;
+    try{localStorage.setItem('botAutoRefresh',autoRefresh?'1':'0');}catch(e){}
+    var el=$('b-auto');
+    if(el)el.textContent='自动刷新：'+(autoRefresh?'开':'关');
+    if(autoRefresh)startStatusTimer();else stopStatusTimer();
+    toast('自动刷新已'+(autoRefresh?'开启，每 15 秒更新一次':'关闭'),'ok');
+  });
+  bind('b-copy-log',function(){
+    var lines=[];
+    for(var i=0;i<(S.logs||[]).length;i++){
+      var it=S.logs[i];
+      lines.push('['+it.time+'] ['+String(it.level||'').toUpperCase()+'] '+it.text);
+    }
+    var text=lines.join(String.fromCharCode(10));
+    var done=function(){toast('日志已复制到剪贴板','ok');};
+    if(navigator.clipboard&&navigator.clipboard.writeText){
+      navigator.clipboard.writeText(text).then(done).catch(function(){toast('复制失败，请手动选中','bad');});
+    }else{
+      toast('当前浏览器不支持一键复制','bad');
+    }
+  });
+}
+
+function refreshStatus(silent){
+  if(!silent&&!rendered)return showStatus();
+  return api('GET','/api/status').then(function(s){
+    if(!s)return;
+    if(!rendered)return showStatus();
+    S=s;
+    paintStatus(s);
+  }).catch(function(e){
+    if(!silent)toast(e.message,'bad');
+  });
+}
+
+function showStatus(){
+  stopStatusTimer();
+  setActive('status');
+  setTopActions('');
+  var wrap=$('wrap');
+  wrap.innerHTML=statusSkeleton();
+  rendered=true;
+  bindStatusEvents();
+  setPill('正在读取状态…','');
+  return api('GET','/api/status').then(function(s){
+    if(!s)return;
+    S=s;
+    paintStatus(s);
+    startStatusTimer();
+  }).catch(function(e){
+    rendered=false;
+    wrap.innerHTML='<div class="card"><div class="card-head"><h3>状态读取失败</h3></div>'
+      +'<p class="error-text">'+esc(e.message)+'</p>'
+      +'<div class="btn-row mt"><button class="btn" id="b-retry" type="button">'+IX.refresh+'<span>重试</span></button></div></div>';
+    var r=$('b-retry');
+    if(r)r.addEventListener('click',showStatus);
+    setPill('读取失败','bad');
+  });
+}
+
+function busy(btn,on){
+  if(!btn)return;
+  btn.disabled=!!on;
+  btn.classList.toggle('loading',!!on);
+}
+
+function botAction(action,doneText){
+  var btn=$(action==='start'?'b-start':(action==='stop'?'b-stop':'b-restart'));
+  busy(btn,true);
+  return api('POST','/api/bot/'+action,{}).then(function(){
+    toast(doneText,'ok');
+    return refreshStatus(false);
+  }).catch(function(e){
+    toast(e.message,'bad');
+  }).then(function(){
+    busy(btn,false);
+  });
+}
+
+function resetLimits(){
+  var btn=$('b-rl');
+  busy(btn,true);
+  return api('POST','/api/ratelimit/reset',{}).then(function(){
+    toast('已重置本机限流记录','ok');
+  }).catch(function(e){toast(e.message,'bad');}).then(function(){busy(btn,false);});
+}
+
+/* ============================== 机器人配置 ============================== */
+var FIELDS=[
+  {id:'qq',icon:IX.bot,title:'QQ 开放平台',desc:'QQ 机器人开放平台里的应用凭据',items:[
+    {key:'appId',label:'QQ AppID',type:'text',ph:'机器人 AppID',required:true},
+    {key:'secret',label:'QQ Secret',type:'password',ph:'机器人密钥',secret:true,required:true},
+    {key:'sandbox',label:'沙箱环境',type:'select',options:[['0','否（正式环境）'],['1','是（沙箱环境）']],
+      hint:'机器人未上线或已下架时只能连沙箱，正式环境会拒绝鉴权（关闭码 4914）'}
+  ]},
+  {id:'behavior',icon:IX.chat,title:'对话行为',desc:'回复方式与上下文长度',items:[
+    {key:'systemPrompt',label:'系统提示词',type:'textarea',ph:'你是一个友好、靠谱的 QQ 机器人助手……',wide:true},
+    {key:'historyLimit',label:'历史消息条数',type:'number',ph:'20',hint:'每次对话携带的上下文条数，1 ~ 100'}
+  ]},
+  {id:'filter',icon:IX.filter,title:'过滤',desc:'命中即丢弃，机器人不会回复',items:[
+    {key:'groupBlacklist',label:'群黑名单',type:'textarea',ph:'group_openid1, group_openid2',wide:true,hint:'多个用逗号分隔，只对群聊生效'},
+    {key:'sensitiveWords',label:'敏感词',type:'textarea',ph:'词1, 词2',wide:true,hint:'多个用逗号分隔，消息里出现任意一个就不会回复'}
+  ]}
+];
+
+function allKeys(){
+  var keys=[];
+  for(var s=0;s<FIELDS.length;s++){
+    for(var i=0;i<FIELDS[s].items.length;i++)keys.push(FIELDS[s].items[i].key);
+  }
+  return keys;
+}
+
+function fieldHtml(f,cfg,conf){
+  var v=cfg[f.key]==null?'':String(cfg[f.key]);
+  var ph=f.ph||'';
+  if(f.secret&&conf[f.key])ph='已设置，留空表示不修改';
+  var h='<div class="field'+(f.wide?' wide':'')+'">';
+  h+='<label for="cf_'+f.key+'">'+esc(f.label)
+    +(f.required&&!(f.secret&&conf[f.key])?'<span class="req-flag">必填</span>':'')
+    +(f.secret&&conf[f.key]?'<span class="req-flag">已设置</span>':'')+'</label>';
+  if(f.type==='textarea'){
+    h+='<textarea id="cf_'+f.key+'" placeholder="'+esc(ph)+'" rows="3">'+esc(v)+'</textarea>';
+  }else if(f.type==='select'){
+    h+='<select id="cf_'+f.key+'">';
+    for(var o=0;o<f.options.length;o++){
+      var ov=f.options[o][0];
+      h+='<option value="'+esc(ov)+'"'+(v===ov?' selected':'')+'>'+esc(f.options[o][1])+'</option>';
+    }
+    h+='</select>';
+  }else if(f.type==='password'){
+    // 库里已有值时后端不回传明文，输入框留空并提示「已设置」，
+    // 这样不会在框里显示一排假的圆点让人以为可以改。
+    var hasSaved=!!(f.secret&&conf[f.key]);
+    h+='<div class="pw-wrap"><input id="cf_'+f.key+'" type="password" value="'+esc(hasSaved?'':v)+'" placeholder="'+esc(ph)+'" autocomplete="new-password">'
+      +'<button class="pw-toggle" type="button" data-pw="cf_'+f.key+'">显示</button></div>';
+  }else{
+    h+='<input id="cf_'+f.key+'" type="'+esc(f.type)+'" value="'+esc(v)+'" placeholder="'+esc(ph)+'"'
+      +(f.type==='number'?' inputmode="decimal"':'')+'>';
+  }
+  if(f.hint)h+='<p class="hint">'+esc(f.hint)+'</p>';
+  h+='</div>';
+  return h;
+}
+
+function renderConfig(d){
+  var cfg=d.config||{};
+  var conf=d.configured||{};
+  var h='';
+  for(var s=0;s<FIELDS.length;s++){
+    var sec=FIELDS[s];
+    h+='<div class="form-section"><div class="fs-head"><span class="fs-ico">'+sec.icon+'</span>'
+      +'<div><h3>'+esc(sec.title)+'</h3><p>'+esc(sec.desc)+'</p></div>'
+      +'<span class="fs-state" id="fs-'+sec.id+'"></span></div><div class="fs-body"><div class="grid">';
+    for(var i=0;i<sec.items.length;i++)h+=fieldHtml(sec.items[i],cfg,conf);
+    h+='</div></div></div>';
+  }
+  // 照 user.html：按钮直接放在表单末尾，没有 sticky 悬浮栏、没有常驻状态文字
+  h+='<div class="form-actions">'
+    +'<button class="btn" id="b-save" type="button">'+IX.check+'<span>保存配置</span></button>'
+    +'<button class="btn primary" id="b-save-restart" type="button">'+IX.refresh+'<span>保存并重启</span></button></div>';
+  $('wrap').innerHTML=h;
+
+  $('b-save').addEventListener('click',function(){saveConfig(false);});
+  $('b-save-restart').addEventListener('click',function(){saveConfig(true);});
+
+  var toggles=document.querySelectorAll('.pw-toggle');
+  for(var t=0;t<toggles.length;t++){
+    toggles[t].addEventListener('click',function(){
+      var input=$(this.getAttribute('data-pw'));
+      if(!input)return;
+      var show=input.type==='password';
+      input.type=show?'text':'password';
+      this.textContent=show?'隐藏':'显示';
+    });
+  }
+
+  var inputs=document.querySelectorAll('.field input,.field select,.field textarea');
+  for(var k=0;k<inputs.length;k++){
+    inputs[k].addEventListener('input',markDirty);
+    inputs[k].addEventListener('change',markDirty);
+  }
+  updateSectionStates();
+  setTopActions('');
+}
+
+function markDirty(){
+  updateSectionStates();
+}
+
+/** 每个分组的右上角显示「已填写 n/m」，一眼看出还差什么 */
+function updateSectionStates(){
+  for(var s=0;s<FIELDS.length;s++){
+    var sec=FIELDS[s];
+    var total=0,filled=0;
+    for(var i=0;i<sec.items.length;i++){
+      var f=sec.items[i];
+      var el=$('cf_'+f.key);
+      if(!el)continue;
+      total++;
+      var v=String(el.value||'').trim();
+      // 敏感字段在库里有值时后端回传空串，但 placeholder 会写「已设置」，按已填写算
+      var saved=!!(f.secret&&String(el.getAttribute('placeholder')||'').indexOf('已设置')===0);
+      if(v||saved)filled++;
+    }
+    var state=$('fs-'+sec.id);
+    if(!state)continue;
+    state.className='fs-state'+(total&&filled>=total?' ok':'');
+    state.innerHTML='<i></i>已填写 '+filled+'/'+total;
+  }
+}
+
+function showConfig(){
+  stopStatusTimer();
+  rendered=false;
+  setActive('config');
+  setTopActions('');
+  setPill('配置页','');
+  $('wrap').innerHTML=skeletonConfig();
+  api('GET','/api/config').then(function(d){
+    if(!d)return;
+    renderConfig(d);
+    if(S&&S.running)setPill('运行中','ok');
+  }).catch(function(e){
+    $('wrap').innerHTML='<div class="card"><div class="card-head"><h3>配置读取失败</h3></div>'
+      +'<p class="error-text">'+esc(e.message)+'</p></div>';
+    setPill('读取失败','bad');
+  });
+}
+
+function setSaveMsg(text,kind){
+  // 不再有常驻 save-msg 栏，保存状态统一用右下角 toast 提示
+  toast(text, kind || '');
+}
+
+function saveConfig(restart){
+  var keys=allKeys();
+  var patch={};
+  for(var k=0;k<keys.length;k++){
+    var el=$('cf_'+keys[k]);
+    if(el)patch[keys[k]]=el.value;
+  }
+  var b1=$('b-save'),b2=$('b-save-restart');
+  busy(b1,true);
+  busy(b2,true);
+  api('POST','/api/config',patch).then(function(){
+    if(restart){
+      return api('POST','/api/bot/restart',{}).then(function(){
+        toast('配置已保存，机器人已重启','ok');
+        // 用 hash 跳转（而不是直接调 showStatus），让 URL 与页面同步，
+        // 否则会出现「内容到了状态页、地址栏还是 #config」的错位。
+        setTimeout(function(){ location.hash = '#status'; },900);
+      });
+    }
+    toast('配置已保存','ok');
+    return api('GET','/api/config').then(function(d){
+      if(d)renderConfig(d);
+      toast('配置已保存','ok');
+    });
+  }).catch(function(e){
+    toast(e.message,'bad');
+    busy(b1,false);
+    busy(b2,false);
+  });
+}
+
+/* ============================== 聊天记录 ============================== */
+var LOG_PAGE_SIZE=20;
+var LOG_KINDS=[['all','全部'],['group','群聊'],['c2c','私聊']];
+var logState={page:1,kind:'all'};
+
+function entryHtml(it){
+  var c2c=it.kind==='c2c';
+  var h='<article class="entry">';
+  h+='<div class="entry-head">';
+  h+='<span class="tag '+(c2c?'c2c':'group')+'">'+(c2c?'私聊':'群聊')+'</span>';
+  h+='<span class="scope" title="会话标识已脱敏">#'+esc(it.scopeId||'')+'</span>';
+  if(it.model)h+='<span class="tag model" title="'+esc(it.model)+'">'+esc(it.model)+'</span>';
+  h+='<span class="time">'+esc(fmtEntryTime(it.time))+'</span>';
+  h+='</div><div class="entry-body">';
+  h+='<div class="bubble-row user"><span class="who">问</span><span class="bubble-text">'+esc(it.userContent)+'</span></div>';
+  h+='<div class="bubble-row ai"><span class="who">答</span><span class="bubble-text">'+esc(it.aiReply)+'</span></div>';
+  h+='</div></article>';
+  return h;
+}
+
+function emptyHtml(){
+  var kind=logState.kind;
+  var title='还没有聊天记录';
+  var desc='机器人回复第一条消息后，问答会成对记录在这里，最多保留最近 2000 条。';
+  if(kind==='group'){title='还没有群聊记录';desc='在群里 @ 机器人提问之后，这里就会出现记录。';}
+  if(kind==='c2c'){title='还没有私聊记录';desc='私聊机器人提问之后，这里就会出现记录。';}
+  return '<div class="empty"><span class="empty-ico">'+IX.chat+'</span><b>'+title+'</b><p>'+desc+'</p>'
+    +'<div class="btn-row"><a class="btn" href="#status">去看看运行状态'+IX.arrow+'</a></div></div>';
+}
+
+function logShell(){
+  var h='<div class="toolbar"><div class="seg" id="log-kind">';
+  for(var i=0;i<LOG_KINDS.length;i++){
+    h+='<button type="button" data-kind="'+LOG_KINDS[i][0]+'"'+(logState.kind===LOG_KINDS[i][0]?' class="active"':'')+'>'+LOG_KINDS[i][1]+'</button>';
+  }
+  h+='</div>';
+  h+='<button class="btn sm" id="b-refresh" type="button">'+IX.refresh+'<span>刷新</span></button>';
+  h+='<button class="btn sm danger" id="b-clear" type="button">'+IX.trash+'<span>清空全部</span></button>';
+  h+='<span class="count" id="log-count">读取中…</span></div>';
+  h+='<div id="log-list"></div>';
+  h+='<div class="pager" id="log-pager"></div>';
+  return h;
+}
+
+function paintPager(d){
+  var el=$('log-pager');
+  if(!el)return;
+  if(!d.totalPages||d.totalPages<=1){el.innerHTML='';return;}
+  el.innerHTML='<button class="btn sm" id="pg-prev" type="button"'+(d.page<=1?' disabled':'')+'>上一页</button>'
+    +'<span class="pg-info">第 '+d.page+' / '+d.totalPages+' 页</span>'
+    +'<button class="btn sm" id="pg-next" type="button"'+(d.page>=d.totalPages?' disabled':'')+'>下一页</button>';  var prev=$('pg-prev'),next=$('pg-next');
+  if(prev)prev.addEventListener('click',function(){showLogs(d.page-1);});
+  if(next)next.addEventListener('click',function(){showLogs(d.page+1);});
+}
+
+function loadLogs(page){
+  var list=$('log-list');
+  if(!list)return Promise.resolve();
+  logState.page=Math.max(1,Number(page)||1);
+  list.innerHTML=skeletonLogs();
+  var count=$('log-count');
+  if(count)count.textContent='读取中…';
+  return api('GET','/api/logs?page='+logState.page+'&pageSize='+LOG_PAGE_SIZE+'&kind='+logState.kind)
+    .then(function(d){
+      if(!d)return;
+      logState.page=d.page;
+      if(!d.items.length){
+        list.innerHTML=emptyHtml();
+      }else{
+        var h='<div class="entries">';
+        for(var i=0;i<d.items.length;i++)h+=entryHtml(d.items[i]);
+        h+='</div>';
+        list.innerHTML=h;
+      }
+      if(count)count.textContent='共 '+d.total+' 条';
+      var nav=$('nav-count');
+      if(nav)nav.textContent=d.total>999?'999+':String(d.total);
+      paintPager(d);
+    })
+    .catch(function(e){
+      list.innerHTML='<div class="empty"><span class="empty-ico">'+IX.alert+'</span><b>读取失败</b><p>'+esc(e.message)+'</p></div>';
+      if(count)count.textContent='—';
+    });
+}
+
+function showLogs(page){
+  stopStatusTimer();
+  rendered=false;
+  setActive('logs');
+  setTopActions('');
+  setPill('聊天记录','');
+  var wrap=$('wrap');
+  if(!$('log-list')){
+    wrap.innerHTML=logShell();
+    $('b-refresh').addEventListener('click',function(){loadLogs(logState.page);});
+    $('b-clear').addEventListener('click',clearLogs);
+    var seg=$('log-kind');
+    var btns=seg.querySelectorAll('button');
+    for(var i=0;i<btns.length;i++){
+      btns[i].addEventListener('click',function(){
+        logState.kind=this.getAttribute('data-kind');
+        for(var j=0;j<btns.length;j++)btns[j].className=(btns[j]===this?'active':'');
+        loadLogs(1);
+      });
+    }
+  }
+  return loadLogs(page||logState.page);
+}
+
+function clearLogs(){
+  if(!confirm('确定清空所有聊天记录？此操作不可撤销。'))return;
+  api('POST','/api/logs/clear',{}).then(function(d){
+    toast('已清空 '+(d&&d.deleted!=null?d.deleted:0)+' 条记录','ok');
+    return loadLogs(1);
+  }).catch(function(e){toast(e.message,'bad');});
+}
+/* ============================== AI 对话 ============================== */
+var aiState=[];
+var aiSeq=0;
+
+function modelOptions(p){
+  var ms=p.models||[];
+  var cur=p.model||'';
+  if(!ms.length){
+    return cur?'<option value="'+esc(cur)+'" selected>'+esc(cur)+'</option>'
+      :'<option value="">先点「拉取模型」</option>';
+  }
+  var has=false;
+  for(var i=0;i<ms.length;i++)if(ms[i]===cur)has=true;
+  var h=(!cur||!has)?'<option value="">请选择模型</option>':'';
+  for(var j=0;j<ms.length;j++){
+    h+='<option value="'+esc(ms[j])+'"'+(ms[j]===cur?' selected':'')+'>'+esc(ms[j])+'</option>';
+  }
+  return h;
+}
+
+function readProvidersFromDom(){
+  var cards=document.querySelectorAll('.prov');
+  for(var i=0;i<cards.length;i++){
+    var el=cards[i];
+    var id=el.getAttribute('data-id');
+    var st=null;
+    for(var j=0;j<aiState.length;j++)if(aiState[j].id===id)st=aiState[j];
+    if(!st)continue;
+    st.name=el.querySelector('.prov-name').value;
+    st.baseUrl=el.querySelector('.prov-url').value;
+    st.apiKey=el.querySelector('.prov-key').value;
+    st.model=el.querySelector('.prov-model').value;
+    st.temperature=el.querySelector('.prov-temp').value;
+    st.enabled=el.querySelector('.prov-on').checked?1:0;
+  }
+}
+
+function renderAiProviders(){
+  var box=$('prov-list');
+  if(!box)return;
+  if(!aiState.length){
+    box.innerHTML='<div class="prov-empty">还没有任何 AI，点下面的「添加 AI」加一个</div>';
+    return;
+  }
+  var h='';
+  for(var i=0;i<aiState.length;i++){
+    var p=aiState[i];
+    h+='<div class="prov'+(p.enabled?'':' is-off')+'" data-id="'+esc(p.id)+'">';
+    h+='<div class="prov-head">'
+      +'<span class="prov-no">'+(i+1)+'</span>'
+      +'<input class="prov-name" value="'+esc(p.name)+'" placeholder="名称，例如 主账号" maxlength="40">'
+      +'<label class="prov-check"><input type="checkbox" class="prov-on"'+(p.enabled?' checked':'')+'>启用</label>'
+      +'<span class="prov-tools">'
+      +'<button class="btn sm" type="button" data-act="up">上移</button>'
+      +'<button class="btn sm" type="button" data-act="down">下移</button>'
+      +'<button class="btn sm danger" type="button" data-act="del">'+IX.trash+'<span>删除</span></button>'
+      +'</span></div>';
+    h+='<div class="grid">';
+    h+='<div class="field wide"><label>Base URL</label><input class="prov-url" value="'+esc(p.baseUrl)
+      +'" placeholder="https://api.example.com/v1"></div>';
+    h+='<div class="field"><label>API Key</label><div class="pw-wrap"><input class="prov-key" type="password" value="'+esc(p.apiKey||'')+'" placeholder="'
+      +(p.hasKey?'已设置，留空表示不修改':'sk-...')+'" autocomplete="new-password">'
+      +'<button class="pw-toggle" type="button" data-pw="key">显示</button></div></div>';
+    h+='<div class="field"><label>模型</label><div class="model-row"><select class="prov-model">'+modelOptions(p)+'</select>'
+      +'<button class="btn" type="button" data-act="models">'+IX.refresh+'<span>拉取模型</span></button></div></div>';
+    h+='<div class="field"><label>Temperature</label><input class="prov-temp" type="number" inputmode="decimal" value="'
+      +esc(p.temperature)+'" placeholder="0.8"></div>';
+    h+='</div>';
+    h+='<p class="prov-note">'+(p.hasKey?'库里已有 Key：留空不改，填了新值才会覆盖。':'还没有 Key，必须填写后才能保存。')+'</p>';
+    h+='</div>';
+  }
+  box.innerHTML=h;
+}
+
+function pullProviderModels(idx,btn){
+  var p=aiState[idx];
+  if(!p)return;
+  var orig=btn.innerHTML;
+  btn.disabled=true;
+  btn.innerHTML=IX.refresh+'<span>拉取中…</span>';
+  api('POST','/api/models',{baseUrl:p.baseUrl,apiKey:p.apiKey,providerId:p.hasKey?p.id:''})
+    .then(function(d){
+      if(!d)return;
+      p.models=d.models||[];
+      if(p.models.length&&p.models.indexOf(p.model)<0)p.model=p.models[0];
+      renderAiProviders();
+      toast('已拉取 '+p.models.length+' 个模型','ok');
+    })
+    .catch(function(e){toast(e.message,'bad');})
+    .then(function(){btn.disabled=false;btn.innerHTML=orig;});
+}
+
+function onProvClick(e){
+  var btn=e.target&&e.target.closest?e.target.closest('button'):null;
+  if(!btn)return;
+  if(btn.classList.contains('pw-toggle')){
+    var wrap=btn.parentNode;
+    var input=wrap?wrap.querySelector('input'):null;
+    if(!input)return;
+    var show=input.type==='password';
+    input.type=show?'text':'password';
+    btn.textContent=show?'隐藏':'显示';
+    return;
+  }
+  var card=btn.closest('.prov');
+  if(!card)return;
+  var id=card.getAttribute('data-id');
+  var act=btn.getAttribute('data-act');
+  readProvidersFromDom();
+  var idx=-1;
+  for(var i=0;i<aiState.length;i++)if(aiState[i].id===id)idx=i;
+  if(idx<0)return;
+
+  if(act==='up'){
+    if(idx===0){toast('已经是第一个了');return;}
+    var a=aiState[idx];aiState[idx]=aiState[idx-1];aiState[idx-1]=a;
+    renderAiProviders();
+    return;
+  }
+  if(act==='down'){
+    if(idx===aiState.length-1){toast('已经是最后一个了');return;}
+    var b=aiState[idx];aiState[idx]=aiState[idx+1];aiState[idx+1]=b;
+    renderAiProviders();
+    return;
+  }
+  if(act==='del'){
+    if(aiState.length<2){toast('至少保留一个 AI');return;}
+    if(!confirm('删除「'+(aiState[idx].name||'这个 AI')+'」？'))return;
+    aiState.splice(idx,1);
+    renderAiProviders();
+    return;
+  }
+  if(act==='models')pullProviderModels(idx,btn);
+}
+
+function addProvider(){
+  readProvidersFromDom();
+  if(aiState.length>=10){toast('最多 10 个 AI','bad');return;}
+  aiSeq++;
+  aiState.push({id:'new-'+aiSeq+'-'+Date.now(),name:'AI '+(aiState.length+1),baseUrl:'',apiKey:'',
+    model:'',temperature:'0.8',enabled:1,hasKey:false,models:[]});
+  renderAiProviders();
+}
+
+function collectProviders(){
+  readProvidersFromDom();
+  var out=[];
+  for(var i=0;i<aiState.length;i++){
+    var p=aiState[i];
+    out.push({id:p.id,name:p.name,baseUrl:p.baseUrl,apiKey:p.apiKey,model:p.model,
+      temperature:p.temperature,enabled:p.enabled});
+  }
+  return out;
+}
+
+function saveProviders(restart,btn){
+  if(!aiState.length){toast('至少保留一个 AI','bad');return;}
+  busy(btn,true);
+  api('POST','/api/ai',{providers:collectProviders()})
+    .then(function(d){
+      var n=d&&d.saved?d.saved.length:aiState.length;
+      for(var i=0;i<aiState.length;i++){
+        if(aiState[i].apiKey)aiState[i].hasKey=true;
+        aiState[i].apiKey='';
+      }
+      renderAiProviders();
+      toast('已保存 '+n+' 个 AI','ok');
+      if(!restart)return null;
+      return api('POST','/api/bot/restart',{}).then(function(){
+        toast('已重启，新配置生效','ok');
+      });
+    })
+    .catch(function(e){toast(e.message,'bad');})
+    .then(function(){busy(btn,false);});
+}
+
+function showAi(){
+  stopStatusTimer();
+  rendered=false;
+  setActive('ai');
+  setTopActions('');
+  setPill('AI 对话','');
+  $('wrap').innerHTML=skeletonAi();
+  api('GET','/api/ai').then(function(d){
+    if(!d)return;
+    aiState=(d.providers||[]).map(function(p){
+      return {id:p.id,name:p.name,baseUrl:p.baseUrl,apiKey:'',model:p.model,
+        temperature:p.temperature,enabled:p.enabled?1:0,hasKey:!!p.hasKey,models:[]};
+    });
+    renderAiPage();
+  }).catch(function(e){
+    $('wrap').innerHTML='<div class="card"><div class="card-head"><h3>AI 列表读取失败</h3></div>'
+      +'<p class="error-text">'+esc(e.message)+'</p></div>';
+    setPill('读取失败','bad');
+  });
+}
+
+function renderAiPage(){
+  var h='<div class="card"><div class="card-head"><h3>AI 列表</h3>'
+    +'<span class="hint">从上到下依次尝试，前一个失败自动换下一个</span></div>'
+    +'<div class="prov-list" id="prov-list"></div>'
+    +'<div class="form-actions">'
+    +'<button class="btn" id="b-ai-add" type="button">添加 AI</button>'
+    +'<span class="grow"></span>'
+    +'<button class="btn" id="b-ai-save" type="button">'+IX.check+'<span>保存</span></button>'
+    +'<button class="btn primary" id="b-ai-save-restart" type="button">'+IX.refresh+'<span>保存并重启</span></button>'
+    +'</div></div>';
+  h+='<div class="card"><div class="card-head"><h3>怎么用</h3></div>'
+    +'<p class="tip">每个 AI 填一套 Base URL + API Key + 模型，接口要兼容 OpenAI 的 <b>/chat/completions</b>。'
+    +'列表顺序就是优先级：机器人先问第一个，超时、报错、配额用完就自动切到下一个，'
+    +'全部失败才会回一句「出了点小状况」。停用的 AI 不会参与。<br>改完点「保存并重启」才会生效。</p></div>';
+  $('wrap').innerHTML=h;
+  renderAiProviders();
+
+  $('b-ai-add').addEventListener('click',addProvider);
+  $('b-ai-save').addEventListener('click',function(){saveProviders(false,this);});
+  $('b-ai-save-restart').addEventListener('click',function(){saveProviders(true,this);});
+  $('prov-list').addEventListener('click',onProvClick);
+}
+
+/* ============================== 路由 ============================== */
+function route(){
+  var tab=(location.hash||'#status').slice(1);
+  if(tab==='config')showConfig();
+  else if(tab==='ai')showAi();
+  else if(tab==='logs')showLogs(1);
+  else showStatus();
+}
+
+/* ============================== 启动 ============================== */
+applyTheme(currentTheme());
+
+var logoutBtn=$('logout');
+if(logoutBtn)logoutBtn.addEventListener('click',function(){
+  logoutBtn.disabled=true;
+  api('POST','/api/auth/logout',{}).catch(function(){}).then(function(){
+    location.replace('/login');
+  });
+});
+
+var themeBtn=$('theme-toggle');
+if(themeBtn)themeBtn.addEventListener('click',toggleTheme);
+
+var burger=$('burger');
+var side=$('side');
+var mask=$('mask');
+function closeSide(){
+  if(side)side.classList.remove('open');
+  if(mask)mask.classList.remove('show');
+}
+if(burger&&side){
+  burger.addEventListener('click',function(){
+    var open=side.classList.toggle('open');
+    if(mask)mask.classList.toggle('show',open);
+  });
+  if(mask)mask.addEventListener('click',closeSide);
+  window.addEventListener('hashchange',closeSide);
+}
+
+window.addEventListener('hashchange',route);
+window.addEventListener('beforeunload',stopStatusTimer);
+route();
+`;
