@@ -1,6 +1,6 @@
 export const COOKIE_NAME = 'bot_session';
 
-export const APP_VERSION = '2.0.0';
+export const APP_VERSION = '3.0.0';
 
 export const LOGIN_LIMIT = { limit: 5, windowMs: 15 * 60 * 1000 };
 export const API_LIMIT = { limit: 120, windowMs: 60 * 1000 };
@@ -9,6 +9,8 @@ export const QQ_BASE = 'https://api.bot.qq.com';
 
 export const QQ_SANDBOX_BASE = 'https://sandbox.api.sgroup.qq.com';
 export const INTENT_GROUP_AND_C2C = (1 << 25);
+export const INTENT_GROUP_MEMBER = (1 << 24);
+export const INTENT_ALL_GROUP_AND_C2C = INTENT_GROUP_AND_C2C | INTENT_GROUP_MEMBER;
 
 export const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export const CHAT_LOG_MAX_ROWS = 2000;

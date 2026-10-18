@@ -37,3 +37,7 @@ wrangler.log
 # 临时文件
 *.tmp
 *.bak
+
+# 测试脚本：仅本地校验用，不入库
+scripts/check-*.mjs
+/test_*

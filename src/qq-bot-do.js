@@ -4,6 +4,7 @@ import {
   QQ_BASE,
   QQ_SANDBOX_BASE,
   INTENT_GROUP_AND_C2C,
+  INTENT_ALL_GROUP_AND_C2C,
   QQ_OPCODE,
   WS_CLOSE_REASON,
   WS_FATAL_CLOSE,
@@ -19,6 +20,36 @@ const MAX_PENDING_MESSAGES = 100;
 
 function stripMentions(text) {
   return String(text ?? '').replace(MENTION_RE, '').trim();
+}
+
+/** 字节数组 → base64，分块处理避免大数组爆栈（块大小必须是 3 的倍数，否则拼接处会出现非法 padding） */
+function toBase64(bytes) {
+  const CHUNK = 3 * 0x4000;
+  let out = '';
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    const chunk = bytes.subarray(i, i + CHUNK);
+    let bin = '';
+    for (let j = 0; j < chunk.length; j++) bin += String.fromCharCode(chunk[j]);
+    out += btoa(bin);
+  }
+  return out;
+}
+
+/** 按文件魔数识别图片 MIME，避免把非图片内容发给 AI */
+function sniffImageMime(bytes, contentType) {
+  const h = (len, offset = 0) => {
+    let s = '';
+    for (let i = offset; i < len + offset && i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+    return s;
+  };
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
+  if (bytes.length >= 8 && h(8) === '\x89PNG\r\n\x1a\n') return 'image/png';
+  if (bytes.length >= 6 && (h(6) === 'GIF87a' || h(6) === 'GIF89a')) return 'image/gif';
+  if (bytes.length >= 12 && h(4) === 'RIFF' && h(4, 8) === 'WEBP') return 'image/webp';
+  if (bytes.length >= 2 && bytes[0] === 0x42 && bytes[1] === 0x4d) return 'image/bmp';
+  const ct = (contentType || '').toLowerCase();
+  if (/^image\/(jpeg|png|gif|webp|bmp)/.test(ct)) return ct.match(/^image\/(jpeg|png|gif|webp|bmp)/)[0];
+  return null;
 }
 
 export class QQBotDO {
@@ -62,7 +93,8 @@ export class QQBotDO {
     state.blockConcurrencyWhile(async () => {
       try {
         await this.loadConfig();
-        this.desiredRunning = (await state.storage.get('desired_running')) === true;
+        const storedRun = await state.storage.get('desired_running');
+        this.desiredRunning = storedRun !== false;
         this.logger.info(`DO init: desiredRunning=${this.desiredRunning}`);
         if (this.desiredRunning) await this.startBot();
       } catch (e) {
@@ -158,6 +190,9 @@ export class QQBotDO {
           aiCount: aiList.length,
           aiModel: aiList.length ? aiList[0].model : '',
           historyLimit: Number(this.config.historyLimit) || 20,
+          markdownReply: this.config.markdownReply === '1',
+          autoRecall: this.config.autoRecall === '1',
+          welcomeEnabled: this.config.welcomeEnabled === '1',
           lastStartAt: this.lastStartAt || null,
           lastCloseAt: this.lastClose && this.lastClose.at ? this.lastClose.at : null,
           verifiedAt: this.logger.logs.length ? this.logger.logs[this.logger.logs.length - 1].at : now,
@@ -487,12 +522,13 @@ export class QQBotDO {
           d: { token: `QQBot ${token}`, session_id: this.sessionId, seq: this.resumeSeq },
         }));
       } else {
-        this.logger.info(`Identifying: intents=${INTENT_GROUP_AND_C2C} shard=[0,1]`);
+        const intents = this.config.welcomeEnabled === '1' ? INTENT_ALL_GROUP_AND_C2C : INTENT_GROUP_AND_C2C;
+        this.logger.info(`Identifying: intents=${intents} shard=[0,1]`);
         ws.send(JSON.stringify({
           op: QQ_OPCODE.IDENTIFY,
           d: {
             token: `QQBot ${token}`,
-            intents: INTENT_GROUP_AND_C2C,
+            intents,
             shard: [0, 1],
             properties: { $os: 'linux', $browser: 'qq-bot-cf', $device: 'qq-bot-cf' },
           },
@@ -536,6 +572,10 @@ export class QQBotDO {
         this.logger.info('Session resumed');
       } else if (t === 'GROUP_AT_MESSAGE_CREATE' || t === 'GROUP_MESSAGE_CREATE' || t === 'C2C_MESSAGE_CREATE') {
         await this.handleMessage(t, d);
+      } else if (t === 'GROUP_MEMBER_ADD') {
+        this.state.waitUntil(this.handleGroupMemberAdd(d));
+      } else if (t === 'GROUP_ADD_ROBOT') {
+        this.state.waitUntil(this.handleGroupAddRobot(d));
       }
       return;
     }
@@ -552,6 +592,32 @@ export class QQBotDO {
       }
       this.scheduleReconnect(wsUrl, generation, label);
     }
+  }
+
+  /** 新成员加入群聊：发欢迎语（支持 @新成员 占位符） */
+  async handleGroupMemberAdd(data) {
+    if (this.config.welcomeEnabled !== '1') return;
+    const groupOpenid = data?.group_openid;
+    const memberOpenid = data?.member_openid;
+    if (!groupOpenid || !memberOpenid) return;
+    if (this.groupBlacklist.has(groupOpenid)) return;
+    const raw = String(this.config.welcomeMsg || '').trim();
+    if (!raw) return;
+    let text = raw
+      .replace(/\{member\}/g, `<qqbot-at-user id="${memberOpenid}" />`)
+      .replace(/\{group\}/g, groupOpenid)
+      .slice(0, 1500);
+    await this.sendReply({ isC2C: false, scopeId: groupOpenid, content: text, msgId: '' });
+  }
+
+  /** 机器人被拉进新群 */
+  async handleGroupAddRobot(data) {
+    const groupOpenid = data?.group_openid;
+    if (!groupOpenid) return;
+    this.logger.info(`Bot added to group ${groupOpenid.slice(0, 8)}...`);
+    const raw = String(this.config.welcomeMsg || '').trim();
+    if (!raw || this.config.welcomeEnabled !== '1') return;
+    await this.sendReply({ isC2C: false, scopeId: groupOpenid, content: raw.slice(0, 1500), msgId: '' });
   }
 
   async handleMessage(type, data) {
@@ -579,7 +645,15 @@ export class QQBotDO {
 
     let content = stripMentions(data.content);
     if (/^@\S+\s+/.test(content)) content = content.replace(/^@\S+\s+/, '');
-    const imageUrl = data.attachments?.[0]?.url || null;
+    const attachments = Array.isArray(data.attachments) ? data.attachments : [];
+    const imageUrl = attachments[0]?.url || null;
+    if (attachments.length) {
+      this.logger.info(
+        `Inbound attachments: n=${attachments.length} first=${JSON.stringify(attachments[0]).slice(0, 160)}`
+      );
+    } else if (imageUrl) {
+      this.logger.info(`Inbound image url=${imageUrl.slice(0, 80)}...`);
+    }
     if (!content && !imageUrl) return;
     if (!content) content = '请描述这张图片';
 
@@ -604,6 +678,54 @@ export class QQBotDO {
 
   async processMessage(key, job) {
     const { isC2C, userId, scopeId, content, imageUrl, msgId } = job;
+
+    // /撤回 指令：撤回本会话最近一条机器人消息
+    if (/^\/?(撤回|recall|undo)(\s|$)/.test(content)) {
+      const session = this.sessions.get(key);
+      const lastBotMsg = session?.lastBotMsg;
+      if (!lastBotMsg) {
+        await this.sendReply({ isC2C, scopeId, content: '没有可以撤回的消息～', msgId });
+        return;
+      }
+      const ok = await this.recallMessage({ isC2C, scopeId, msgId: lastBotMsg.msgId });
+      session.lastBotMsg = null;
+      if (ok) {
+        this.logger.info(`Recalled message in ${isC2C ? 'c2c' : 'group'} ${scopeId.slice(0, 8)}...`);
+      } else {
+        await this.sendReply({ isC2C, scopeId, content: '撤回失败（可能已超过 2 分钟）', msgId });
+      }
+      return;
+    }
+
+    // /画 指令：调用生图模型画图
+    if (/^\/?(画图|画|image|draw)(\s|$)/.test(content)) {
+      const prompt = content.replace(/^\/?(画图|画|image|draw)\s*/, '').trim();
+      if (!prompt) {
+        await this.sendReply({ isC2C, scopeId, content: '用法：/画 一只橘猫，水彩风格', msgId });
+        return;
+      }
+      await this.handleImageGen({ isC2C, scopeId, msgId, prompt });
+      return;
+    }
+
+    // 自然语言直接点「画图」：不绕对话模型，直接生图
+    const genIntent = content.match(
+      /^(?:帮我|给我|请)?(?:画一张|画一幅|画一个|画一只|画个|画一下|画图|绘制|生成一张|生成一幅|生成图片|生成个)\s*(.+)$/s
+    );
+    if (genIntent) {
+      if (!this.config.imageGenModel) {
+        await this.sendReply({
+          isC2C,
+          scopeId,
+          content: '我还没接上生图能力——后台「对话行为」里把「生图模型」填上（比如 qwen-image-3.0-pro），我就能画了。',
+          msgId,
+        });
+        return;
+      }
+      await this.handleImageGen({ isC2C, scopeId, msgId, prompt: genIntent[1].trim() });
+      return;
+    }
+
     const providers = (this.config.aiProviders || []).filter(
       (p) => p && p.enabled !== 0 && p.baseUrl && p.apiKey && p.model
     );
@@ -616,12 +738,18 @@ export class QQBotDO {
     let session = this.sessions.get(key);
     if (!session) {
       this.pruneSessions();
+      const basePrompt = this.config.systemPrompt ||
+        '你是一个友好、靠谱、乐于助人的QQ机器人助手。回答保持简洁、自然、口语化，用中文交流。';
+      const genHint = this.config.imageGenModel
+        ? '\n\n【生图能力】你支持生成图片。当用户要求你画图、绘制或生成图片时，你必须只输出一行：[GEN_IMAGE] <具体的图片描述>，不要输出任何其他文字（不要说「生成好了」「马上画」之类）。系统会自动调用生图模型把图片发给用户。用户只是聊天、没有要求画图时正常回答。'
+        : '\n\n【注意】你没有生图能力，也没有图片生成工具。当用户要求画图时，如实说明「需要先在后台配置生图模型才能画」，绝对不要假装已经生成图片或说「生成好了」。';
       session = {
         history: [{
           role: 'system',
-          content: this.config.systemPrompt || '你是一个友好、靠谱、乐于助人的QQ机器人助手。回答保持简洁、自然、口语化，用中文交流。',
+          content: basePrompt + genHint,
         }],
         lastUsed: Date.now(),
+        lastBotMsg: null,
       };
       this.sessions.set(key, session);
     }
@@ -632,14 +760,20 @@ export class QQBotDO {
     while (history.length > historyLimit + 1) history.splice(1, 1);
 
     const msgs = history.slice();
+    let aiImage = null;
     if (imageUrl) {
-      msgs[msgs.length - 1] = {
-        role: 'user',
-        content: [
-          { type: 'text', text: content },
-          { type: 'image_url', image_url: { url: imageUrl } },
-        ],
-      };
+      aiImage = await this.downloadImageAsBase64(imageUrl);
+      if (aiImage) {
+        msgs[msgs.length - 1] = {
+          role: 'user',
+          content: [
+            { type: 'text', text: content },
+            { type: 'image_url', image_url: { url: aiImage } },
+          ],
+        };
+      } else {
+        this.logger.warn('Image download failed, sending text-only to AI');
+      }
     }
 
     let reply = null;
@@ -659,7 +793,8 @@ export class QQBotDO {
                 ? 0.8
                 : Number(provider.temperature),
             }),
-            signal: AbortSignal.timeout(30000),
+            // 带图请求 vision 模型处理更慢，超时放宽到 120 秒；纯文本仍 30 秒
+            signal: AbortSignal.timeout(imageUrl ? 120000 : 30000),
           });
           if (!res.ok) {
             const text = await res.text().catch(() => '');
@@ -671,7 +806,10 @@ export class QQBotDO {
         }, {
           maxAttempts: 2,
           delay: 800,
-          shouldRetry: (e) => e.status === undefined || e.status === 429 || e.status >= 500,
+          // 超时不重试（重试只会再等一轮），直接换下一个 AI
+          shouldRetry: (e) =>
+            !(e?.name === 'TimeoutError' || e?.name === 'AbortError') &&
+            (e.status === undefined || e.status === 429 || e.status >= 500),
           onRetry: (err, attempt) => this.logger.warn(`AI retry ${attempt}: ${err.message}`),
         });
 
@@ -690,23 +828,74 @@ export class QQBotDO {
 
     if (!reply) {
       this.logger.error(`All AI failed: ${aiErr ? aiErr.message : 'unknown'}`);
+      // 自动撤回：把之前这条「没答上来」的消息撤掉（可选）
+      const lastBotMsg = session?.lastBotMsg;
+      if (this.config.autoRecall === '1' && lastBotMsg?.msgId) {
+        await this.recallMessage({ isC2C, scopeId, msgId: lastBotMsg.msgId });
+        session.lastBotMsg = null;
+        this.logger.info(`Auto-recalled previous message (AI failed)`);
+        return;
+      }
       await this.sendReply({
         isC2C,
         scopeId,
-        content: '抱歉，我这边出了点小状况，暂时没法回答，稍后再问我一次吧～',
+        content: imageUrl
+          ? '这张图处理超时了，换个更小的图或稍后再试一次吧～'
+          : '抱歉，我这边出了点小状况，暂时没法回答，稍后再问我一次吧～',
         msgId,
       });
       return;
     }
 
-    const sent = await this.sendReply({
-      isC2C,
-      scopeId,
-      content: reply,
-      msgId,
-    });
-    if (!sent) return;
+    // AI 判断用户要画图时，输出 [GEN_IMAGE] 标记 → 调用生图模型
+    if (this.config.imageGenModel) {
+      const genMatch = reply.match(/\[GEN_IMAGE\]\s*([\s\S]+)/);
+      if (genMatch) {
+        await this.handleImageGen({ isC2C, scopeId, msgId, prompt: genMatch[1].trim() });
+        return;
+      }
+      // 兜底：AI 声称「生成好了」却漏了标记，用用户描述 + 回复内容补画
+      if (/生成好|画好|已生成|出图|做好了|马上画|正在画/.test(reply)) {
+        const lastUser = [...history].reverse().find((m) => m.role === 'user' && typeof m.content === 'string');
+        const prompt = `${lastUser ? lastUser.content : ''}\n${reply.replace(/\[GEN_IMAGE\]/g, '')}`
+          .trim()
+          .slice(0, 400);
+        if (prompt) {
+          await this.handleImageGen({ isC2C, scopeId, msgId, prompt });
+          return;
+        }
+      }
+    }
 
+    let sentId = null;
+    // 图片回复：AI 回复里带 markdown 图片时，先发图再补文字
+    const imgMatch = reply.match(/!\[[^\]]*\]\((https?:\/\/[^)\s]+)\)/);
+    if (imgMatch) {
+      const imageUrl = imgMatch[1];
+      const textOnly = reply.replace(/!\[[^\]]*\]\([^)]*\)/g, '').trim();
+      sentId = await this.sendImage({ isC2C, scopeId, imageUrl, msgId });
+      if (sentId) {
+        if (textOnly) {
+          const textId = await this.sendReply({ isC2C, scopeId, content: textOnly, msgId: '' });
+          if (textId) sentId = textId;
+        }
+      } else {
+        // 图片上传失败：降级为纯文本，图片地址转成可点链接，避免露出 markdown 原文
+        const fallback = (textOnly ? textOnly + '\n' : '') + imageUrl;
+        sentId = await this.sendReply({ isC2C, scopeId, content: fallback, msgId });
+      }
+    }
+    if (!sentId) {
+      sentId = await this.sendReply({
+        isC2C,
+        scopeId,
+        content: reply,
+        msgId,
+      });
+    }
+    if (!sentId) return;
+
+    if (session && msgId) session.lastBotMsg = { msgId: sentId, at: Date.now() };
     history.push({ role: 'assistant', content: reply });
     this.logger.info(`Replied to ${isC2C ? 'c2c' : 'group'} chat: ${reply.slice(0, 50)}...`);
 
@@ -729,18 +918,23 @@ export class QQBotDO {
     const sendUrl = isC2C
       ? `${this.apiBase()}/v2/users/${scopeId}/messages`
       : `${this.apiBase()}/v2/groups/${scopeId}/messages`;
-    
+
     let finalContent = stripMentions(content);
     if (/^@\S+\s+/.test(finalContent)) finalContent = finalContent.replace(/^@\S+\s+/, '');
     finalContent = finalContent.slice(0, 1500);
     if (!finalContent) finalContent = '……';
+
+    const useMarkdown = this.config.markdownReply === '1' && this.isMarkdownSafe(finalContent);
+    const payload = useMarkdown
+      ? { msg_type: 2, markdown: { content: finalContent }, msg_id: msgId }
+      : { msg_type: 0, content: finalContent, msg_id: msgId };
 
     const retryable = (e) => e.status === undefined || e.status === 429 || e.status >= 500;
     const sendOnce = async (tok) => {
       const res = await fetch(sendUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `QQBot ${tok}` },
-        body: JSON.stringify({ msg_type: 0, content: finalContent, msg_id: msgId }),
+        body: JSON.stringify(payload),
         signal: AbortSignal.timeout(10000),
       });
       if (!res.ok) {
@@ -749,33 +943,204 @@ export class QQBotDO {
         err.status = res.status;
         throw err;
       }
-      await res.body?.cancel();
+      const data = await res.json().catch(() => ({}));
+      return data.id || null;
     };
 
     try {
-      await withRetry(() => sendOnce(token), {
+      const sentId = await withRetry(() => sendOnce(token), {
         maxAttempts: 2,
         delay: 800,
         shouldRetry: retryable,
         onRetry: (err, attempt) => this.logger.warn(`Send retry ${attempt}: ${err.message}`),
       });
-      return true;
+      return sentId;
     } catch (e) {
       if (e.status === 401) {
-        
         this.token = null;
         this.tokenExpiry = 0;
         try {
-          await sendOnce(await this.getToken());
-          return true;
+          return await sendOnce(await this.getToken());
         } catch (e2) {
           this.logger.warn(`Send failed after re-auth: ${e2.message}`);
-          return false;
+          return null;
         }
       }
       this.logger.warn(e.message);
+      return null;
+    }
+  }
+
+  /** 发送富媒体（图片）消息：先上传拿 file_info，再发 msg_type=7，返回新消息 id */
+  async sendImage({ isC2C, scopeId, imageUrl, msgId }) {
+    const token = await this.getToken();
+    const base = this.apiBase();
+    const fileInfo = await this.uploadRichMedia({ isC2C, scopeId, imageUrl, token });
+    if (!fileInfo) return null;
+    const sendUrl = isC2C
+      ? `${base}/v2/users/${scopeId}/messages`
+      : `${base}/v2/groups/${scopeId}/messages`;
+    const res = await fetch(sendUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `QQBot ${token}` },
+      body: JSON.stringify({
+        msg_type: 7,
+        media: { file_info: fileInfo },
+        msg_id: msgId,
+      }),
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      this.logger.warn(`Send image failed: HTTP ${res.status}${text ? ' ' + text.slice(0, 120) : ''}`);
+      return null;
+    }
+    const data = await res.json().catch(() => ({}));
+    return data.id || null;
+  }
+
+  /** 上传图片获取 file_info（官方富媒体流程） */
+  async uploadRichMedia({ isC2C, scopeId, imageUrl, token }) {
+    const base = this.apiBase();
+    const uploadUrl = isC2C
+      ? `${base}/v2/users/${scopeId}/files`
+      : `${base}/v2/groups/${scopeId}/files`;
+    const res = await fetch(uploadUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `QQBot ${token}` },
+      body: JSON.stringify({ file_type: 1, url: imageUrl }),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      this.logger.warn(`Upload image failed: HTTP ${res.status}${text ? ' ' + text.slice(0, 120) : ''}`);
+      return null;
+    }
+    const data = await res.json();
+    if (!data.file_info) {
+      this.logger.warn(`Upload image returned no file_info: ${JSON.stringify(data).slice(0, 200)}`);
+      return null;
+    }
+    return data.file_info;
+  }
+
+  /** 下载图片并转成 base64 data URI（供不支持外链抓取的 AI 服务商识别） */
+  async downloadImageAsBase64(imageUrl) {
+    if (!imageUrl) return null;
+    try {
+      const res = await fetch(imageUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+          'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+          Referer: 'https://q.qq.com/',
+        },
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!res.ok) {
+        this.logger.warn(`Image fetch failed: HTTP ${res.status}`);
+        return null;
+      }
+      const contentType = res.headers.get('content-type') || '';
+      const buf = new Uint8Array(await res.arrayBuffer());
+      const size = buf.byteLength;
+      if (size < 16 || size > 6 * 1024 * 1024) {
+        this.logger.warn(`Image size invalid (${size} bytes), skipping`);
+        return null;
+      }
+      const mime = sniffImageMime(buf, contentType);
+      if (!mime) {
+        this.logger.warn(
+          `Downloaded bytes are not an image (${contentType || 'no content-type'}, ${size}B), head=${[...buf.slice(0, 16)].map((b) => b.toString(16).padStart(2, '0')).join(' ')}`
+        );
+        return null;
+      }
+      this.logger.info(`Image download ok: ${mime}, ${Math.round(size / 1024)}KB`);
+      return `data:${mime};base64,${toBase64(buf)}`;
+    } catch (e) {
+      this.logger.warn(`Image download failed: ${e.message}`);
+      return null;
+    }
+  }
+
+  /** 撤回消息（官方接口） */
+  async recallMessage({ isC2C, scopeId, msgId }) {
+    if (!msgId) return false;
+    const token = await this.getToken();
+    const url = isC2C
+      ? `${this.apiBase()}/v2/users/${scopeId}/messages/${msgId}`
+      : `${this.apiBase()}/v2/groups/${scopeId}/messages/${msgId}`;
+    const res = await fetch(url, {
+      method: 'DELETE',
+      headers: { Authorization: `QQBot ${token}` },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      this.logger.warn(`Recall failed: HTTP ${res.status}${text ? ' ' + text.slice(0, 120) : ''}`);
       return false;
     }
+    await res.body?.cancel();
+    return true;
+  }
+
+  /** /画 指令：调用生图模型（OpenAI 兼容 /images/generations），把图发回会话 */
+  async handleImageGen({ isC2C, scopeId, msgId, prompt }) {
+    const model = String(this.config.imageGenModel || '').trim();
+    const provider = (this.config.aiProviders || []).find(
+      (p) => p && p.enabled !== 0 && p.baseUrl && p.apiKey
+    );
+    const baseUrl = String(this.config.imageGenBaseUrl || '').trim() || (provider ? provider.baseUrl : '');
+    const apiKey = String(this.config.imageGenApiKey || '').trim() || (provider ? provider.apiKey : '');
+    if (!model) {
+      await this.sendReply({
+        isC2C,
+        scopeId,
+        content: '还没配置生图模型——打开左侧「生图模型」页填好并测试通过后保存，我就能画了。',
+        msgId,
+      });
+      return;
+    }
+    if (!baseUrl || !apiKey) {
+      await this.sendReply({
+        isC2C,
+        scopeId,
+        content: '生图接口还没配全——打开左侧「生图模型」页填 Base URL、API Key 和模型名。',
+        msgId,
+      });
+      return;
+    }
+    this.logger.info(`Image gen: model=${model} prompt=${prompt.slice(0, 40)}...`);
+    try {
+      const res = await fetch(`${baseUrl}/images/generations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify({ model, prompt, n: 1 }),
+        signal: AbortSignal.timeout(120000),
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(`HTTP ${res.status}${text ? ' ' + text.slice(0, 120) : ''}`);
+      }
+      const data = await res.json();
+      const url = data.data?.[0]?.url || data.data?.[0]?.b64_json;
+      if (!url) throw new Error('生图接口没有返回图片地址');
+      const sent = await this.sendImage({ isC2C, scopeId, imageUrl: url, msgId });
+      if (!sent) throw new Error('图片发送失败');
+      this.logger.info('Image gen: sent');
+    } catch (e) {
+      this.logger.warn(`Image gen failed: ${e.message}`);
+      await this.sendReply({
+        isC2C,
+        scopeId,
+        content: `画图失败了：${e.message.slice(0, 80)}，稍后再试一次吧～`,
+        msgId,
+      });
+    }
+  }
+
+  /** 判断文本是否适合用 Markdown 发送（含标题/列表/引用/链接等富格式才切） */
+  isMarkdownSafe(text) {
+    return /(^|\n)\s*#{1,6}\s|\*\*|~~|^\s*[-*]\s|\n\s*>|^>|\[[^\]]+\]\(https?:/m.test(text);
   }
 
   pruneSessions() {

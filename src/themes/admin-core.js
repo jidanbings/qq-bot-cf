@@ -122,6 +122,7 @@ var META={
   status:{title:'运行状态',crumb:'概览 / 运行状态'},
   config:{title:'机器人配置',crumb:'设置 / 机器人配置'},
   ai:{title:'AI 对话',crumb:'设置 / AI 对话'},
+  imagegen:{title:'生图模型',crumb:'设置 / 生图模型'},
   logs:{title:'聊天记录',crumb:'数据 / 聊天记录'}
 };
 var currentTab='status';
@@ -308,9 +309,12 @@ function statusSkeleton(){
     +'<button class="btn success" id="b-start" type="button">'+IX.play+'<span>启动机器人</span></button>'
     +'<button class="btn danger" id="b-stop" type="button">'+IX.stop+'<span>停止</span></button>'
     +'<button class="btn" id="b-restart" type="button">'+IX.refresh+'<span>重启</span></button>'
+    +'<button class="btn" id="b-switch" type="button">'+IX.arrow+'<span>立即切换版本</span></button>'
     +'<button class="btn ghost" id="b-rl" type="button">'+IX.shield+'<span>重置本机限流</span></button>'
     +'</div>'
-    +'<p class="btn-hint">启动 / 停止立即生效；重启会先断开再重连，用来套用新配置。重置限流只清掉本机（当前 IP）的登录与接口计数，不影响 QQ 那边的配额。</p></div>';
+    +'<p class="btn-hint">启动 / 停止立即生效；重启会先断开再重连，用来套用新配置。'
+    +'<b>立即切换版本</b>用于部署新版本后强制让旧实例退出、新代码立刻接管（有人一直在用、DO 不会自动卸载时用这个）。'
+    +'重置限流只清掉本机（当前 IP）的登录与接口计数，不影响 QQ 那边的配额。</p></div>';
 
   h+='<div class="card"><div class="card-head"><h3>连接详情</h3><span class="hint" id="detail-hint"></span></div>'
     +'<dl class="dl" id="details">'
@@ -392,7 +396,7 @@ function paintStatus(s){
     var dv=s.version||'';
     var sameVer=!!(wv&&dv&&wv===dv);
     var verTxt='Worker '+(wv?'v'+wv:'未上报')+' · DO '+(dv?'v'+dv:'未上报');
-    if(!sameVer&&wv&&dv)verTxt+='（约 1 分钟内自动切换）';
+    if(!sameVer&&wv&&dv)verTxt+='（点「立即切换版本」可马上生效）';
     var rows=[
       ['版本',verTxt,sameVer?'ok':'warn'],
       ['运行环境',s.sandbox?'沙箱环境':'正式环境',''],
@@ -452,6 +456,7 @@ function bindStatusEvents(){
   bind('b-start',function(){botAction('start','机器人已启动');});
   bind('b-stop',function(){botAction('stop','机器人已停止');});
   bind('b-restart',function(){botAction('restart','机器人已重启');});
+  bind('b-switch',switchVersion);
   bind('b-rl',resetLimits);
   bind('b-refresh',function(){refreshStatus(false);});
   bind('b-auto',function(){
@@ -534,6 +539,23 @@ function botAction(action,doneText){
   });
 }
 
+function switchVersion(){
+  var btn=$('b-switch');
+  busy(btn,true);
+  return api('POST','/api/bot/switch',{}).then(function(d){
+    if(d&&d.switched){
+      toast('已切换到 v'+(d.to||'?')+'，旧实例正在退出','ok');
+    }else{
+      toast('当前已是 v'+((d&&d.version)||'?')+'，无需切换','ok');
+    }
+    return refreshStatus(false);
+  }).catch(function(e){
+    toast(e.message,'bad');
+  }).then(function(){
+    busy(btn,false);
+  });
+}
+
 function resetLimits(){
   var btn=$('b-rl');
   busy(btn,true);
@@ -552,7 +574,17 @@ var FIELDS=[
   ]},
   {id:'behavior',icon:IX.chat,title:'对话行为',desc:'回复方式与上下文长度',items:[
     {key:'systemPrompt',label:'系统提示词',type:'textarea',ph:'你是一个友好、靠谱的 QQ 机器人助手……',wide:true},
-    {key:'historyLimit',label:'历史消息条数',type:'number',ph:'20',hint:'每次对话携带的上下文条数，1 ~ 100'}
+    {key:'historyLimit',label:'历史消息条数',type:'number',ph:'20',hint:'每次对话携带的上下文条数，1 ~ 100'},
+    {key:'markdownReply',label:'Markdown 回复',type:'select',options:[['0','关（纯文本）'],['1','开（标题/列表/加粗等生效）']],
+      hint:'AI 回复含标题、列表、加粗、链接时按 Markdown 发送，排版更好；纯文本回复不受影响'},
+    {key:'autoRecall',label:'AI 故障自动撤回',type:'select',options:[['0','关'],['1','开']],
+      hint:'AI 全部不可用时，自动撤回上一条机器人回复，避免留下「没答上来」的消息'}
+  ]},
+  {id:'welcome',icon:IX.bot,title:'入群欢迎',desc:'新成员进群 / 机器人被拉进新群时自动发言',items:[
+    {key:'welcomeEnabled',label:'开启欢迎',type:'select',options:[['0','关'],['1','开']],
+      hint:'开启后需要订阅群成员事件（1<<24），若平台未开通该事件权限会导致无法连接网关，请先在开放平台确认'},
+    {key:'welcomeMsg',label:'欢迎语',type:'textarea',ph:'欢迎新成员～ {member}',wide:true,
+      hint:'占位符 {member} 会替换为 @新成员，{group} 会替换为群标识。留空则不发言'}
   ]},
   {id:'filter',icon:IX.filter,title:'过滤',desc:'命中即丢弃，机器人不会回复',items:[
     {key:'groupBlacklist',label:'群黑名单',type:'textarea',ph:'group_openid1, group_openid2',wide:true,hint:'多个用逗号分隔，只对群聊生效'},
@@ -1034,6 +1066,8 @@ function showAi(){
   });
 }
 
+var imageGenState={model:'',baseUrl:'',apiKey:'',hasKey:false,testedModel:'',testedUrl:'',tested:false,result:''};
+
 function renderAiPage(){
   var h='<div class="card"><div class="card-head"><h3>AI 列表</h3>'
     +'<span class="hint">从上到下依次尝试，前一个失败自动换下一个</span></div>'
@@ -1057,11 +1091,168 @@ function renderAiPage(){
   $('prov-list').addEventListener('click',onProvClick);
 }
 
+function showImageGen(){
+  stopStatusTimer();
+  rendered=false;
+  setActive('imagegen');
+  setTopActions('');
+  setPill('生图模型','');
+  $('wrap').innerHTML='<div class="card"><div class="card-head"><h3>生图模型</h3></div>'
+    +'<div class="sk-field"><span class="sk-bar sk-w60"></span></div></div>';
+  api('GET','/api/config').then(function(c){
+    var cfg=(c&&c.config)||{};
+    var conf=(c&&c.configured)||{};
+    imageGenState.baseUrl=cfg.imageGenBaseUrl||'';
+    imageGenState.model=cfg.imageGenModel||'';
+    imageGenState.apiKey='';
+    imageGenState.hasKey=!!conf.imageGenApiKey;
+    imageGenState.tested=false;
+    imageGenState.result='';
+    renderImageGenPage();
+  }).catch(function(e){
+    $('wrap').innerHTML='<div class="card"><div class="card-head"><h3>配置读取失败</h3></div>'
+      +'<p class="error-text">'+esc(e.message)+'</p></div>';
+    setPill('读取失败','bad');
+  });
+}
+
+function renderImageGenPage(){
+  var h='<div class="card"><div class="card-head"><h3>生图模型</h3>'
+    +'<span class="hint">先测试通过才能保存</span></div>'
+    +'<div class="grid">'
+    +'<div class="field wide"><label for="igen-url">Base URL</label>'
+    +'<input id="igen-url" placeholder="https://api.example.com/v1" value="'+esc(imageGenState.baseUrl)+'"></div>'
+    +'<div class="field wide"><label for="igen-key">API Key</label>'
+    +'<div class="pw-wrap"><input id="igen-key" type="password" value="" placeholder="'
+    +(imageGenState.hasKey?'已设置，留空沿用旧 Key':'sk-...')+'" autocomplete="new-password">'
+    +'<button class="pw-toggle" type="button" data-pw="igen-key">显示</button></div></div>'
+    +'<div class="field wide"><label for="igen-model">模型</label>'
+    +'<input id="igen-model" placeholder="qwen-image-3.0-pro" maxlength="64" value="'+esc(imageGenState.model)+'"></div>'
+    +'</div>'
+    +'<div class="btn-row">'
+    +'<button class="btn" id="b-igen-test" type="button">'+IX.play+'<span>测试</span></button>'
+    +'<button class="btn primary" id="b-igen-save" type="button" disabled>'+IX.check+'<span>保存生图模型</span></button>'
+    +'<span class="hint" id="igen-state"></span>'
+    +'</div>'
+    +'<p class="hint" id="igen-result">'+esc(imageGenState.result||'')+'</p></div>';
+  h+='<div class="card"><div class="card-head"><h3>怎么用</h3></div>'
+    +'<p class="tip">生图用独立的 Base URL / API Key，和「AI 对话」里的对话模型互不影响，可以指向另一家服务商。'
+    +'填好后先点「<b>测试</b>」，服务商会现场画一张示例图；测试通过后保存按钮才会亮，保存后自动重启生效。<br>'
+    +'群里发「/画 一只橘猫，水彩风格」或直接说「帮我画一只猫」就会出图。留空模型表示关闭生图。<br>'
+    +'建议填服务商标注了 <b>image_gen</b> 的模型（比如 qwen-image-3.0-pro），接口需兼容 OpenAI 的 <b>/images/generations</b>。'
+    +'不填 Base URL / Key 时，会自动用「AI 对话」里第一个 AI 的配置兜底。</p></div>';
+  $('wrap').innerHTML=h;
+  var igenInput=$('igen-url');
+  var igenKey=$('igen-key');
+  var igenModel=$('igen-model');
+  var reset=function(){
+    imageGenState.tested=false;
+    imageGenState.result='';
+    var res=$('igen-result');
+    if(res)res.textContent='';
+    updateImageGenState();
+  };
+  if(igenInput)igenInput.addEventListener('input',reset);
+  if(igenModel)igenModel.addEventListener('input',reset);
+  if(igenKey)igenKey.addEventListener('input',reset);
+  var pw=$('igen-key');
+  var wrap=$('igen-key')?$('igen-key').parentNode:null;
+  var toggle=wrap?wrap.querySelector('.pw-toggle'):null;
+  if(toggle)toggle.addEventListener('click',function(){
+    var show=pw.type==='password';
+    pw.type=show?'text':'password';
+    toggle.textContent=show?'隐藏':'显示';
+  });
+  $('b-igen-test').addEventListener('click',function(){testImageGen(this);});
+  $('b-igen-save').addEventListener('click',function(){saveImageGen(this);});
+  updateImageGenState();
+}
+
+function updateImageGenState(){
+  var st=$('igen-state');
+  var save=$('b-igen-save');
+  var url=$('igen-url')?$('igen-url').value.trim():'';
+  var model=$('igen-model')?$('igen-model').value.trim():'';
+  var ok=imageGenState.tested&&model&&model===imageGenState.testedModel&&url===imageGenState.testedUrl;
+  if(save)save.disabled=!ok;
+  if(st){
+    if(ok)st.textContent='已测试通过';
+    else if(model||url)st.textContent='未测试';
+    else st.textContent='留空则关闭生图';
+  }
+}
+
+function testImageGen(btn){
+  var urlEl=$('igen-url');
+  var keyEl=$('igen-key');
+  var modelEl=$('igen-model');
+  var url=urlEl?urlEl.value.trim():'';
+  var key=keyEl?keyEl.value.trim():'';
+  var model=modelEl?modelEl.value.trim():'';
+  if(!url){toast('先填 Base URL','bad');return;}
+  if(!model){toast('先填模型名','bad');return;}
+  if(!key&&!imageGenState.hasKey){toast('先填 API Key','bad');return;}
+  var orig=btn.innerHTML;
+  busy(btn,true);
+  btn.innerHTML=IX.refresh+'<span>生成中…（约 10~40 秒）</span>';
+  api('POST','/api/imagegen/test',{model:model,baseUrl:url,apiKey:key})
+    .then(function(r){
+      imageGenState.testedModel=model;
+      imageGenState.testedUrl=url;
+      imageGenState.model=model;
+      imageGenState.baseUrl=url;
+      imageGenState.tested=!!(r&&r.ok);
+      imageGenState.result=r&&r.ok?('测试通过：'+r.url):('测试失败：'+((r&&r.error)||'未知错误'));
+      var res=$('igen-result');
+      if(res){
+        if(r&&r.ok){
+          res.innerHTML='<span class="ok-text">测试通过，示例图：</span>'
+            +'<a href="'+esc(r.url)+'" target="_blank" rel="noopener noreferrer">打开原图</a>'
+            +'<img class="igen-preview" src="'+esc(r.url)+'" alt="生图示例" referrerpolicy="no-referrer">';
+        }else{
+          res.textContent='测试失败：'+((r&&r.error)||'未知错误');
+        }
+      }
+      updateImageGenState();
+      toast(r&&r.ok?'生图模型可用':'测试失败，请检查地址或模型名',r&&r.ok?'ok':'bad');
+    })
+    .catch(function(e){toast(e.message,'bad');})
+    .then(function(){busy(btn,false);btn.innerHTML=orig;});
+}
+
+function saveImageGen(btn){
+  var urlEl=$('igen-url');
+  var keyEl=$('igen-key');
+  var modelEl=$('igen-model');
+  var url=urlEl?urlEl.value.trim():'';
+  var key=keyEl?keyEl.value.trim():'';
+  var model=modelEl?modelEl.value.trim():'';
+  if(!imageGenState.tested||model!==imageGenState.testedModel||url!==imageGenState.testedUrl){
+    toast('请先测试通过再保存','bad');
+    return;
+  }
+  busy(btn,true);
+  api('POST','/api/config',{imageGenBaseUrl:url,imageGenApiKey:key,imageGenModel:model})
+    .then(function(){
+      imageGenState.model=model;
+      imageGenState.baseUrl=url;
+      if(key)imageGenState.hasKey=true;
+      if(keyEl)keyEl.value='';
+      toast('生图模型已保存','ok');
+      return api('POST','/api/bot/restart',{}).then(function(){
+        toast('已重启，生图配置生效','ok');
+      });
+    })
+    .catch(function(e){toast(e.message,'bad');})
+    .then(function(){busy(btn,false);});
+}
+
 /* ============================== 路由 ============================== */
 function route(){
   var tab=(location.hash||'#status').slice(1);
   if(tab==='config')showConfig();
   else if(tab==='ai')showAi();
+  else if(tab==='imagegen')showImageGen();
   else if(tab==='logs')showLogs(1);
   else showStatus();
 }

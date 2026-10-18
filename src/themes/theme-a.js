@@ -252,6 +252,8 @@ button{font-family:inherit}
 .prov-check input{width:15px;height:15px;accent-color:var(--accent);cursor:pointer}
 .prov-tools{margin-left:auto;display:flex;gap:.4rem;flex-wrap:wrap}
 .prov-note{font-size:.72rem;color:var(--muted);padding:0 0 .9rem}
+.igen-preview{display:block;max-width:100%;max-height:320px;margin-top:10px;border-radius:12px;border:1px solid var(--border-strong)}
+.ok-text{color:var(--green);font-weight:600}
 .prov-empty{text-align:center;padding:2rem 1rem;color:var(--muted);font-size:.9rem}
 
 /* ---------- 分段控件 ---------- */
@@ -410,6 +412,9 @@ export const ICONS_A = {
   ai: SVG(
     '<path d="M12 3l2.1 5.4L20 10l-5.9 1.6L12 17l-2.1-5.4L4 10l5.9-1.6z"/><path d="M18 15.5l.9 2.1 2.1.9-2.1.9-.9 2.1-.9-2.1-2.1-.9 2.1-.9z"/>'
   ),
+  imagegen: SVG(
+    '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/>'
+  ),
   home: SVG('<path d="M3 10.5 12 3l9 7.5"/><path d="M5.5 9.5V20h13V9.5"/>'),
   logout: SVG('<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>'),
 };
@@ -433,6 +438,7 @@ ${CSS_A}
     <div class="tabs">
       <a href="#config" data-tab="config">${ICONS_A.config}<span>机器人配置</span></a>
       <a href="#ai" data-tab="ai">${ICONS_A.ai}<span>AI 对话</span></a>
+      <a href="#imagegen" data-tab="imagegen">${ICONS_A.imagegen}<span>生图模型</span></a>
     </div>
     <div class="nav-label">数据</div>
     <div class="tabs">

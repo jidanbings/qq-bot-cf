@@ -54,8 +54,8 @@ async function requireSession(request, env) {
   return getSession(env, id);
 }
 
-function botStub(env) {
-  return env.QQ_BOT.get(env.QQ_BOT.idFromName('main'));
+function botStub(env, version) {
+  return env.QQ_BOT.get(env.QQ_BOT.idFromName('bot:' + (version || APP_VERSION)));
 }
 
 async function callBot(env, action) {
@@ -72,13 +72,49 @@ async function callBot(env, action) {
   return res.json();
 }
 
-async function ensureBot(env) {
+/** 让旧版本 DO 实例退休：先通知它断开连接，再启动当前版本的实例 */
+async function switchDoVersion(env, force) {
+  let prev = '';
   try {
+    const cfg = await getConfig(env, { decrypt: false });
+    prev = cfg.doVersion || '';
+  } catch {}
+  if (prev === APP_VERSION) {
     const res = await botStub(env).fetch(
       `https://qqbot/ensure?v=${encodeURIComponent(APP_VERSION)}`,
       { method: 'POST', signal: AbortSignal.timeout(15000) }
     );
-    const data = await res.json();
+    return { ok: true, switched: false, version: APP_VERSION, action: (await res.json()).action };
+  }
+  const retired = [];
+  // v2.4.0 之前 DO id 固定为 'main'，之后是 'bot:<version>'；
+  // v2.4.0 初版曾在升级时误建过 'bot' 实例，升级到 2.4.1 时一并退休掉。
+  const oldIds = prev ? ['bot:' + prev] : ['main'];
+  if (prev === '2.4.0') oldIds.push('bot');
+  for (const idName of oldIds) {
+    try {
+      const stub = env.QQ_BOT.get(env.QQ_BOT.idFromName(idName));
+      await stub.fetch(`https://qqbot/ensure?v=${encodeURIComponent(APP_VERSION)}`, {
+        method: 'POST',
+        signal: AbortSignal.timeout(8000),
+      });
+      retired.push(idName);
+    } catch {}
+  }
+  try {
+    await saveConfig(env, { doVersion: APP_VERSION });
+  } catch {}
+  const res = await botStub(env).fetch(
+    `https://qqbot/ensure?v=${encodeURIComponent(APP_VERSION)}`,
+    { method: 'POST', signal: AbortSignal.timeout(15000) }
+  );
+  const data = await res.json();
+  return { ok: true, switched: true, from: prev || '(旧版)', to: APP_VERSION, retired, action: data.action };
+}
+
+async function ensureBot(env) {
+  try {
+    const data = await switchDoVersion(env, false);
     if (data && data.action && data.action !== 'alive' && data.action !== 'idle') {
       console.log('Watchdog:', JSON.stringify(data));
     }
@@ -99,6 +135,28 @@ async function resolveModelEndpoint(env, body) {
   if (!baseUrl) throw new HttpError(400, 'invalid_config', '请先填写 AI Base URL');
   if (!apiKey) throw new HttpError(400, 'invalid_config', '请先填写 API Key');
   return { baseUrl, apiKey };
+}
+
+/** 测试生图模型：调 OpenAI 兼容 /images/generations，返回是否可用与测试图地址 */
+async function testImageGen(baseUrl, apiKey, model) {
+  try {
+    const res = await fetch(`${baseUrl}/images/generations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({ model, prompt: '一只橘猫，水彩风格', n: 1 }),
+      signal: AbortSignal.timeout(120000),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      return { ok: false, error: `HTTP ${res.status}${text ? ' ' + text.slice(0, 160) : ''}` };
+    }
+    const data = await res.json();
+    const url = data.data?.[0]?.url;
+    if (!url) return { ok: false, error: '生图接口没有返回图片地址（data[0].url 为空）' };
+    return { ok: true, url };
+  } catch (e) {
+    return { ok: false, error: e.name === 'TimeoutError' ? '测试超时（120 秒）' : e.message };
+  }
 }
 
 async function handleLogin(request, env, ip) {
@@ -192,6 +250,12 @@ async function handleApi(request, env, url) {
       }
       break;
 
+    case '/api/bot/switch':
+      if (method === 'POST') {
+        return jsonResult(await switchDoVersion(env, true));
+      }
+      break;
+
     case '/api/config': {
       if (method === 'GET') {
         const cfg = await getConfig(env, { decrypt: false });
@@ -219,6 +283,22 @@ async function handleApi(request, env, url) {
         const { baseUrl, apiKey } = await resolveModelEndpoint(env, body);
         const models = await fetchModelList(baseUrl, apiKey);
         return jsonResult({ models });
+      }
+      break;
+
+    case '/api/imagegen/test':
+      if (method === 'POST') {
+        const body = await readJson(request);
+        const model = typeof body.model === 'string' ? body.model.trim() : '';
+        if (!model) throw new HttpError(400, 'invalid_config', '请先填写生图模型');
+        const cfg = await getConfig(env);
+        const baseUrl =
+          normalizeUrl(typeof body.baseUrl === 'string' ? body.baseUrl : '') || cfg.imageGenBaseUrl || '';
+        const typedKey = typeof body.apiKey === 'string' ? body.apiKey.trim() : '';
+        const apiKey = typedKey || cfg.imageGenApiKey || '';
+        if (!baseUrl) throw new HttpError(400, 'invalid_config', '请先填写生图 Base URL');
+        if (!apiKey) throw new HttpError(400, 'invalid_config', '请先填写生图 API Key');
+        return jsonResult(await testImageGen(baseUrl, apiKey, model));
       }
       break;
 

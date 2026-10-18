@@ -10,6 +10,14 @@ export const CONFIG_FIELDS = {
   historyLimit: { type: 'int', min: 1, max: 100 },
   groupBlacklist: { type: 'string', max: 4000 },
   sensitiveWords: { type: 'string', max: 4000 },
+  markdownReply: { type: 'flag' },
+  autoRecall: { type: 'flag' },
+  welcomeEnabled: { type: 'flag' },
+  welcomeMsg: { type: 'string', max: 4000 },
+  imageGenModel: { type: 'string', max: 64 },
+  imageGenBaseUrl: { type: 'url', max: 512 },
+  imageGenApiKey: { type: 'string', max: 256, secret: true },
+  doVersion: { type: 'string', max: 32 },
 };
 
 export const AI_LIST_KEY = 'aiProviders';
@@ -371,6 +379,7 @@ export function toPublicConfig(cfg) {
   }
   const configured = {
     secret: !!cfg.secret,
+    imageGenApiKey: !!cfg.imageGenApiKey,
   };
   return { config, configured };
 }
