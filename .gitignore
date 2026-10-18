@@ -1,0 +1,39 @@
+# 依赖
+node_modules/
+.pnpm-store/
+
+# 构建与缓存
+dist/
+.wrangler/
+.output/
+
+# 本地密钥与环境文件
+# 这个项目不该有 .env 文件（密钥只能从 Cloudflare 控制台加），
+# 但万一你本地生成了，也绝不要提交。
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.dev.vars
+
+# 编辑器与系统
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 日志
+*.log
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+wrangler.log
+
+# 临时文件
+*.tmp
+*.bak

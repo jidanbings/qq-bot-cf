@@ -1,0 +1,59 @@
+# QQ Bot CF —— Cloudflare Workers 配置（模板）
+#
+# ⚠ 这个文件里【故意】没有 [[d1_databases]] 段。
+#
+# 为什么：wrangler deploy 会按配置文件整体覆盖 Worker 的绑定，所以 D1 必须声明；
+# 但 database_id 是每个账号独有的，不能写进仓库。而 wrangler.toml 又不支持
+# ${ENV_VAR} 插值（写了会被当成字面量发给 API，报 10021）。
+#
+# 做法：统一走 `npm run deploy`（scripts/deploy.mjs）。它会：
+#   1. 查账号里有没有 qq-bot-db，有就复用，没有就创建（库 ID 缓存在 .wrangler/d1.json）
+#   2. 以本文件为模板生成 .wrangler/deploy.toml，把 D1 绑定写进去
+#   3. 用 `wrangler deploy --config .wrangler/deploy.toml` 部署
+# 全程不需要手填任何 ID，绑定每次都在，库 ID 又不会进仓库。
+#
+# 直接跑 `npx wrangler deploy` 不会带 D1 绑定。连接 GitHub 部署请把
+# 部署命令改成 `npm run deploy`。
+
+name = "qq-bot-cf"
+main = "src/worker.js"
+# 运行时行为快照。取的是当前 wrangler（4.149.0）内置的最新稳定日期，
+# 不能再往未来设：wrangler 会把超前于它认识的最新日期的值当作无效。
+# 本项目没有依赖任何按兼容日期开关的 API，保持在这个值即可，不必跟着升级。
+compatibility_date = "2026-10-06"
+
+# ⚠ 密钥必须存成 Secret，不能存成普通变量（Text / Plain text）。
+#
+# Cloudflare 把「环境变量」和「Secret」分开处理：
+#   - 普通变量（dashboard 里类型选 Text）：每次 wrangler deploy 都会按配置文件
+#     整体覆盖，你在控制台手动加的会被清空。这是官方文档明说的「source of truth」机制。
+#   - Secret（类型选 Secret，加密保存）：wrangler deploy 不会删，除非手动
+#     `wrangler secret delete <key>`。
+#
+# 本项目的 ADMIN_TOKEN、CONFIG_ENC_KEY 必须在控制台以「Secret」类型添加，
+# 否则每次重新部署都会消失（症状：站点回到「尚未完成配置」页）。
+#
+# keep_vars = true 是官方给的兜底开关：即使有人误把值存成了普通变量，
+# deploy 时也会保留 dashboard 上的变量、而不是覆盖掉。它只影响普通变量，
+# 对 Secret 无副作用，所以这里默认打开。
+keep_vars = true
+
+# 每分钟一次的保活看门狗：机器人掉线且处于"期望运行"状态时自动拉起。
+# 本地调试或不想让它自动重连时，可以把这段注释掉。
+[triggers]
+crons = ["* * * * *"]
+
+[durable_objects]
+bindings = [
+  { name = "QQ_BOT", class_name = "QQBotDO" },
+  { name = "RATE_LIMITER", class_name = "RateLimiter" }
+]
+
+# Durable Object 的类迁移，保持原样即可；已有项目不要改动 tag
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["QQBotDO"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["RateLimiter"]

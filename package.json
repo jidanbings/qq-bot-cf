@@ -1,0 +1,27 @@
+{
+  "name": "qq-bot-cf",
+  "version": "2.0.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "setup": "node scripts/setup.mjs",
+    "deploy": "node scripts/deploy.mjs",
+    "dev": "wrangler dev",
+    "preview:home": "node scripts/preview.mjs",
+    "check": "node scripts/check-pages.mjs && node scripts/check-motion.mjs && node scripts/check-setup.mjs && node scripts/check-ci.mjs && node scripts/check-ai.mjs && node scripts/check-repo.mjs",
+    "check:pages": "node scripts/check-pages.mjs",
+    "check:motion": "node scripts/check-motion.mjs",
+    "check:setup": "node scripts/check-setup.mjs",
+    "check:ci": "node scripts/check-ci.mjs",
+    "check:ai": "node scripts/check-ai.mjs",
+    "check:repo": "node scripts/check-repo.mjs",
+    "tail": "wrangler tail"
+  },
+  "devDependencies": {
+    "wrangler": "4.149.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "workerd@1.20261006.1": true
+  }
+}
