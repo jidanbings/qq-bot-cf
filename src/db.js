@@ -63,15 +63,21 @@ const SCHEMA_STATEMENTS = [
     model        TEXT
   )`,
   `CREATE INDEX IF NOT EXISTS idx_chat_log_created ON chat_log (id DESC)`,
+  `CREATE TABLE IF NOT EXISTS groups (
+    openid    TEXT PRIMARY KEY,
+    source    TEXT NOT NULL DEFAULT 'auto',
+    added_at  TEXT NOT NULL,
+    last_seen TEXT
+  )`,
 ];
 
 async function hasSchema(env) {
   try {
     const { results } = await env.DB.prepare(
-      `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('config', 'sessions', 'chat_log')`
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('config', 'sessions', 'chat_log', 'groups')`
     ).all();
     const names = new Set((results || []).map((r) => r.name));
-    return names.has('config') && names.has('sessions') && names.has('chat_log');
+    return names.has('config') && names.has('sessions') && names.has('chat_log') && names.has('groups');
   } catch {
     return false;
   }
@@ -603,4 +609,33 @@ export async function listChatLogs(env, { page = 1, pageSize = 50, kind = '' } =
 export async function clearChatLogs(env) {
   const res = await env.DB.prepare('DELETE FROM chat_log').run();
   return res.meta?.changes ?? 0;
+}
+
+/* ------------------------------ 群列表（后台「群管理」用） ------------------------------ */
+
+export async function upsertGroup(env, openid, source) {
+  const id = String(openid || '').trim();
+  if (!id || id.length > 128) return;
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    'INSERT INTO groups (openid, source, added_at, last_seen) VALUES (?1, ?2, ?3, ?3) ' +
+      'ON CONFLICT(openid) DO UPDATE SET last_seen = excluded.last_seen'
+  )
+    .bind(id, source === 'manual' ? 'manual' : 'auto', now)
+    .run();
+}
+
+export async function listGroups(env) {
+  try {
+    const { results } = await env.DB.prepare(
+      'SELECT openid, source, added_at, last_seen FROM groups ORDER BY COALESCE(last_seen, added_at) DESC'
+    ).all();
+    return results || [];
+  } catch {
+    return [];
+  }
+}
+
+export async function removeGroup(env, openid) {
+  await env.DB.prepare('DELETE FROM groups WHERE openid = ?1').bind(String(openid || '').trim()).run();
 }

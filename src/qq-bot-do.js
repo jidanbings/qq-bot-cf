@@ -1,4 +1,4 @@
-import { addChatLog, getConfig } from './db.js';
+import { addChatLog, getConfig, upsertGroup } from './db.js';
 import {
   APP_VERSION,
   QQ_BASE,
@@ -128,6 +128,55 @@ export class QQBotDO {
       case '/stop':
         await this.stopBot();
         return Response.json({ ok: true, msg: 'Bot stopped' });
+      case '/group-manage': {
+        // 后台「群管理」：群资料 + 机器人群内状态，两个接口各自容错（白名单权限可能只有其一）
+        const openid = url.searchParams.get('openid') || '';
+        if (!openid) return Response.json({ ok: false, error: '缺少群 openid' });
+        const [info, state] = await Promise.all([
+          this.qqGroupInfo(openid).catch((e) => ({ __error: e.message })),
+          this.qqBotState(openid).catch((e) => ({ __error: e.message })),
+        ]);
+        return Response.json({
+          ok: true,
+          info: info.__error ? null : info,
+          infoError: info.__error || null,
+          state: state.__error ? null : state,
+          stateError: state.__error || null,
+        });
+      }
+      case '/group-members': {
+        const openid = url.searchParams.get('openid') || '';
+        const cursor = url.searchParams.get('cursor') || '';
+        if (!openid) return Response.json({ ok: false, error: '缺少群 openid' });
+        try {
+          const r = await this.qqGroupMembers(openid, cursor);
+          return Response.json({
+            ok: true,
+            members: Array.isArray(r.members) ? r.members : [],
+            nextCursor: String(r.next_cursor || ''),
+          });
+        } catch (e) {
+          return Response.json({ ok: false, error: e.message });
+        }
+      }
+      case '/group-mute': {
+        // body: { openid, members: [{op, member_openid, mute_expire_at}] }
+        let body = null;
+        try {
+          body = await request.json();
+        } catch {}
+        const openid = body && body.openid;
+        const members = body && Array.isArray(body.members) ? body.members : [];
+        if (!openid || !members.length) {
+          return Response.json({ ok: false, error: '缺少群 openid 或成员列表' });
+        }
+        try {
+          await this.qqMuteMembers(openid, members);
+          return Response.json({ ok: true });
+        } catch (e) {
+          return Response.json({ ok: false, error: e.message });
+        }
+      }
       case '/reload': {
         // 后台改完配置/AI 后调用：立即热更新，不用重启机器人
         const prevWelcome = this.config.welcomeEnabled;
@@ -615,6 +664,7 @@ export class QQBotDO {
     const groupOpenid = data?.group_openid;
     const memberOpenid = data?.member_openid;
     if (!groupOpenid || !memberOpenid) return;
+    this.touchGroup(groupOpenid);
     if (this.groupBlacklist.has(groupOpenid)) return;
     const raw = String(this.config.welcomeMsg || '').trim();
     if (!raw) return;
@@ -630,6 +680,7 @@ export class QQBotDO {
   async handleGroupAddRobot(data) {
     const groupOpenid = data?.group_openid;
     if (!groupOpenid) return;
+    this.touchGroup(groupOpenid);
     this.logger.info(`Bot added to group ${groupOpenid.slice(0, 8)}...`);
     const raw = String(this.config.welcomeMsg || '').trim();
     if (!raw || this.config.welcomeEnabled !== '1') return;
@@ -647,6 +698,11 @@ export class QQBotDO {
       aiReply: '',
       model: null,
     }).catch(() => {});
+  }
+
+  /** 记录群 openid 到 D1 groups 表（后台「群管理」页的数据源），失败不影响主流程 */
+  touchGroup(openid) {
+    upsertGroup(this.env, openid, 'auto').catch(() => {});
   }
 
   async handleMessage(type, data) {
@@ -690,6 +746,7 @@ export class QQBotDO {
     if (this.sensitiveWords.some((w) => content.includes(w))) return;
 
     const key = isC2C ? `c2c:${userId}` : `group:${scopeId}`;
+    if (!isC2C) this.touchGroup(scopeId);
     const job = { isC2C, userId, scopeId, content, imageUrl, msgId: data.id };
 
     this.pendingMessages++;
@@ -1301,6 +1358,58 @@ export class QQBotDO {
     }
     await res.body?.cancel();
     return true;
+  }
+
+  /** 官方群管理 API 通用调用：自动带 Access Token，失败抛出带 QQ 错误码的异常 */
+  async qqApi(path, init) {
+    const token = await this.getToken();
+    const res = await fetch(`${this.apiBase()}${path}`, {
+      ...init,
+      headers: { ...(init?.headers || {}), Authorization: `QQBot ${token}` },
+      signal: AbortSignal.timeout(12000),
+    });
+    const text = await res.text().catch(() => '');
+    if (!res.ok) {
+      let code = 0;
+      let msg = '';
+      try {
+        const d = JSON.parse(text);
+        code = Number(d.code) || 0;
+        msg = String(d.message || '');
+      } catch {}
+      const err = new Error(`QQ API HTTP ${res.status}${code ? ` code=${code}` : ''}${msg ? ` ${msg}` : ''}`);
+      err.qqCode = code;
+      throw err;
+    }
+    return text ? JSON.parse(text) : {};
+  }
+
+  /** 获取群基本信息：群名/简介/分类/标签/人数（需开放平台白名单权限） */
+  qqGroupInfo(openid) {
+    return this.qqApi(`/v2/groups/${openid}/info`, { method: 'GET' });
+  }
+
+  /** 获取机器人在群内的状态：角色/入群时间/消息接收设置/是否接受主动推送 */
+  qqBotState(openid) {
+    return this.qqApi(`/v2/groups/${openid}/bot_state`, { method: 'GET' });
+  }
+
+  /** 群成员列表（每页最多 30 条，cursor 分页；内邀能力，可能无权限） */
+  qqGroupMembers(openid, cursor) {
+    const q = cursor ? `?cursor=${encodeURIComponent(String(cursor))}` : '';
+    return this.qqApi(`/v2/groups/${openid}/members${q}`, { method: 'GET' });
+  }
+
+  /**
+   * 批量设置群成员禁言：members 每项 {op: add|update|del, member_openid, mute_expire_at}
+   * 单次最多 20 个，机器人需有群管理员身份，禁言最长 30 天
+   */
+  qqMuteMembers(openid, members) {
+    return this.qqApi(`/v2/groups/${openid}/restrict_chat_setting`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ members: members.slice(0, 20) }),
+    });
   }
 
   /** /画 指令：调用生图模型（OpenAI 兼容 /images/generations），把图发回会话 */

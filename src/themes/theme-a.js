@@ -199,6 +199,7 @@ button{font-family:inherit}
 .console-body::-webkit-scrollbar-thumb{background:var(--border-strong);border-radius:4px}
 .logline{display:flex;gap:9px;align-items:baseline;white-space:pre-wrap;word-break:break-word;color:var(--text-2)}
 .logline .ts{color:var(--muted);flex:0 0 auto;font-variant-numeric:tabular-nums}
+.logline .ts i{font-style:normal}
 .logline .lv{flex:0 0 auto;font-size:10px;font-weight:700;letter-spacing:.04em;padding:0 5px;border-radius:4px;
   background:var(--surface-3);color:var(--muted);text-transform:uppercase}
 .logline.warn{color:var(--amber)}
@@ -284,6 +285,10 @@ button{font-family:inherit}
 .prov-switch i::after{content:"";position:absolute;width:16px;height:16px;border-radius:50%;background:#fff;top:3px;left:3px;transition:left .15s;box-shadow:0 1px 3px rgba(0,0,0,.25)}
 .prov-switch input:checked+i{background:var(--accent)}
 .prov-switch input:checked+i::after{left:21px}
+.grp-add{display:flex;gap:8px;flex-wrap:wrap;margin:.4rem 0 .7rem}
+.grp-add input{flex:1 1 200px;min-width:0;font-size:12.5px;padding:.45rem .6rem;border:1px solid var(--border-strong);
+  border-radius:8px;background:var(--surface-2);color:var(--text)}
+.grp-add input:focus{outline:none;border-color:var(--accent)}
 .icon-btn{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;flex:0 0 auto;
   border-radius:9px;border:1.5px solid var(--border-strong);background:var(--surface);color:var(--text-2);
   cursor:pointer;font-size:14px;line-height:1;padding:0}
@@ -464,6 +469,10 @@ button{font-family:inherit}
   .prov-tools{width:100%;margin-left:2.2rem;justify-content:flex-end}
   .entry-head .time{margin-left:0;width:100%}
   .toolbar .count{margin-left:0;width:100%}
+  .logline{flex-wrap:wrap;gap:2px 8px}
+  .logline .ts{font-size:10.5px}
+  .logline .ts i{display:none}
+  .logline>span:last-child{flex:1 1 100%;order:3}
 }
 
 @media (prefers-reduced-motion:reduce){
@@ -490,6 +499,9 @@ export const ICONS_A = {
   imagegen: SVG(
     '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/>'
   ),
+  groups: SVG(
+    '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>'
+  ),
   home: SVG('<path d="M3 10.5 12 3l9 7.5"/><path d="M5.5 9.5V20h13V9.5"/>'),
   logout: SVG('<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>'),
 };
@@ -514,6 +526,10 @@ ${CSS_A}
       <a href="#config" data-tab="config">${ICONS_A.config}<span>机器人配置</span></a>
       <a href="#ai" data-tab="ai">${ICONS_A.ai}<span>AI 对话</span></a>
       <a href="#imagegen" data-tab="imagegen">${ICONS_A.imagegen}<span>生图模型</span></a>
+    </div>
+    <div class="nav-label">群管理</div>
+    <div class="tabs">
+      <a href="#groups" data-tab="groups">${ICONS_A.groups}<span>群管理</span></a>
     </div>
     <div class="nav-label">数据</div>
     <div class="tabs">

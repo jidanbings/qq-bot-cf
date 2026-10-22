@@ -10,16 +10,20 @@ import {
   initSchema,
   listAiProviders,
   listChatLogs,
+  listGroups,
   normalizeUrl,
   purgeExpiredSessions,
   randomHex,
+  removeGroup,
   resetEncryptedConfig,
   saveAiProviders,
   saveConfig,
   toPublicConfig,
+  upsertGroup,
 } from './db.js';
 import { APP_VERSION, COOKIE_NAME, LOGIN_LIMIT, API_LIMIT } from './constants.js';
 import { hitRateLimit, resetRateLimit } from './utils/rate-limit.js';
+import { maskId } from './utils/crypto.js';
 import { fetchModelList } from './utils/models.js';
 import {
   HttpError,
@@ -58,13 +62,15 @@ function botStub(env, version) {
   return env.QQ_BOT.get(env.QQ_BOT.idFromName('bot:' + (version || APP_VERSION)));
 }
 
-async function callBot(env, action) {
+async function callBot(env, action, body) {
   let res;
   try {
-    res = await botStub(env).fetch(`https://qqbot/${action}`, {
+    const init = {
       method: 'POST',
       signal: AbortSignal.timeout(15000),
-    });
+    };
+    if (body !== undefined) init.body = JSON.stringify(body);
+    res = await botStub(env).fetch(`https://qqbot/${action}`, init);
   } catch {
     throw new HttpError(504, 'bot_timeout', '机器人实例响应超时，稍后再试');
   }
@@ -383,6 +389,116 @@ async function handleApi(request, env, url) {
         return jsonResult({ reset: true });
       }
       break;
+
+    /* -------- 群管理 -------- */
+
+    case '/api/groups':
+      if (method === 'GET') {
+        const rows = await listGroups(env);
+        const cfg = await getConfig(env, { decrypt: false });
+        const blocked = new Set(
+          String(cfg.groupBlacklist || '').split(/[,，]/).map((s) => s.trim()).filter(Boolean)
+        );
+        const items = [];
+        for (const row of rows) {
+          items.push({
+            openid: row.openid,
+            masked: await maskId(row.openid),
+            source: row.source === 'manual' ? 'manual' : 'auto',
+            addedAt: row.added_at,
+            lastSeen: row.last_seen,
+            replyEnabled: !blocked.has(row.openid),
+          });
+        }
+        return jsonResult({ items, blockedCount: blocked.size });
+      }
+      break;
+
+    case '/api/groups/add': {
+      if (method !== 'POST') throw new HttpError(405, 'method_not_allowed', '请使用 POST');
+      const body = await readJson(request);
+      const openid = String(body?.openid || '').trim();
+      if (!/^[A-Za-z0-9_-]{10,128}$/.test(openid)) {
+        throw new HttpError(400, 'invalid_openid', '群 openid 格式不对（应为字母数字组成的字符串）');
+      }
+      await upsertGroup(env, openid, 'manual');
+      return jsonResult({ openid });
+    }
+
+    case '/api/groups/remove': {
+      if (method !== 'POST') throw new HttpError(405, 'method_not_allowed', '请使用 POST');
+      const body = await readJson(request);
+      const openid = String(body?.openid || '').trim();
+      if (!openid) throw new HttpError(400, 'invalid_openid', '缺少群 openid');
+      await removeGroup(env, openid);
+      return jsonResult({ openid });
+    }
+
+    case '/api/groups/reply': {
+      // 开/关本机器人在某个群的回复（写入 groupBlacklist 配置）
+      if (method !== 'POST') throw new HttpError(405, 'method_not_allowed', '请使用 POST');
+      const body = await readJson(request);
+      const openid = String(body?.openid || '').trim();
+      const enabled = body?.enabled !== 0 && body?.enabled !== '0' && body?.enabled !== false;
+      if (!openid) throw new HttpError(400, 'invalid_openid', '缺少群 openid');
+      const cfg = await getConfig(env, { decrypt: false });
+      const list = String(cfg.groupBlacklist || '').split(/[,，]/).map((s) => s.trim()).filter(Boolean);
+      const next = enabled ? list.filter((s) => s !== openid) : [...new Set([...list, openid])];
+      await saveConfig(env, { groupBlacklist: next.join(',') });
+      return jsonResult({ openid, replyEnabled: enabled });
+    }
+
+    case '/api/groups/manage': {
+      if (method !== 'GET') throw new HttpError(405, 'method_not_allowed', '请使用 GET');
+      const openid = url.searchParams.get('openid') || '';
+      if (!openid) throw new HttpError(400, 'invalid_openid', '缺少群 openid');
+      const data = await callBot(env, `group-manage?openid=${encodeURIComponent(openid)}`);
+      if (!data || data.ok !== true) {
+        throw new HttpError(502, 'qq_api', (data && data.error) || 'QQ 接口调用失败');
+      }
+      return jsonResult(data);
+    }
+
+    case '/api/groups/members': {
+      if (method !== 'GET') throw new HttpError(405, 'method_not_allowed', '请使用 GET');
+      const openid = url.searchParams.get('openid') || '';
+      const cursor = url.searchParams.get('cursor') || '';
+      if (!openid) throw new HttpError(400, 'invalid_openid', '缺少群 openid');
+      const data = await callBot(
+        env,
+        `group-members?openid=${encodeURIComponent(openid)}&cursor=${encodeURIComponent(cursor)}`
+      );
+      if (!data || data.ok !== true) {
+        throw new HttpError(502, 'qq_api', (data && data.error) || 'QQ 接口调用失败');
+      }
+      return jsonResult(data);
+    }
+
+    case '/api/groups/mute': {
+      if (method !== 'POST') throw new HttpError(405, 'method_not_allowed', '请使用 POST');
+      const body = await readJson(request);
+      const openid = String(body?.openid || '').trim();
+      const memberOpenid = String(body?.memberOpenid || '').trim();
+      const op = body?.op === 'del' ? 'del' : body?.op === 'update' ? 'update' : 'add';
+      const minutes = Number(body?.minutes) || 0;
+      if (!openid || !memberOpenid) {
+        throw new HttpError(400, 'invalid_openid', '缺少群 openid 或成员 openid');
+      }
+      if (op !== 'del' && (minutes < 1 || minutes > 30 * 24 * 60)) {
+        throw new HttpError(400, 'invalid_minutes', '禁言时长要在 1 分钟 ~ 30 天之间');
+      }
+      const members = [{ member_openid: memberOpenid, op }];
+      if (op !== 'del') {
+        // QQ 要求 RFC3339；把时间戳加 8 小时后按 UTC 格式化，墙钟即东八区
+        const expire = new Date(Date.now() + minutes * 60000 + 8 * 3600 * 1000);
+        members[0].mute_expire_at = expire.toISOString().replace(/\.\d{3}Z$/, '+08:00');
+      }
+      const data = await callBot(env, 'group-mute', { openid, members });
+      if (!data || data.ok !== true) {
+        throw new HttpError(502, 'qq_api', (data && data.error) || '禁言设置失败');
+      }
+      return jsonResult({ openid, memberOpenid, op });
+    }
 
     default:
       break;
