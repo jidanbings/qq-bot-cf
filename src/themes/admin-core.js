@@ -1078,10 +1078,14 @@ function renderAiPage(){
     +'<button class="btn" id="b-ai-save" type="button">'+IX.check+'<span>保存</span></button>'
     +'<button class="btn primary" id="b-ai-save-restart" type="button">'+IX.refresh+'<span>保存并重启</span></button>'
     +'</div></div>';
+  h+='<div class="card"><div class="card-head"><h3>内置国内 AI 配置</h3>'
+    +'<span class="hint">点一下自动加一行，地址和模型都填好，只需再填 API Key</span></div>'
+    +'<div class="chip-row" id="ai-presets">'+aiPresetChips()+'</div></div>';
   h+='<div class="card"><div class="card-head"><h3>怎么用</h3></div>'
     +'<p class="tip">每个 AI 填一套 Base URL + API Key + 模型，接口要兼容 OpenAI 的 <b>/chat/completions</b>。'
     +'列表顺序就是优先级：机器人先问第一个，超时、报错、配额用完就自动切到下一个，'
-    +'全部失败才会回一句「出了点小状况」。停用的 AI 不会参与。<br>改完点「保存并重启」才会生效。</p></div>';
+    +'全部失败才会回一句「出了点小状况」。停用的 AI 不会参与。<br>'
+    +'改完点「保存」立即生效（机器人自动热更新，无需重启）；「保存并重启」会完整重启一遍连接。</p></div>';
   $('wrap').innerHTML=h;
   renderAiProviders();
 
@@ -1089,6 +1093,36 @@ function renderAiPage(){
   $('b-ai-save').addEventListener('click',function(){saveProviders(false,this);});
   $('b-ai-save-restart').addEventListener('click',function(){saveProviders(true,this);});
   $('prov-list').addEventListener('click',onProvClick);
+  $('ai-presets').addEventListener('click',onPresetClick);
+}
+
+/* 国内常见 AI 服务商（OpenAI 兼容端点），点预设自动填名称/地址/模型 */
+var AI_PRESETS=[
+  {label:'DeepSeek',name:'DeepSeek',url:'https://api.deepseek.com/v1',model:'deepseek-chat'},
+  {label:'通义千问',name:'通义千问（百炼）',url:'https://dashscope.aliyuncs.com/compatible-mode/v1',model:'qwen-plus'},
+  {label:'智谱 GLM',name:'智谱 GLM',url:'https://open.bigmodel.cn/api/paas/v4',model:'glm-4-flash'},
+  {label:'Kimi',name:'Kimi（月之暗面）',url:'https://api.moonshot.cn/v1',model:'kimi-latest'},
+  {label:'豆包',name:'火山方舟（豆包）',url:'https://ark.cn-beijing.volces.com/api/v3',model:'doubao-seed-1-6-flash-250815'},
+  {label:'硅基流动',name:'硅基流动',url:'https://api.siliconflow.cn/v1',model:'deepseek-ai/DeepSeek-V3'},
+  {label:'腾讯混元',name:'腾讯混元',url:'https://api.hunyuan.cloud.tencent.com/v1',model:'hunyuan-turbos-latest'}
+];
+function aiPresetChips(){
+  var h='';
+  for(var i=0;i<AI_PRESETS.length;i++)h+='<button class="chip" type="button" data-i="'+i+'">'+esc(AI_PRESETS[i].label)+'</button>';
+  return h;
+}
+function onPresetClick(e){
+  var btn=e.target&&e.target.closest?e.target.closest('.chip'):null;
+  if(!btn)return;
+  var p=AI_PRESETS[Number(btn.getAttribute('data-i')||'-1')];
+  if(!p)return;
+  readProvidersFromDom();
+  if(aiState.length>=10){toast('最多 10 个 AI','bad');return;}
+  aiSeq++;
+  aiState.push({id:'new-'+aiSeq+'-'+Date.now(),name:p.name,baseUrl:p.url,apiKey:'',
+    model:p.model,temperature:'0.8',enabled:1,hasKey:false,models:[]});
+  renderAiProviders();
+  toast('已添加「'+p.name+'」，填上 API Key 再保存','ok');
 }
 
 function showImageGen(){
@@ -1129,6 +1163,8 @@ function renderImageGenPage(){
     +'<div class="field wide"><label for="igen-model">模型</label>'
     +'<input id="igen-model" placeholder="qwen-image-3.0-pro" maxlength="64" value="'+esc(imageGenState.model)+'"></div>'
     +'</div>'
+    +'<p class="btn-hint">主流生图模型，点一下直接填入（也可以手填服务商提供的其他模型名）：</p>'
+    +'<div class="chip-row" id="igen-model-presets">'+igenModelChips()+'</div>'
     +'<div class="btn-row">'
     +'<button class="btn" id="b-igen-test" type="button">'+IX.play+'<span>测试</span></button>'
     +'<button class="btn primary" id="b-igen-save" type="button" disabled>'+IX.check+'<span>保存生图模型</span></button>'
@@ -1137,9 +1173,10 @@ function renderImageGenPage(){
     +'<p class="hint" id="igen-result">'+esc(imageGenState.result||'')+'</p></div>';
   h+='<div class="card"><div class="card-head"><h3>怎么用</h3></div>'
     +'<p class="tip">生图用独立的 Base URL / API Key，和「AI 对话」里的对话模型互不影响，可以指向另一家服务商。'
-    +'填好后先点「<b>测试</b>」，服务商会现场画一张示例图；测试通过后保存按钮才会亮，保存后自动重启生效。<br>'
+    +'填好后先点「<b>测试</b>」，服务商会现场画一张示例图；测试通过后保存按钮才会亮，保存后立即生效（机器人自动热更新）。<br>'
     +'群里发「/画 一只橘猫，水彩风格」或直接说「帮我画一只猫」就会出图。留空模型表示关闭生图。<br>'
     +'建议填服务商标注了 <b>image_gen</b> 的模型（比如 qwen-image-3.0-pro），接口需兼容 OpenAI 的 <b>/images/generations</b>。'
+    +'Base URL 不知道填什么的话，「AI 对话」页的内置配置里有各家的地址。'
     +'不填 Base URL / Key 时，会自动用「AI 对话」里第一个 AI 的配置兜底。</p></div>';
   $('wrap').innerHTML=h;
   var igenInput=$('igen-url');
@@ -1165,7 +1202,26 @@ function renderImageGenPage(){
   });
   $('b-igen-test').addEventListener('click',function(){testImageGen(this);});
   $('b-igen-save').addEventListener('click',function(){saveImageGen(this);});
+  var igenPresets=$('igen-model-presets');
+  if(igenPresets)igenPresets.addEventListener('click',function(e){
+    var chip=e.target&&e.target.closest?e.target.closest('.chip'):null;
+    if(!chip||!igenModel)return;
+    igenModel.value=chip.getAttribute('data-m')||'';
+    reset();
+    igenModel.focus();
+  });
   updateImageGenState();
+}
+
+/* 主流生图模型（OpenAI 兼容 /images/generations），点预设直接填入模型名 */
+var IMAGE_MODEL_PRESETS=[
+  'qwen-image-3.0-pro','qwen-image','wanx2.1-t2i-plus','seedream-4.0',
+  'doubao-seedream-3-0-t2i','cogview-4','dall-e-3','gpt-image-1','flux-schnell','nano-banana'
+];
+function igenModelChips(){
+  var h='';
+  for(var i=0;i<IMAGE_MODEL_PRESETS.length;i++)h+='<button class="chip" type="button" data-m="'+esc(IMAGE_MODEL_PRESETS[i])+'">'+esc(IMAGE_MODEL_PRESETS[i])+'</button>';
+  return h;
 }
 
 function updateImageGenState(){
@@ -1238,10 +1294,7 @@ function saveImageGen(btn){
       imageGenState.baseUrl=url;
       if(key)imageGenState.hasKey=true;
       if(keyEl)keyEl.value='';
-      toast('生图模型已保存','ok');
-      return api('POST','/api/bot/restart',{}).then(function(){
-        toast('已重启，生图配置生效','ok');
-      });
+      toast('生图模型已保存，立即生效','ok');
     })
     .catch(function(e){toast(e.message,'bad');})
     .then(function(){busy(btn,false);});

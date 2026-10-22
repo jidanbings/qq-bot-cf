@@ -136,6 +136,11 @@ button{font-family:inherit}
 .btn-row{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center}
 .btn-row.mt{margin-top:14px}
 .btn-hint{font-size:12px;color:var(--muted);margin-top:12px;line-height:1.7}
+.chip-row{display:flex;flex-wrap:wrap;gap:.5rem;margin-top:.25rem}
+.chip{border:1px solid var(--border-strong);background:var(--surface);color:var(--text-2);border-radius:999px;
+  padding:.42rem .95rem;font-size:.8rem;cursor:pointer;transition:border-color .15s,color .15s,background .15s}
+.chip:hover{border-color:var(--accent);color:var(--accent)}
+.chip:active{background:var(--accent-light)}
 
 /* ---------- 指标卡片 ---------- */
 .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:1rem;margin-bottom:1.5rem}
