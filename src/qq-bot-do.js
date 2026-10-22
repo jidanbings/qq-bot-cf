@@ -129,12 +129,13 @@ export class QQBotDO {
         await this.stopBot();
         return Response.json({ ok: true, msg: 'Bot stopped' });
       case '/group-manage': {
-        // 后台「群管理」：群资料 + 机器人群内状态，两个接口各自容错（白名单权限可能只有其一）
+        // 后台「群管理」：群资料 + 机器人群内状态 + 禁言状态，各自容错（白名单权限可能只有其一）
         const openid = url.searchParams.get('openid') || '';
         if (!openid) return Response.json({ ok: false, error: '缺少群 openid' });
-        const [info, state] = await Promise.all([
+        const [info, state, mute] = await Promise.all([
           this.qqGroupInfo(openid).catch((e) => ({ __error: e.message })),
           this.qqBotState(openid).catch((e) => ({ __error: e.message })),
+          this.qqMuteState(openid).catch((e) => ({ __error: e.message })),
         ]);
         return Response.json({
           ok: true,
@@ -142,6 +143,8 @@ export class QQBotDO {
           infoError: info.__error || null,
           state: state.__error ? null : state,
           stateError: state.__error || null,
+          muteState: mute.__error ? null : mute,
+          muteError: mute.__error || null,
         });
       }
       case '/group-members': {
@@ -1402,6 +1405,11 @@ export class QQBotDO {
   qqGroupMembers(openid, cursor) {
     const q = cursor ? `?cursor=${encodeURIComponent(String(cursor))}` : '';
     return this.qqApi(`/v2/groups/${openid}/members${q}`, { method: 'GET' });
+  }
+
+  /** 查询群禁言状态：全员禁言模式 + 当前被禁言的成员列表（机器人需群管理员身份） */
+  qqMuteState(openid) {
+    return this.qqApi(`/v2/groups/${openid}/restrict_chat_setting`, { method: 'GET' });
   }
 
   /**

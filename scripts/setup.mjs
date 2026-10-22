@@ -74,12 +74,14 @@ try {
   die(e.message);
 }
 
-console.log('\n=== [4/4] 自定义域名（可选） ===');
-console.log('  没有自己的域名可以直接回车跳过，Worker 会挂在 workers.dev 上，功能完全一样。');
+console.log('\n=== [4/4] 自定义域名（必须） ===');
+console.log('  workers.dev 域名已在配置里禁用（国内访问不稳定），访问后台必须绑自己的域名。');
 console.log('  注意：域名必须已经在这个 Cloudflare 账号里，且不能在用中，否则会抢现有站点的流量。');
+console.log('  也可以先跳过，部署后到 控制台 → Workers & Pages → qq-bot-cf → Settings →');
+console.log('  Domains & Routes → Add → Custom domain 手动绑定（跟 Worker 走，重新部署不用重绑）。');
 
 let config = readConfig();
-const host = (await ask('  自定义域名（如 bot.example.com，留空跳过）: ')).trim();
+const host = (await ask('  自定义域名（如 bot.example.com）: ')).trim();
 
 if (host) {
   if (!/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(host)) die(`"${host}" 看起来不是合法域名。`);
@@ -91,7 +93,9 @@ if (host) {
   }
   console.log(`  已写入路由: ${host}`);
 } else {
-  console.log('  已跳过，将使用 workers.dev 域名。');
+  const go = (await ask('  留空 = 暂不绑定（部署后后台将暂时无法访问，需要之后手动绑）。确定跳过？输入 y 继续: ')).trim().toLowerCase();
+  if (go !== 'y') die('已取消。重新运行 npm run setup 并填入域名。');
+  console.log('  已跳过：请记得部署后到控制台绑定自定义域名，否则后台无法访问。');
 }
 
 const ACCOUNT_RE = /^(\s*)account_id(\s*=\s*)"[^"]*"/m;
@@ -122,6 +126,7 @@ console.log(`
 
   2. 运行 npm run deploy
 
-部署完成后用浏览器打开 /login，密码就是 ADMIN_TOKEN，
+部署完成后用浏览器打开 https://你的域名/login（域名就是第 4 步绑的那个），
+密码就是 ADMIN_TOKEN，
 进去填 QQ AppID / Secret 与 AI 接口，点「保存并重启」即可。
 `);

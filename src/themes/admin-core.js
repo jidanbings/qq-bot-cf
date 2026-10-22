@@ -1608,8 +1608,9 @@ function groupsShell(){
   h+='<div class="card"><div class="card-head"><h3>官方接口能力说明</h3></div>';
   h+='<dl class="dl">';
   h+='<dt>群资料</dt><dd>点群行打开弹窗：群名 / 简介 / 分类 / 标签 / 人数，外加机器人在群里的状态（角色、入群时间、消息接收设置、是否允许主动推送）</dd>';
-  h+='<dt>成员管理</dt><dd>弹窗里点「拉取成员列表」（每页 30 条，可翻页），选中时长后可对成员禁言或解除禁言；机器人需要群管理员身份，最长 30 天</dd>';
-  h+='<dt>权限</dt><dd>群资料 / 成员 / 禁言都是官方白名单接口，报 code=11253 说明机器人还没拿到权限，去 QQ 开放平台申请即可</dd>';
+  h+='<dt>成员管理</dt><dd>「拉取成员列表」是官方内邀接口（开放平台申请不到，等官方开放）；已批禁言权限的话，可以在弹窗里粘贴成员 openid 直接禁言 / 解除，或点「拉取成员列表」选中操作。机器人需要群管理员身份，最长 30 天</dd>';
+  h+='<dt>禁言状态</dt><dd>弹窗实时显示全员禁言模式和当前被禁言的成员（官方已开放的查询接口）</dd>';
+  h+='<dt>权限</dt><dd>群资料 / 机器人状态属官方白名单（报 code=11253 需联系平台运营）；撤回、入群审批、禁言、批量移除可在开放平台自助申请</dd>';
   h+='<dt>回复开关</dt><dd>只控制本机器人是否在这个群里回话（黑名单机制），不影响官方群管理</dd>';
   h+='</dl></div>';
   return h;
@@ -1772,6 +1773,9 @@ function grpModalHtml(){
     +'</select></div>';
   h+='<button class="btn" type="button" id="grp-members-btn">'+IX.refresh+'<span>拉取成员列表</span></button>';
   h+='<button class="btn" type="button" id="grp-members-more" hidden>下一页</button></div>';
+  h+='<div class="form-actions"><div class="field grow"><label for="grp-manual-mid">手动禁言（成员列表内邀中拉不到时，直接粘贴成员 openid）</label>'
+    +'<input id="grp-manual-mid" placeholder="成员 openid" maxlength="128"></div>';
+  h+='<button class="btn" type="button" id="grp-manual-btn">禁言</button></div>';
   h+='<div id="grp-m-members"><p class="muted">还没拉取成员。</p></div>';
   h+='</div>';
   h+='<div class="modal-foot"><span class="hint" id="grp-m-note"></span><span class="grow"></span>';
@@ -1826,6 +1830,12 @@ function loadGrpMembers(cursor){
     if(more)more.hidden=!grpModal.nextCursor;
   }).catch(function(e){
     if(note)note.textContent='';
+    var msg=String(e.message||'');
+    if(msg.indexOf('11253')>=0){
+      var box=$('grp-m-members');
+      if(box)box.innerHTML='<p class="error-text">官方对「获取群成员列表」还是内邀制（开放平台申请不到这项权限），等官方开放后这里就能用。禁言不受影响：可以直接在上方粘贴成员 openid 手动禁言。</p>';
+      return;
+    }
     toast(grpPermHint(e.message),'bad');
   });
 }
@@ -1835,9 +1845,19 @@ function muteGrpMember(mid,op){
   if(op!=='del'&&!mins){toast('先选一个禁言时长','bad');return;}
   api('POST','/api/groups/mute',{openid:grpModal.openid,memberOpenid:mid,op:op,minutes:mins}).then(function(){
     toast(op==='del'?'已解除禁言':'禁言已设置','ok');
+    var mi=$('grp-manual-mid');
+    if(mi)mi.value='';
+    loadGrpManage(grpModal.openid);
   }).catch(function(e){
     toast(grpPermHint(e.message),'bad');
   });
+}
+
+function muteGrpManual(){
+  var input=$('grp-manual-mid');
+  var mid=String((input&&input.value)||'').trim();
+  if(!mid){toast('先粘贴成员 openid','bad');return;}
+  muteGrpMember(mid,'add');
 }
 
 function onGrpMemberClick(e){
@@ -1861,7 +1881,11 @@ function bindGrpModal(){
   $('grp-m-close').addEventListener('click',closeGrpModal);
   $('grp-members-btn').addEventListener('click',function(){loadGrpMembers('');});
   $('grp-members-more').addEventListener('click',function(){loadGrpMembers(grpModal.nextCursor);});
+  $('grp-manual-btn').addEventListener('click',muteGrpManual);
+  $('grp-manual-mid').addEventListener('keydown',function(e){if(e.key==='Enter')muteGrpManual();});
   $('grp-m-members').addEventListener('click',onGrpMemberClick);
+  var infoBox=$('grp-m-info');
+  if(infoBox)infoBox.addEventListener('click',onGrpMemberClick);
   var mask=$('grp-modal-mask');
   if(mask)mask.addEventListener('click',function(e){if(e.target===mask)closeGrpModal();});
   if(!grpEscBound){
@@ -1873,6 +1897,57 @@ function bindGrpModal(){
       }
     });
   }
+}
+
+function grpMuteHtml(ms){
+  var g=ms.global_rule||{};
+  var mode=g.mode||'none';
+  var modeTxt=mode==='always'?'全员禁言中':(mode==='schedule'?'定时/周期禁言已配置':'未开启全员禁言');
+  var h='<div class="chip-label">群禁言状态（实时查询官方接口）</div>';
+  h+='<dl class="dl"><dt>全员禁言</dt><dd'+(mode==='none'?'':' class="warn"')+'>'+esc(modeTxt)+'</dd>';
+  var rules=0;
+  if(mode==='schedule'){
+    var sr=g.schedule_rules||[],rr=g.recurring_rules||[];
+    for(var i=0;i<sr.length;i++)if(sr[i].enabled)rules++;
+    for(var j=0;j<rr.length;j++)if(rr[j].enabled)rules++;
+  }
+  h+='<dt>生效规则</dt><dd>'+(mode==='schedule'?(rules+' 条启用中'):'—')+'</dd></dl>';
+  var list=ms.members||[];
+  if(!list.length){
+    h+='<p class="muted">当前没有成员被禁言。</p>';
+  }else{
+    h+='<div class="prov-list">';
+    for(var k=0;k<list.length;k++){
+      var m=list[k];
+      h+='<div class="prov-row" data-mid="'+esc(m.member_openid||'')+'">';
+      h+='<span class="prov-no">🔇</span>';
+      h+='<div class="prov-info"><b>'+esc(m.username||'(无昵称)')+'</b><small>禁言到期 '+esc(m.mute_expire_at?fmtEntryTime(m.mute_expire_at):'—')+'</small></div>';
+      h+='<div class="prov-tools"><button class="btn sm ghost" type="button" data-mact="unmute">解除</button></div>';
+      h+='</div>';
+    }
+    h+='</div>';
+  }
+  return h;
+}
+
+function loadGrpManage(openid){
+  var box=$('grp-m-info');
+  if(box)box.innerHTML='<p class="muted">正在读取群资料…</p>';
+  return api('GET','/api/groups/manage?openid='+encodeURIComponent(openid)).then(function(d){
+    var out=$('grp-m-info');
+    if(!out||!d)return;
+    var parts=[];
+    if(d.info)parts.push(grpInfoHtml(d.info,null));
+    else parts.push('<p class="error-text">群资料读取失败：'+esc(grpPermHint(d.infoError||'未知错误'))+'</p>');
+    if(d.state)parts.push(grpInfoHtml(null,d.state));
+    else if(d.stateError)parts.push('<p class="error-text">机器人状态读取失败：'+esc(grpPermHint(d.stateError))+'</p>');
+    if(d.muteState)parts.push(grpMuteHtml(d.muteState));
+    else if(d.muteError)parts.push('<p class="error-text">禁言状态读取失败：'+esc(grpPermHint(d.muteError))+'</p>');
+    out.innerHTML=parts.join('');
+  }).catch(function(e){
+    var out=$('grp-m-info');
+    if(out)out.innerHTML='<p class="error-text">'+esc(grpPermHint(e.message))+'</p>';
+  });
 }
 
 function openGrpModal(openid,autoMembers){
@@ -1888,27 +1963,13 @@ function openGrpModal(openid,autoMembers){
   mask.hidden=false;
   var oid=$('grp-m-openid');
   if(oid)oid.textContent='群 openid：'+openid;
-  var infoBox=$('grp-m-info');
-  if(infoBox)infoBox.innerHTML='<p class="muted">正在读取群资料…</p>';
   var mbox=$('grp-m-members');
   if(mbox)mbox.innerHTML='<p class="muted">还没拉取成员。</p>';
   var more=$('grp-members-more');
   if(more)more.hidden=true;
   var note=$('grp-m-note');
   if(note)note.textContent='';
-  api('GET','/api/groups/manage?openid='+encodeURIComponent(openid)).then(function(d){
-    var box=$('grp-m-info');
-    if(!box||!d)return;
-    var parts=[];
-    if(d.info)parts.push(grpInfoHtml(d.info,null));
-    else parts.push('<p class="error-text">群资料读取失败：'+esc(grpPermHint(d.infoError||'未知错误'))+'</p>');
-    if(d.state)parts.push(grpInfoHtml(null,d.state));
-    else if(d.stateError)parts.push('<p class="error-text">机器人状态读取失败：'+esc(grpPermHint(d.stateError))+'</p>');
-    box.innerHTML=parts.join('');
-  }).catch(function(e){
-    var box=$('grp-m-info');
-    if(box)box.innerHTML='<p class="error-text">'+esc(grpPermHint(e.message))+'</p>';
-  });
+  loadGrpManage(openid);
   if(autoMembers)loadGrpMembers('');
 }
 
