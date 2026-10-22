@@ -300,6 +300,8 @@ button{font-family:inherit}
 .modal{background:var(--surface);border:1px solid var(--border-strong);border-radius:18px;width:min(560px,100%);
   max-height:min(88vh,88dvh);display:flex;flex-direction:column;box-shadow:0 24px 60px -20px rgba(15,18,34,.45);
   animation:modalIn .18s ease}
+.modal-sheet{width:min(640px,100%)}
+#grp-m-openid{word-break:break-all}
 @keyframes modalIn{from{opacity:0;transform:translateY(14px) scale(.98)}to{opacity:1;transform:none}}
 .modal-head{display:flex;align-items:center;gap:.6rem;padding:1rem 1.2rem;border-bottom:1px solid var(--border)}
 .modal-head h3{font-size:15px;font-weight:700;margin:0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -473,7 +475,18 @@ button{font-family:inherit}
   .logline .ts{font-size:10.5px}
   .logline .ts i{display:none}
   .logline>span:last-child{flex:1 1 100%;order:3}
+  /* 群管理弹窗：内容多，移动端直接全屏（头部固定/正文滚动/底部贴底） */
+  .modal-mask.mask-sheet{padding:0;align-items:stretch}
+  .modal-sheet{width:100%;max-height:none;height:100dvh;border-radius:0;border:none;animation:modalInM .18s ease}
+  .modal-sheet .modal-head{padding:.8rem 1rem}
+  .modal-sheet .modal-body{flex:1 1 auto;min-height:0;padding:.75rem .9rem .25rem}
+  .modal-sheet .modal-foot{padding:.7rem .9rem;padding-bottom:max(.7rem,env(safe-area-inset-bottom))}
+  .modal .form-actions{gap:.5rem}
+  .modal .form-actions .field{flex:1 1 100%}
+  .modal .form-actions .btn{flex:1 1 auto;min-width:0}
+  .modal .prov-row{padding:.65rem .2rem}
 }
+@keyframes modalInM{from{opacity:0;transform:translateY(22px)}to{opacity:1;transform:none}}
 
 @media (prefers-reduced-motion:reduce){
   *{animation-duration:.01ms !important;animation-iteration-count:1 !important;transition-duration:.01ms !important}

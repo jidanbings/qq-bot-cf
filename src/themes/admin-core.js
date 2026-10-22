@@ -1760,7 +1760,7 @@ function grpInfoHtml(info,state){
 
 function grpModalHtml(){
   var h='<div class="modal-mask" id="grp-modal-mask" hidden>';
-  h+='<div class="modal" role="dialog" aria-modal="true" aria-labelledby="grp-m-title">';
+  h+='<div class="modal modal-sheet" role="dialog" aria-modal="true" aria-labelledby="grp-m-title">';
   h+='<div class="modal-head"><h3 id="grp-m-title">群管理</h3>';
   h+='<button class="modal-x" type="button" id="grp-modal-x" aria-label="关闭">×</button></div>';
   h+='<div class="modal-body">';
@@ -1961,6 +1961,7 @@ function openGrpModal(openid,autoMembers){
   }
   var mask=$('grp-modal-mask');
   mask.hidden=false;
+  mask.classList.add('mask-sheet');
   var oid=$('grp-m-openid');
   if(oid)oid.textContent='群 openid：'+openid;
   var mbox=$('grp-m-members');
