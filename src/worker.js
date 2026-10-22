@@ -151,7 +151,9 @@ async function testImageGen(baseUrl, apiKey, model) {
       return { ok: false, error: `HTTP ${res.status}${text ? ' ' + text.slice(0, 160) : ''}` };
     }
     const data = await res.json();
-    const url = data.data?.[0]?.url;
+    const item = data.data?.[0] || {};
+    // b64_json 也算成功：转 data URI，预览 <img> 直接能显示
+    const url = item.url || (item.b64_json ? `data:image/png;base64,${item.b64_json}` : '');
     if (!url) return { ok: false, error: '生图接口没有返回图片地址（data[0].url 为空）' };
     return { ok: true, url };
   } catch (e) {
@@ -264,7 +266,12 @@ async function handleApi(request, env, url) {
       const body = await readJson(request);
       const result = await saveConfig(env, body);
       if (!result.ok) throw new HttpError(400, 'invalid_config', result.error);
-      return jsonResult({ saved: result.saved });
+      let botReloaded = false;
+      try {
+        await callBot(env, 'reload');
+        botReloaded = true;
+      } catch {}
+      return jsonResult({ saved: result.saved, botReloaded });
     }
 
     case '/api/ai': {
@@ -274,7 +281,12 @@ async function handleApi(request, env, url) {
       const body = await readJson(request);
       const result = await saveAiProviders(env, body.providers);
       if (!result.ok) throw new HttpError(400, 'invalid_config', result.error);
-      return jsonResult({ saved: result.saved });
+      let botReloaded = false;
+      try {
+        await callBot(env, 'reload');
+        botReloaded = true;
+      } catch {}
+      return jsonResult({ saved: result.saved, botReloaded });
     }
 
     case '/api/models':

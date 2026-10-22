@@ -81,6 +81,7 @@ export class QQBotDO {
     this.quotaWaitUntil = 0;
     this.messageQueues = new Map();
     this.pendingMessages = 0;
+    this.msgSeqMap = new Map();
     this.recentMsgIds = new Set();
     this.msgIdFifo = [];
     this.groupBlacklist = new Set();
@@ -127,7 +128,20 @@ export class QQBotDO {
       case '/stop':
         await this.stopBot();
         return Response.json({ ok: true, msg: 'Bot stopped' });
+      case '/reload': {
+        // 后台改完配置/AI 后调用：立即热更新，不用重启机器人
+        const prevWelcome = this.config.welcomeEnabled;
+        await this.loadConfig();
+        if (this.running && prevWelcome !== this.config.welcomeEnabled) {
+          this.logger.info('welcome 开关变化，重启连接以应用新 intents');
+          this.teardown();
+          this.state.waitUntil(this.startBot());
+        }
+        return Response.json({ ok: true, reloaded: true, running: this.running });
+      }
       case '/ensure': {
+        // 每分钟 cron 看门狗顺带热更新配置：即使 reload 通知丢了，配置最多 1 分钟内也会生效
+        try { await this.loadConfig(); } catch {}
         const workerVersion = url.searchParams.get('v') || '';
         if (workerVersion && workerVersion !== APP_VERSION) {
           const now = Date.now();
@@ -679,6 +693,30 @@ export class QQBotDO {
   async processMessage(key, job) {
     const { isC2C, userId, scopeId, content, imageUrl, msgId } = job;
 
+    // /菜单 指令：发送带按钮的面板（指令按钮自动往输入框填 @我 内容，跳转按钮直接开链接）
+    if (/^\/?(菜单|menu|按钮)(\s|$)/i.test(content)) {
+      await this.sendMenu({ isC2C, scopeId, msgId });
+      return;
+    }
+
+    // /帮助 指令：列出机器人能干什么
+    if (/^\/?(帮助|help|指令|命令)(\s|$)/i.test(content)) {
+      await this.sendReply({
+        isC2C,
+        scopeId,
+        msgId,
+        content: [
+          '我能干这些：',
+          '· 直接 @我 聊天，发图片给我可以看图说话',
+          '· /画 一只橘猫，水彩风格 —— AI 生图（也可以直接说「画一张…」「生成一张…」）',
+          '· /菜单 —— 弹出按钮菜单，点按钮直达',
+          '· /撤回 —— 撤回我上一条消息',
+          '· /帮助 —— 看这条菜单',
+        ].join('\n'),
+      });
+      return;
+    }
+
     // /撤回 指令：撤回本会话最近一条机器人消息
     if (/^\/?(撤回|recall|undo)(\s|$)/.test(content)) {
       const session = this.sessions.get(key);
@@ -726,6 +764,9 @@ export class QQBotDO {
       return;
     }
 
+    // 单聊：AI 思考期间给「正在输入」反馈（官方 msg_type=6），失败静默
+    if (isC2C && msgId) this.state.waitUntil(this.sendTyping({ scopeId, msgId }));
+
     const providers = (this.config.aiProviders || []).filter(
       (p) => p && p.enabled !== 0 && p.baseUrl && p.apiKey && p.model
     );
@@ -738,22 +779,22 @@ export class QQBotDO {
     let session = this.sessions.get(key);
     if (!session) {
       this.pruneSessions();
-      const basePrompt = this.config.systemPrompt ||
-        '你是一个友好、靠谱、乐于助人的QQ机器人助手。回答保持简洁、自然、口语化，用中文交流。';
-      const genHint = this.config.imageGenModel
-        ? '\n\n【生图能力】你支持生成图片。当用户要求你画图、绘制或生成图片时，你必须只输出一行：[GEN_IMAGE] <具体的图片描述>，不要输出任何其他文字（不要说「生成好了」「马上画」之类）。系统会自动调用生图模型把图片发给用户。用户只是聊天、没有要求画图时正常回答。'
-        : '\n\n【注意】你没有生图能力，也没有图片生成工具。当用户要求画图时，如实说明「需要先在后台配置生图模型才能画」，绝对不要假装已经生成图片或说「生成好了」。';
       session = {
-        history: [{
-          role: 'system',
-          content: basePrompt + genHint,
-        }],
+        history: [{ role: 'system', content: this.buildSystemPrompt() }],
         lastUsed: Date.now(),
         lastBotMsg: null,
+        sysKey: this.sysKey(),
       };
       this.sessions.set(key, session);
     }
     session.lastUsed = Date.now();
+    // 后台改了人设/生图模型后，已有会话的系统提示词立即跟随（聊天记录保留）
+    const sysKey = this.sysKey();
+    if (session.sysKey !== sysKey) {
+      session.history[0] = { role: 'system', content: this.buildSystemPrompt() };
+      session.sysKey = sysKey;
+      this.logger.info(`System prompt refreshed for session ${key.slice(0, 24)}...`);
+    }
 
     const history = session.history;
     history.push({ role: 'user', content });
@@ -851,6 +892,7 @@ export class QQBotDO {
     if (this.config.imageGenModel) {
       const genMatch = reply.match(/\[GEN_IMAGE\]\s*([\s\S]+)/);
       if (genMatch) {
+        history.push({ role: 'assistant', content: '（已按要求生成并发送图片）' });
         await this.handleImageGen({ isC2C, scopeId, msgId, prompt: genMatch[1].trim() });
         return;
       }
@@ -861,6 +903,7 @@ export class QQBotDO {
           .trim()
           .slice(0, 400);
         if (prompt) {
+          history.push({ role: 'assistant', content: '（已按要求生成并发送图片）' });
           await this.handleImageGen({ isC2C, scopeId, msgId, prompt });
           return;
         }
@@ -876,7 +919,8 @@ export class QQBotDO {
       sentId = await this.sendImage({ isC2C, scopeId, imageUrl, msgId });
       if (sentId) {
         if (textOnly) {
-          const textId = await this.sendReply({ isC2C, scopeId, content: textOnly, msgId: '' });
+          // 图是被动回复 seq=1，这条文字跟同一个 msg_id 走 seq=2，不烧主动消息额度
+          const textId = await this.sendReply({ isC2C, scopeId, content: textOnly, msgId });
           if (textId) sentId = textId;
         }
       } else {
@@ -913,6 +957,35 @@ export class QQBotDO {
     }
   }
 
+  /** 组装系统提示词（人设 + 生图能力说明） */
+  buildSystemPrompt() {
+    const basePrompt = this.config.systemPrompt ||
+      '你是一个友好、靠谱、乐于助人的QQ机器人助手。回答保持简洁、自然、口语化，用中文交流。';
+    const genHint = this.config.imageGenModel
+      ? '\n\n【生图能力】你支持生成图片。当用户要求你画图、绘制或生成图片时，你必须只输出一行：[GEN_IMAGE] <具体的图片描述>，不要输出任何其他文字（不要说「生成好了」「马上画」之类）。系统会自动调用生图模型把图片发给用户。用户只是聊天、没有要求画图时正常回答。'
+      : '\n\n【注意】你没有生图能力，也没有图片生成工具。当用户要求画图时，如实说明「需要先在后台配置生图模型才能画」，绝对不要假装已经生成图片或说「生成好了」。';
+    return basePrompt + genHint;
+  }
+
+  /** 系统提示词指纹：人设或生图模型变了就要重建 session 里的 system 消息 */
+  sysKey() {
+    return `${this.config.systemPrompt || ''}|${this.config.imageGenModel || ''}`;
+  }
+
+  /** 同一 msg_id 的被动回复需要递增 msg_seq（不传默认 1，第二条起会被去重/拒绝） */
+  nextMsgSeq(msgId) {
+    const n = (this.msgSeqMap.get(msgId) || 0) + 1;
+    this.msgSeqMap.set(msgId, n);
+    // 防胀：只留最近 100 个 msg_id 的计数（被动回复窗口只有几分钟，足够了）
+    if (this.msgSeqMap.size > 200) {
+      for (const k of this.msgSeqMap.keys()) {
+        this.msgSeqMap.delete(k);
+        if (this.msgSeqMap.size <= 100) break;
+      }
+    }
+    return n;
+  }
+
   async sendReply({ isC2C, scopeId, content, msgId }) {
     const token = await this.getToken();
     const sendUrl = isC2C
@@ -925,12 +998,15 @@ export class QQBotDO {
     if (!finalContent) finalContent = '……';
 
     const useMarkdown = this.config.markdownReply === '1' && this.isMarkdownSafe(finalContent);
-    const payload = useMarkdown
-      ? { msg_type: 2, markdown: { content: finalContent }, msg_id: msgId }
-      : { msg_type: 0, content: finalContent, msg_id: msgId };
+    // 被动回复带 msg_id + 递增 msg_seq；不带 msg_id 就是主动消息（不要发空的 msg_id 字段）
+    const passive = msgId ? { msg_id: msgId, msg_seq: this.nextMsgSeq(msgId) } : {};
+    const buildPayload = (md) =>
+      md
+        ? { msg_type: 2, markdown: { content: finalContent }, ...passive }
+        : { msg_type: 0, content: finalContent, ...passive };
 
     const retryable = (e) => e.status === undefined || e.status === 429 || e.status >= 500;
-    const sendOnce = async (tok) => {
+    const sendOnce = async (tok, payload) => {
       const res = await fetch(sendUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `QQBot ${tok}` },
@@ -947,20 +1023,30 @@ export class QQBotDO {
       return data.id || null;
     };
 
+    let payload = buildPayload(useMarkdown);
     try {
-      const sentId = await withRetry(() => sendOnce(token), {
+      return await withRetry(() => sendOnce(token, payload), {
         maxAttempts: 2,
         delay: 800,
         shouldRetry: retryable,
         onRetry: (err, attempt) => this.logger.warn(`Send retry ${attempt}: ${err.message}`),
       });
-      return sentId;
     } catch (e) {
+      // Markdown 被拒（比如机器人没有 markdown 权限）→ 自动降级纯文本再发一次
+      if (useMarkdown && e.status && e.status < 500 && e.status !== 429) {
+        this.logger.warn(`Markdown send rejected (HTTP ${e.status}), falling back to plain text`);
+        try {
+          return await sendOnce(await this.getToken(), buildPayload(false));
+        } catch (e2) {
+          this.logger.warn(`Plain-text fallback failed: ${e2.message}`);
+          return null;
+        }
+      }
       if (e.status === 401) {
         this.token = null;
         this.tokenExpiry = 0;
         try {
-          return await sendOnce(await this.getToken());
+          return await sendOnce(await this.getToken(), payload);
         } catch (e2) {
           this.logger.warn(`Send failed after re-auth: ${e2.message}`);
           return null;
@@ -968,6 +1054,92 @@ export class QQBotDO {
       }
       this.logger.warn(e.message);
       return null;
+    }
+  }
+
+  /** 单聊「正在输入」状态（官方 msg_type=6，最长 60 秒）：AI 思考期间给用户反馈 */
+  async sendTyping({ scopeId, msgId }) {
+    if (!msgId) return;
+    try {
+      const token = await this.getToken();
+      const res = await fetch(`${this.apiBase()}/v2/users/${scopeId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `QQBot ${token}` },
+        body: JSON.stringify({
+          msg_type: 6,
+          input_notify: { input_type: 1, input_second: 60 },
+          msg_id: msgId,
+          msg_seq: this.nextMsgSeq(msgId),
+        }),
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!res.ok) await res.body?.cancel();
+    } catch {
+      // 输入状态是锦上添花，失败不打扰主流程
+    }
+  }
+
+  /** /菜单：markdown + 按钮面板（指令按钮=自动填 @我 内容；跳转按钮=直接开链接） */
+  async sendMenu({ isC2C, scopeId, msgId }) {
+    const token = await this.getToken();
+    const sendUrl = isC2C
+      ? `${this.apiBase()}/v2/users/${scopeId}/messages`
+      : `${this.apiBase()}/v2/groups/${scopeId}/messages`;
+    const button = (label, action) => ({
+      id: `b_${Math.random().toString(36).slice(2, 8)}`,
+      render_data: { label, visited_label: label, style: action.style || 0 },
+      action: {
+        type: action.url ? 0 : 2,
+        permission: { type: 2, specify_role_ids: [], specify_user_ids: [] },
+        data: action.url || action.data,
+        ...(action.url ? {} : { enter: true, reply: true }),
+      },
+    });
+    const payload = {
+      msg_type: 2,
+      markdown: {
+        content:
+          '**🤖 机器人菜单**\n点按钮直达：指令按钮会把内容自动填进输入框（已带 @我），再点发送即可。',
+      },
+      keyboard: {
+        content: {
+          rows: [
+            {
+              buttons: [
+                button('🧭 使用帮助', { data: '帮助', style: 1 }),
+                button('🎨 来画一张', { data: '画 ' }),
+              ],
+            },
+            {
+              buttons: [
+                button('↩️ 撤回上一条', { data: '/撤回' }),
+                button('📖 项目主页', { url: 'https://github.com/jidanbings/qq-bot-cf' }),
+              ],
+            },
+          ],
+        },
+      },
+      ...(msgId ? { msg_id: msgId, msg_seq: this.nextMsgSeq(msgId) } : {}),
+    };
+    try {
+      const res = await fetch(sendUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `QQBot ${token}` },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(`HTTP ${res.status}${text ? ' ' + text.slice(0, 120) : ''}`);
+      }
+    } catch (e) {
+      this.logger.warn(`Send menu failed: ${e.message}，降级为文字菜单`);
+      await this.sendReply({
+        isC2C,
+        scopeId,
+        msgId,
+        content: '🤖 机器人菜单\n· /画 描述 —— AI 生图\n· /撤回 —— 撤回我上一条消息\n· /帮助 —— 看完整说明',
+      });
     }
   }
 
@@ -986,7 +1158,7 @@ export class QQBotDO {
       body: JSON.stringify({
         msg_type: 7,
         media: { file_info: fileInfo },
-        msg_id: msgId,
+        ...(msgId ? { msg_id: msgId, msg_seq: this.nextMsgSeq(msgId) } : {}),
       }),
       signal: AbortSignal.timeout(10000),
     });
@@ -999,17 +1171,32 @@ export class QQBotDO {
     return data.id || null;
   }
 
-  /** 上传图片获取 file_info（官方富媒体流程） */
+  /** 上传图片获取 file_info（官方富媒体流程）；生图 b64 走 file_data 二进制直传 */
   async uploadRichMedia({ isC2C, scopeId, imageUrl, token }) {
     const base = this.apiBase();
     const uploadUrl = isC2C
       ? `${base}/v2/users/${scopeId}/files`
       : `${base}/v2/groups/${scopeId}/files`;
+    let body;
+    const dataUri = imageUrl.match(/^data:image\/([a-z0-9.+-]+);base64,(.+)$/i);
+    if (dataUri) {
+      // 二进制直传（官方 file_data 字段，≤5MB）：生图接口只回 b64_json 时走这条路
+      const ext = dataUri[1].toLowerCase() === 'jpeg' ? 'jpg' : dataUri[1].toLowerCase();
+      if (dataUri[2].length > 7_000_000) {
+        this.logger.warn(`Binary upload aborted: base64 ≈ ${Math.round(dataUri[2].length / 1024)}KB（二进制直传限 5MB）`);
+        return null;
+      }
+      body = { file_type: 1, file_name: `image.${ext}`, file_data: dataUri[2], srv_send_msg: false };
+      this.logger.info(`Rich media upload: file_data binary ≈ ${Math.round(dataUri[2].length * 0.75 / 1024)}KB`);
+    } else {
+      // 公网 URL：平台代拉取（srv_send_msg=false 只预上传拿 file_info，不占主动消息额度）
+      body = { file_type: 1, url: imageUrl, srv_send_msg: false };
+    }
     const res = await fetch(uploadUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `QQBot ${token}` },
-      body: JSON.stringify({ file_type: 1, url: imageUrl }),
-      signal: AbortSignal.timeout(15000),
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(30000),
     });
     if (!res.ok) {
       const text = await res.text().catch(() => '');
@@ -1122,7 +1309,9 @@ export class QQBotDO {
         throw new Error(`HTTP ${res.status}${text ? ' ' + text.slice(0, 120) : ''}`);
       }
       const data = await res.json();
-      const url = data.data?.[0]?.url || data.data?.[0]?.b64_json;
+      const item = data.data?.[0] || {};
+      // 有的生图接口只回 b64_json：转成 data URI，上传时走 file_data 二进制直传
+      const url = item.url || (item.b64_json ? `data:image/png;base64,${item.b64_json}` : '');
       if (!url) throw new Error('生图接口没有返回图片地址');
       const sent = await this.sendImage({ isC2C, scopeId, imageUrl: url, msgId });
       if (!sent) throw new Error('图片发送失败');
