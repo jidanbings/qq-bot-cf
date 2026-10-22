@@ -189,6 +189,10 @@ export class QQBotDO {
         }
         return Response.json({ ok: true, reloaded: true, running: this.running });
       }
+      case '/reload-quiet':
+        // 群回复开关这类轻量配置变更：只重读配置立即生效，不写系统日志、不动 WebSocket
+        await this.loadConfig();
+        return Response.json({ ok: true, reloaded: true, running: this.running });
       case '/ensure': {
         // 每分钟 cron 看门狗顺带热更新配置：即使 reload 通知丢了，配置最多 1 分钟内也会生效
         try { await this.loadConfig(); } catch {}

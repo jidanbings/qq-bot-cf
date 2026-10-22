@@ -1594,7 +1594,7 @@ var grpEscBound=false;
 
 function grpPermHint(msg){
   return String(msg||'').indexOf('11253')>=0
-    ?msg+'（官方白名单接口：需要到 QQ 开放平台申请「群管理」接口权限）'
+    ?msg+'（官方白名单接口：到 QQ 开放平台 q.qq.com 的机器人管理后台申请「群管理」相关接口权限，通过后即可用）'
     :msg;
 }
 

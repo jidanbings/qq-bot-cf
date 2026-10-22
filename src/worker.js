@@ -445,6 +445,10 @@ async function handleApi(request, env, url) {
       const list = String(cfg.groupBlacklist || '').split(/[,，]/).map((s) => s.trim()).filter(Boolean);
       const next = enabled ? list.filter((s) => s !== openid) : [...new Set([...list, openid])];
       await saveConfig(env, { groupBlacklist: next.join(',') });
+      // 立刻让 DO 重读配置，不等每分钟的巡检（失败也不影响：巡检 1 分钟内会兜底）
+      try {
+        await callBot(env, 'reload-quiet');
+      } catch {}
       return jsonResult({ openid, replyEnabled: enabled });
     }
 
