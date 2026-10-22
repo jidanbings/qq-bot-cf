@@ -519,8 +519,10 @@ export async function purgeExpiredSessions(env) {
 }
 
 export async function addChatLog(env, entry) {
-  const scopeKey = await maskId(entry.scopeId);
-  const userKey = await maskId(entry.userId);
+  // 系统消息不脱敏：scope 固定为 'system'，方便后台直接辨识
+  const isSystem = entry.kind === 'system';
+  const scopeKey = isSystem ? 'system' : await maskId(entry.scopeId);
+  const userKey = isSystem ? '' : await maskId(entry.userId);
 
   await env.DB.prepare(
     'INSERT INTO chat_log (created_at, kind, scope_id, user_id, user_content, ai_reply, model) ' +
@@ -546,12 +548,23 @@ export async function addChatLog(env, entry) {
 
 export async function listChatLogs(env, { page = 1, pageSize = 50, kind = '' } = {}) {
   const size = Math.min(Math.max(Number(pageSize) || 50, 1), 200);
-  const k = kind === 'group' || kind === 'c2c' ? kind : '';
+  const k = kind === 'group' || kind === 'c2c' || kind === 'system' ? kind : '';
 
   const totalRow = k
     ? await env.DB.prepare('SELECT COUNT(*) AS total FROM chat_log WHERE kind = ?1').bind(k).first()
     : await env.DB.prepare('SELECT COUNT(*) AS total FROM chat_log').first();
   const total = Number(totalRow?.total) || 0;
+
+  // 各分类条数（后台筛选按钮上显示）
+  const cntRes = await env.DB.prepare('SELECT kind, COUNT(*) AS c FROM chat_log GROUP BY kind').all();
+  const kindCounts = { all: 0, group: 0, c2c: 0, system: 0 };
+  for (const row of cntRes.results || []) {
+    if (row.kind === 'group' || row.kind === 'c2c' || row.kind === 'system') {
+      const n = Number(row.c) || 0;
+      kindCounts[row.kind] = n;
+      kindCounts.all += n;
+    }
+  }
 
   const totalPages = Math.max(1, Math.ceil(total / size));
   const p = Math.min(Math.max(Number(page) || 1, 1), totalPages);
@@ -583,6 +596,7 @@ export async function listChatLogs(env, { page = 1, pageSize = 50, kind = '' } =
     total,
     totalPages: Math.max(1, Math.ceil(total / size)),
     kind: k || 'all',
+    kindCounts,
   };
 }
 

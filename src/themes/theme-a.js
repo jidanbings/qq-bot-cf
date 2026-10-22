@@ -244,7 +244,8 @@ button{font-family:inherit}
 .pw-toggle:hover{background:var(--surface-2);color:var(--text)}
 .field input[type=password]::placeholder{font-size:12.5px}
 /* 表单末尾的操作按钮行（照 user.html：按钮直接放在表单内，无 sticky 悬浮栏） */
-.form-actions{display:flex;align-items:center;gap:.65rem;margin-top:1.5rem;padding-top:1rem;border-top:1px solid var(--border-strong)}
+.form-actions{display:flex;flex-wrap:wrap;align-items:center;gap:.65rem;margin-top:1.5rem;padding-top:1rem;border-top:1px solid var(--border-strong)}
+.grow{flex:1;min-width:0}
 .prov{border:1.5px solid var(--border-strong);border-radius:16px;padding:1rem 1.1rem .2rem;margin-bottom:.9rem;background:var(--surface)}
 .prov.is-off{opacity:.62}
 .prov-head{display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;margin-bottom:.9rem}
@@ -260,6 +261,53 @@ button{font-family:inherit}
 .igen-preview{display:block;max-width:100%;max-height:320px;margin-top:10px;border-radius:12px;border:1px solid var(--border-strong)}
 .ok-text{color:var(--green);font-weight:600}
 .prov-empty{text-align:center;padding:2rem 1rem;color:var(--muted);font-size:.9rem}
+/* 紧凑 AI 行（编辑在弹窗里） */
+.prov-list{margin:-.4rem 0 .2rem}
+.prov-row{display:flex;align-items:center;gap:.7rem;padding:.7rem .4rem;border-bottom:1px solid var(--border);cursor:pointer}
+.prov-row:last-child{border-bottom:none}
+.prov-row:hover{background:var(--surface-2)}
+.prov-row.is-off{opacity:.55}
+.prov-info{min-width:0;flex:1}
+.prov-info b{display:block;font-size:13.5px;font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.prov-info small{display:block;font-size:11.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.prov-meta{display:flex;gap:.4rem;flex:0 0 auto;align-items:center}
+.prov-flag{font-size:10.5px;font-weight:700;border-radius:6px;padding:2px 8px;white-space:nowrap}
+.prov-flag.on{background:var(--green-soft);color:var(--green)}
+.prov-flag.off{background:var(--surface-2);color:var(--muted)}
+.prov-keyok,.prov-keynew,.prov-keyno{font-size:10.5px;border-radius:6px;padding:2px 8px;background:var(--surface-2);color:var(--muted);white-space:nowrap}
+.prov-keynew{background:var(--amber-soft);color:var(--amber)}
+.prov-keyno{background:var(--red-soft);color:var(--red)}
+/* 行内启停开关 */
+.prov-switch{position:relative;width:40px;height:22px;flex:0 0 auto;display:inline-block;cursor:pointer;vertical-align:middle}
+.prov-switch input{position:absolute;opacity:0;inset:0;margin:0;cursor:pointer;z-index:2}
+.prov-switch i{position:absolute;inset:0;border-radius:999px;background:var(--border-strong);transition:background .15s}
+.prov-switch i::after{content:"";position:absolute;width:16px;height:16px;border-radius:50%;background:#fff;top:3px;left:3px;transition:left .15s;box-shadow:0 1px 3px rgba(0,0,0,.25)}
+.prov-switch input:checked+i{background:var(--accent)}
+.prov-switch input:checked+i::after{left:21px}
+.icon-btn{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;flex:0 0 auto;
+  border-radius:9px;border:1.5px solid var(--border-strong);background:var(--surface);color:var(--text-2);
+  cursor:pointer;font-size:14px;line-height:1;padding:0}
+.icon-btn:hover{border-color:var(--accent);color:var(--accent)}
+/* 弹窗 */
+.modal-mask{position:fixed;inset:0;background:rgba(15,18,34,.45);z-index:80;
+  display:flex;align-items:center;justify-content:center;padding:16px}
+.modal-mask[hidden]{display:none}
+.modal{background:var(--surface);border:1px solid var(--border-strong);border-radius:18px;width:min(560px,100%);
+  max-height:min(88vh,88dvh);display:flex;flex-direction:column;box-shadow:0 24px 60px -20px rgba(15,18,34,.45);
+  animation:modalIn .18s ease}
+@keyframes modalIn{from{opacity:0;transform:translateY(14px) scale(.98)}to{opacity:1;transform:none}}
+.modal-head{display:flex;align-items:center;gap:.6rem;padding:1rem 1.2rem;border-bottom:1px solid var(--border)}
+.modal-head h3{font-size:15px;font-weight:700;margin:0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.modal-x{margin-left:auto;width:30px;height:30px;flex:0 0 auto;border-radius:9px;border:none;background:var(--surface-2);
+  color:var(--text-2);font-size:16px;cursor:pointer;line-height:1;padding:0}
+.modal-x:hover{color:var(--red)}
+.modal-body{padding:1rem 1.2rem .25rem;overflow-y:auto}
+.modal-foot{display:flex;flex-wrap:wrap;align-items:center;gap:.6rem;padding:.9rem 1.2rem;border-top:1px solid var(--border)}
+.test-result{font-size:12.5px;border-radius:10px;padding:.55rem .8rem;margin:.4rem 0 .6rem;word-break:break-all}
+.test-result.testing{background:var(--surface-2);color:var(--text-2)}
+.test-result.ok{background:var(--green-soft);color:var(--green)}
+.test-result.bad{background:var(--red-soft);color:var(--red)}
+.chip-label{font-size:12px;color:var(--muted);margin-top:.25rem}
 
 /* ---------- 分段控件 ---------- */
 .toolbar{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:16px}
@@ -277,21 +325,39 @@ button{font-family:inherit}
   padding:.75rem 1rem;transition:border-color .2s,box-shadow .2s}
 .entry:hover{border-color:var(--border-strong);box-shadow:var(--shadow)}
 .entry-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:11px;font-size:11.5px;color:var(--muted)}
+.kind-system{background:var(--surface-2);border-style:dashed;box-shadow:none;padding:.6rem 1rem}
+.kind-system:hover{box-shadow:none}
+.kind-system .entry-head{margin-bottom:0;margin-top:8px}
 .tag{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px}
 .tag.group{background:var(--accent-light);color:var(--accent)}
 .tag.c2c{background:var(--green-soft);color:var(--green)}
+.tag.sys{background:var(--amber-soft);color:var(--amber)}
 .tag.model{background:var(--surface-3);color:var(--text-2);font-family:var(--mono);font-size:10.5px;max-width:220px;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block}
 .entry-head .scope{font-family:var(--mono);font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px}
 .entry-head .time{margin-left:auto;font-variant-numeric:tabular-nums;white-space:nowrap}
 .entry-body{display:flex;flex-direction:column;gap:8px}
 .bubble-row{display:flex;gap:9px;align-items:flex-start}
+.bubble-row.ai{flex-direction:row-reverse}
 .bubble-row .who{flex:0 0 auto;width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;
   font-size:10px;font-weight:700;color:#fff;margin-top:1px}
 .bubble-row.user .who{background:var(--accent)}
 .bubble-row.ai .who{background:var(--violet)}
-.bubble-text{font-size:13px;line-height:1.75;color:var(--text);white-space:pre-wrap;word-break:break-word;min-width:0}
-.bubble-row.ai .bubble-text{color:var(--text-2)}
+.bubble-text{font-size:13px;line-height:1.75;color:var(--text);white-space:pre-wrap;word-break:break-word;min-width:0;
+  background:var(--surface-2);border-radius:4px 14px 14px 14px;padding:.45rem .8rem;max-width:78%}
+.bubble-row.ai .bubble-text{background:var(--accent-light);color:var(--text);border-radius:14px 4px 14px 14px}
+/* 系统事件行 */
+.sys-line{display:flex;align-items:flex-start;gap:8px;font-size:12.5px;color:var(--text-2);line-height:1.65}
+.sys-ico{flex:0 0 auto;font-size:13px;line-height:1.5}
+/* 日期分隔 */
+.day-sep{display:flex;align-items:center;gap:.8rem;color:var(--muted);font-size:11.5px;margin:.4rem 0}
+.day-sep::before,.day-sep::after{content:"";flex:1;height:1px;background:var(--border)}
+.day-sep span{white-space:nowrap;font-weight:600}
+/* 筛选按钮上的计数 */
+.seg .seg-n{font-size:.68rem;opacity:.75;font-variant-numeric:tabular-nums}
+/* 本地预览示例数据横幅 */
+.demo-note{background:var(--amber-soft);color:var(--amber);border:1px dashed var(--amber);border-radius:10px;
+  padding:.55rem .9rem;font-size:12px;margin-bottom:.8rem}
 
 /* ---------- 分页（照抄 user.html .pagination） ---------- */
 .pager{display:flex;align-items:center;justify-content:center;gap:.5rem;margin-top:1.25rem}
@@ -391,7 +457,11 @@ button{font-family:inherit}
   .field input,.field textarea,.field select{font-size:.78rem;padding:.4rem .55rem;border-radius:8px}
   .field textarea{min-height:120px}
   .dl{grid-template-columns:minmax(84px,auto) minmax(0,1fr)}
-  .form-actions .btn{flex:1}
+  .form-actions .btn{flex:1 1 auto;min-width:0}
+  .modal-foot .btn{flex:1 1 auto}
+  .prov-row{flex-wrap:wrap}
+  .prov-meta{margin-left:auto}
+  .prov-tools{width:100%;margin-left:2.2rem;justify-content:flex-end}
   .entry-head .time{margin-left:0;width:100%}
   .toolbar .count{margin-left:0;width:100%}
 }

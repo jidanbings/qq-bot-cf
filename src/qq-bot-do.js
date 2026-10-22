@@ -132,6 +132,7 @@ export class QQBotDO {
         // 后台改完配置/AI 后调用：立即热更新，不用重启机器人
         const prevWelcome = this.config.welcomeEnabled;
         await this.loadConfig();
+        this.logSystem('后台修改配置，已热更新生效');
         if (this.running && prevWelcome !== this.config.welcomeEnabled) {
           this.logger.info('welcome 开关变化，重启连接以应用新 intents');
           this.teardown();
@@ -622,6 +623,7 @@ export class QQBotDO {
       .replace(/\{group\}/g, groupOpenid)
       .slice(0, 1500);
     await this.sendReply({ isC2C: false, scopeId: groupOpenid, content: text, msgId: '' });
+    this.logSystem('新成员加入群聊，已自动发送欢迎语');
   }
 
   /** 机器人被拉进新群 */
@@ -632,6 +634,19 @@ export class QQBotDO {
     const raw = String(this.config.welcomeMsg || '').trim();
     if (!raw || this.config.welcomeEnabled !== '1') return;
     await this.sendReply({ isC2C: false, scopeId: groupOpenid, content: raw.slice(0, 1500), msgId: '' });
+    this.logSystem('机器人加入新群，已发送欢迎语');
+  }
+
+  /** 系统事件写入聊天记录（kind=system），失败不影响主流程 */
+  logSystem(text) {
+    addChatLog(this.env, {
+      kind: 'system',
+      scopeId: 'system',
+      userId: '',
+      userContent: String(text || '').slice(0, 500),
+      aiReply: '',
+      model: null,
+    }).catch(() => {});
   }
 
   async handleMessage(type, data) {
@@ -880,11 +895,13 @@ export class QQBotDO {
       } catch (e) {
         aiErr = e;
         this.logger.warn(`AI ${provider.name || provider.model} 不可用: ${e.message}`);
+        this.logSystem(`AI「${provider.name || provider.model}」调用失败（${e.message.slice(0, 120)}），自动尝试下一个备用`);
       }
     }
 
     if (!reply) {
       this.logger.error(`All AI failed: ${aiErr ? aiErr.message : 'unknown'}`);
+      this.logSystem('所有 AI 均不可用，已回复兜底话术');
       // 自动撤回：把之前这条「没答上来」的消息撤掉（可选）
       const lastBotMsg = session?.lastBotMsg;
       if (this.config.autoRecall === '1' && lastBotMsg?.msgId) {

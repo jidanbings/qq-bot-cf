@@ -755,10 +755,16 @@ function saveConfig(restart){
 
 /* ============================== 聊天记录 ============================== */
 var LOG_PAGE_SIZE=20;
-var LOG_KINDS=[['all','全部'],['group','群聊'],['c2c','私聊']];
+var LOG_KINDS=[['all','全部'],['group','群聊'],['c2c','私聊'],['system','系统']];
 var logState={page:1,kind:'all'};
 
 function entryHtml(it){
+  if(it.kind==='system'){
+    return '<article class="entry kind-system"><div class="entry-body">'
+      +'<div class="sys-line"><span class="sys-ico">⚙️</span><span class="sys-text">'+esc(it.userContent)+'</span></div>'
+      +'</div><div class="entry-head"><span class="tag sys">系统</span>'
+      +'<span class="time">'+esc(fmtEntryTime(it.time))+'</span></div></article>';
+  }
   var c2c=it.kind==='c2c';
   var h='<article class="entry">';
   h+='<div class="entry-head">';
@@ -773,12 +779,59 @@ function entryHtml(it){
   return h;
 }
 
+function dayKey(d){
+  return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate());
+}
+function daySepHtml(iso){
+  var d=new Date(iso);
+  if(isNaN(d.getTime()))return '';
+  var now=new Date();
+  var label;
+  if(dayKey(d)===dayKey(now))label='今天';
+  else if(dayKey(d)===dayKey(new Date(now.getTime()-86400000)))label='昨天';
+  else label=(d.getMonth()+1)+' 月 '+d.getDate()+' 日';
+  return '<div class="day-sep"><span>'+label+' · '+pad2(d.getMonth()+1)+'/'+pad2(d.getDate())+'</span></div>';
+}
+
+/* 本地预览示例数据：只在 127.0.0.1 / localhost 显示，部署后永远是真实记录 */
+function isLocalPreview(){
+  var h=location.hostname;
+  return h==='127.0.0.1'||h==='localhost';
+}
+function demoItems(){
+  var now=Date.now();
+  function ago(min){return new Date(now-min*60000).toISOString();}
+  return [
+    {kind:'group',scopeId:'a3f8…9c21',userContent:'帮我画一只橘猫，水彩风格',aiReply:'[图片] 已生成 🖼',model:'生图 · qwen-image-3.0-pro',time:ago(3)},
+    {kind:'group',scopeId:'a3f8…9c21',userContent:'今天上海天气怎么样？',aiReply:'今天上海多云，18～24℃，出门带件薄外套比较稳妥。',model:'DeepSeek · deepseek-chat',time:ago(16)},
+    {kind:'system',scopeId:'system',userContent:'AI「DeepSeek」调用失败（HTTP 429），自动尝试下一个备用',time:ago(24)},
+    {kind:'c2c',scopeId:'b91c…44da',userContent:'用一句话介绍你自己',aiReply:'我是跑在 Cloudflare 上的 AI 助手，随叫随到～',model:'DeepSeek · deepseek-chat',time:ago(47)},
+    {kind:'group',scopeId:'77c0…12ab',userContent:'翻译成中文：Good things take time',aiReply:'好东西都需要时间沉淀。',model:'智谱 GLM · glm-4-flash',time:ago(88)},
+    {kind:'system',scopeId:'system',userContent:'新成员加入群聊，已自动发送欢迎语',time:ago(150)},
+    {kind:'c2c',scopeId:'e55b…90cc',userContent:'写一句生日祝福，要押韵',aiReply:'生日快乐笑开颜，岁岁平安福满天！',model:'DeepSeek · deepseek-chat',time:ago(1500)},
+    {kind:'system',scopeId:'system',userContent:'后台修改配置，已热更新生效',time:ago(1620)}
+  ];
+}
+function demoLogsHtml(){
+  var items=demoItems();
+  var h='<div class="demo-note">本地预览：下面是示例数据，部署到 Cloudflare 后这里显示真实聊天记录</div><div class="entries">';
+  var prevDay='';
+  for(var i=0;i<items.length;i++){
+    var day=(items[i].time||'').slice(0,10);
+    if(day&&day!==prevDay){h+=daySepHtml(items[i].time);prevDay=day;}
+    h+=entryHtml(items[i]);
+  }
+  h+='</div>';
+  return h;
+}
+
 function emptyHtml(){
   var kind=logState.kind;
   var title='还没有聊天记录';
   var desc='机器人回复第一条消息后，问答会成对记录在这里，最多保留最近 2000 条。';
   if(kind==='group'){title='还没有群聊记录';desc='在群里 @ 机器人提问之后，这里就会出现记录。';}
   if(kind==='c2c'){title='还没有私聊记录';desc='私聊机器人提问之后，这里就会出现记录。';}
+  if(kind==='system'){title='还没有系统消息';desc='配置更新、AI 自动切换、入群欢迎等事件会记录在这里。';}
   return '<div class="empty"><span class="empty-ico">'+IX.chat+'</span><b>'+title+'</b><p>'+desc+'</p>'
     +'<div class="btn-row"><a class="btn" href="#status">去看看运行状态'+IX.arrow+'</a></div></div>';
 }
@@ -786,7 +839,8 @@ function emptyHtml(){
 function logShell(){
   var h='<div class="toolbar"><div class="seg" id="log-kind">';
   for(var i=0;i<LOG_KINDS.length;i++){
-    h+='<button type="button" data-kind="'+LOG_KINDS[i][0]+'"'+(logState.kind===LOG_KINDS[i][0]?' class="active"':'')+'>'+LOG_KINDS[i][1]+'</button>';
+    h+='<button type="button" data-kind="'+LOG_KINDS[i][0]+'"'+(logState.kind===LOG_KINDS[i][0]?' class="active"':'')
+      +'><span>'+LOG_KINDS[i][1]+'</span><span class="seg-n" data-k="'+LOG_KINDS[i][0]+'"></span></button>';
   }
   h+='</div>';
   h+='<button class="btn sm" id="b-refresh" type="button">'+IX.refresh+'<span>刷新</span></button>';
@@ -795,6 +849,17 @@ function logShell(){
   h+='<div id="log-list"></div>';
   h+='<div class="pager" id="log-pager"></div>';
   return h;
+}
+
+function paintKindCounts(counts){
+  var seg=$('log-kind');
+  if(!seg||!counts)return;
+  var ns=seg.querySelectorAll('.seg-n');
+  for(var i=0;i<ns.length;i++){
+    var k=ns[i].getAttribute('data-k');
+    var n=counts[k];
+    ns[i].textContent=n?' '+n:'';
+  }
 }
 
 function paintPager(d){
@@ -819,11 +884,25 @@ function loadLogs(page){
     .then(function(d){
       if(!d)return;
       logState.page=d.page;
+      paintKindCounts(d.kindCounts);
+      if(!d.items.length&&isLocalPreview()){
+        list.innerHTML=demoLogsHtml();
+        if(count)count.textContent='示例数据（本地预览）';
+        var nav2=$('nav-count');
+        if(nav2)nav2.textContent='示例';
+        paintPager({page:1,totalPages:1});
+        return;
+      }
       if(!d.items.length){
         list.innerHTML=emptyHtml();
       }else{
         var h='<div class="entries">';
-        for(var i=0;i<d.items.length;i++)h+=entryHtml(d.items[i]);
+        var prevDay='';
+        for(var i=0;i<d.items.length;i++){
+          var day=(d.items[i].time||'').slice(0,10);
+          if(day&&day!==prevDay){h+=daySepHtml(d.items[i].time);prevDay=day;}
+          h+=entryHtml(d.items[i]);
+        }
         h+='</div>';
         list.innerHTML=h;
       }
@@ -889,20 +968,180 @@ function modelOptions(p){
   return h;
 }
 
-function readProvidersFromDom(){
-  var cards=document.querySelectorAll('.prov');
-  for(var i=0;i<cards.length;i++){
-    var el=cards[i];
-    var id=el.getAttribute('data-id');
-    var st=null;
-    for(var j=0;j<aiState.length;j++)if(aiState[j].id===id)st=aiState[j];
-    if(!st)continue;
-    st.name=el.querySelector('.prov-name').value;
-    st.baseUrl=el.querySelector('.prov-url').value;
-    st.apiKey=el.querySelector('.prov-key').value;
-    st.model=el.querySelector('.prov-model').value;
-    st.temperature=el.querySelector('.prov-temp').value;
-    st.enabled=el.querySelector('.prov-on').checked?1:0;
+/* ---- 添加/编辑 AI 的弹窗 ---- */
+var aiModal={idx:-1,isNew:false,p:null,models:[]};
+var aiEscBound=false;
+
+function aiModalHtml(){
+  var h='<div class="modal-mask" id="ai-modal-mask" hidden>'
+    +'<div class="modal" role="dialog" aria-modal="true" aria-labelledby="ai-m-title">'
+    +'<div class="modal-head"><h3 id="ai-m-title">添加 AI</h3>'
+    +'<button class="modal-x" type="button" id="ai-modal-x" aria-label="关闭">×</button></div>'
+    +'<div class="modal-body">'
+    +'<div class="field"><label>名称</label><input id="ai-m-name" maxlength="40" placeholder="例如 主账号"></div>'
+    +'<div class="field"><label>Base URL</label><input id="ai-m-url" placeholder="https://api.example.com/v1"></div>'
+    +'<div class="field"><label>API Key</label><div class="pw-wrap"><input id="ai-m-key" type="password" placeholder="sk-..." autocomplete="new-password">'
+    +'<button class="pw-toggle" type="button" id="ai-m-key-toggle">显示</button></div></div>'
+    +'<div class="field"><label>模型</label><div class="model-row"><select id="ai-m-model"></select>'
+    +'<button class="btn" type="button" id="ai-m-pull">'+IX.refresh+'<span>拉取模型</span></button></div></div>'
+    +'<div class="grid">'
+    +'<div class="field"><label>Temperature</label><input id="ai-m-temp" type="number" inputmode="decimal" step="0.1" placeholder="0.8"></div>'
+    +'<div class="field"><label>启用</label><label class="prov-check"><input type="checkbox" id="ai-m-on" checked>参与回复</label></div>'
+    +'</div>'
+    +'<div class="test-result" id="ai-test-result" hidden></div>'
+    +'</div>'
+    +'<div class="modal-foot">'
+    +'<button class="btn" type="button" id="ai-m-test">▶ 测试</button>'
+    +'<span class="grow"></span>'
+    +'<button class="btn" type="button" id="ai-m-cancel">取消</button>'
+    +'<button class="btn primary" type="button" id="ai-m-save">'+IX.check+'<span>保存</span></button>'
+    +'</div></div></div>';
+  return h;
+}
+
+function provRowHtml(p,i){
+  var host=(p.baseUrl||'');
+  var k=host.indexOf('://');
+  if(k>=0)host=host.substring(k+3);
+  k=host.indexOf('/');
+  if(k>=0)host=host.substring(0,k);
+  var keyFlag=p.hasKey?'<span class="prov-keyok">Key 已设置</span>'
+    :(p.apiKey?'<span class="prov-keynew">Key 待保存</span>':'<span class="prov-keyno">Key 未设置</span>');
+  var h='<div class="prov-row'+(p.enabled?'':' is-off')+'" data-id="'+esc(p.id)+'" title="点击编辑">';
+  h+='<span class="prov-no">'+(i+1)+'</span>';
+  h+='<div class="prov-info"><b>'+esc(p.name||'未命名')+'</b><small>'+esc(p.model||'未选模型')+(host?' · '+esc(host):'')+'</small></div>';
+  h+='<div class="prov-meta">'+keyFlag
+    +'<label class="prov-switch" title="点一下启用/停用"><input type="checkbox" class="prov-sw"'+(p.enabled?' checked':'')+'><i></i></label>'
+    +'</div>';
+  h+='<div class="prov-tools">'
+    +'<button class="icon-btn" type="button" data-act="up" title="上移">↑</button>'
+    +'<button class="icon-btn" type="button" data-act="down" title="下移">↓</button>'
+    +'<button class="btn sm" type="button" data-act="edit">编辑</button>'
+    +'<button class="btn sm danger" type="button" data-act="del">删除</button>'
+    +'</div></div>';
+  return h;
+}
+
+function openAiModal(idx,preset){
+  if(idx<0&&aiState.length>=10){toast('最多 10 个 AI','bad');return;}
+  var p;
+  if(idx>=0){p=aiState[idx];}
+  else{
+    p={id:'new-'+(++aiSeq)+'-'+Date.now(),
+      name:(preset&&preset.name)||('AI '+(aiState.length+1)),
+      baseUrl:(preset&&preset.url)||'',apiKey:'',
+      model:(preset&&preset.model)||'',temperature:'0.8',enabled:1,hasKey:false,models:[]};
+  }
+  aiModal={idx:idx,isNew:idx<0,p:p,models:(idx>=0?(p.models||[]):[])};
+  $('ai-m-title').textContent=idx>=0?('编辑 · '+(p.name||'AI')):'添加 AI';
+  $('ai-m-name').value=p.name||'';
+  $('ai-m-url').value=p.baseUrl||'';
+  $('ai-m-key').value=p.apiKey||'';
+  $('ai-m-key').placeholder=p.hasKey?'已设置，留空表示不修改':'sk-...';
+  $('ai-m-model').innerHTML=modelOptions({model:p.model,models:aiModal.models});
+  $('ai-m-temp').value=p.temperature||'0.8';
+  $('ai-m-on').checked=!!p.enabled;
+  setAiTestResult('','');
+  $('ai-modal-mask').hidden=false;
+}
+
+function closeAiModal(){
+  var mask=$('ai-modal-mask');
+  if(mask)mask.hidden=true;
+  aiModal.isNew=false;
+}
+
+function setAiTestResult(kind,msg){
+  var el=$('ai-test-result');
+  if(!el)return;
+  el.hidden=!kind;
+  el.className='test-result'+(kind?' '+kind:'');
+  el.textContent=msg||'';
+}
+
+function testAiModal(btn){
+  var url=$('ai-m-url').value.trim();
+  var key=$('ai-m-key').value.trim();
+  var model=$('ai-m-model').value;
+  var temp=$('ai-m-temp').value.trim();
+  if(!url){toast('请先填写 Base URL','bad');return;}
+  if(!model){toast('请先选择或填写模型','bad');return;}
+  if(!key&&!aiModal.p.hasKey){toast('请先填写 API Key','bad');return;}
+  busy(btn,true);
+  setAiTestResult('testing','正在测试…');
+  api('POST','/api/ai/test',{baseUrl:url,apiKey:key,providerId:aiModal.p.hasKey?aiModal.p.id:'',
+    model:model,temperature:temp})
+    .then(function(d){
+      if(d&&d.ok){
+        var sec=d.ms?' · '+(((d.ms/1000).toFixed(1)))+'s':'';
+        setAiTestResult('ok','✓ 测试通过'+sec+' · 回复：'+(d.reply||'…'));
+      }else{
+        setAiTestResult('bad','✗ '+((d&&d.error)||'测试失败'));
+      }
+    })
+    .catch(function(e){setAiTestResult('bad','✗ '+e.message);})
+    .then(function(){busy(btn,false);});
+}
+
+function pullAiModalModels(btn){
+  var url=$('ai-m-url').value.trim();
+  var key=$('ai-m-key').value.trim();
+  if(!url){toast('请先填写 Base URL','bad');return;}
+  if(!key&&!aiModal.p.hasKey){toast('请先填写 API Key','bad');return;}
+  busy(btn,true);
+  api('POST','/api/models',{baseUrl:url,apiKey:key,providerId:aiModal.p.hasKey?aiModal.p.id:''})
+    .then(function(d){
+      if(!d)return;
+      aiModal.models=d.models||[];
+      var cur=$('ai-m-model').value;
+      if(aiModal.models.length&&aiModal.models.indexOf(cur)<0)cur=aiModal.models[0];
+      $('ai-m-model').innerHTML=modelOptions({model:cur,models:aiModal.models});
+      toast('已拉取 '+aiModal.models.length+' 个模型','ok');
+    })
+    .catch(function(e){toast(e.message,'bad');})
+    .then(function(){busy(btn,false);});
+}
+
+function saveAiModal(){
+  var p=aiModal.p;
+  if(!p)return;
+  var isNew=aiModal.isNew;
+  p.name=$('ai-m-name').value.trim();
+  p.baseUrl=$('ai-m-url').value.trim();
+  p.apiKey=$('ai-m-key').value.trim();
+  p.model=$('ai-m-model').value;
+  p.temperature=$('ai-m-temp').value.trim()||'0.8';
+  p.enabled=$('ai-m-on').checked?1:0;
+  p.models=aiModal.models;
+  if(!p.name){toast('请填写名称','bad');return;}
+  if(!p.baseUrl){toast('请填写 Base URL','bad');return;}
+  if(!p.model){toast('请选择或填写模型','bad');return;}
+  if(!p.hasKey&&!p.apiKey){toast('请填写 API Key','bad');return;}
+  if(isNew)aiState.push(p);
+  closeAiModal();
+  renderAiProviders();
+  toast((isNew?'已添加「':'已修改「')+p.name+'」，点下方「保存」后生效','ok');
+}
+
+function bindAiModal(){
+  $('ai-modal-x').addEventListener('click',closeAiModal);
+  $('ai-m-cancel').addEventListener('click',closeAiModal);
+  $('ai-modal-mask').addEventListener('click',function(e){if(e.target===this)closeAiModal();});
+  $('ai-m-key-toggle').addEventListener('click',function(){
+    var input=$('ai-m-key');
+    var show=input.type==='password';
+    input.type=show?'text':'password';
+    this.textContent=show?'隐藏':'显示';
+  });
+  $('ai-m-pull').addEventListener('click',function(){pullAiModalModels(this);});
+  $('ai-m-test').addEventListener('click',function(){testAiModal(this);});
+  $('ai-m-save').addEventListener('click',saveAiModal);
+  if(!aiEscBound){
+    aiEscBound=true;
+    document.addEventListener('keydown',function(e){
+      var mask=$('ai-modal-mask');
+      if(e.key==='Escape'&&mask&&!mask.hidden)closeAiModal();
+    });
   }
 }
 
@@ -910,77 +1149,31 @@ function renderAiProviders(){
   var box=$('prov-list');
   if(!box)return;
   if(!aiState.length){
-    box.innerHTML='<div class="prov-empty">还没有任何 AI，点下面的「添加 AI」加一个</div>';
+    box.innerHTML='<div class="prov-empty">还没有任何 AI，点「添加 AI」在弹窗里配置</div>';
     return;
   }
   var h='';
-  for(var i=0;i<aiState.length;i++){
-    var p=aiState[i];
-    h+='<div class="prov'+(p.enabled?'':' is-off')+'" data-id="'+esc(p.id)+'">';
-    h+='<div class="prov-head">'
-      +'<span class="prov-no">'+(i+1)+'</span>'
-      +'<input class="prov-name" value="'+esc(p.name)+'" placeholder="名称，例如 主账号" maxlength="40">'
-      +'<label class="prov-check"><input type="checkbox" class="prov-on"'+(p.enabled?' checked':'')+'>启用</label>'
-      +'<span class="prov-tools">'
-      +'<button class="btn sm" type="button" data-act="up">上移</button>'
-      +'<button class="btn sm" type="button" data-act="down">下移</button>'
-      +'<button class="btn sm danger" type="button" data-act="del">'+IX.trash+'<span>删除</span></button>'
-      +'</span></div>';
-    h+='<div class="grid">';
-    h+='<div class="field wide"><label>Base URL</label><input class="prov-url" value="'+esc(p.baseUrl)
-      +'" placeholder="https://api.example.com/v1"></div>';
-    h+='<div class="field"><label>API Key</label><div class="pw-wrap"><input class="prov-key" type="password" value="'+esc(p.apiKey||'')+'" placeholder="'
-      +(p.hasKey?'已设置，留空表示不修改':'sk-...')+'" autocomplete="new-password">'
-      +'<button class="pw-toggle" type="button" data-pw="key">显示</button></div></div>';
-    h+='<div class="field"><label>模型</label><div class="model-row"><select class="prov-model">'+modelOptions(p)+'</select>'
-      +'<button class="btn" type="button" data-act="models">'+IX.refresh+'<span>拉取模型</span></button></div></div>';
-    h+='<div class="field"><label>Temperature</label><input class="prov-temp" type="number" inputmode="decimal" value="'
-      +esc(p.temperature)+'" placeholder="0.8"></div>';
-    h+='</div>';
-    h+='<p class="prov-note">'+(p.hasKey?'库里已有 Key：留空不改，填了新值才会覆盖。':'还没有 Key，必须填写后才能保存。')+'</p>';
-    h+='</div>';
-  }
+  for(var i=0;i<aiState.length;i++)h+=provRowHtml(aiState[i],i);
   box.innerHTML=h;
-}
-
-function pullProviderModels(idx,btn){
-  var p=aiState[idx];
-  if(!p)return;
-  var orig=btn.innerHTML;
-  btn.disabled=true;
-  btn.innerHTML=IX.refresh+'<span>拉取中…</span>';
-  api('POST','/api/models',{baseUrl:p.baseUrl,apiKey:p.apiKey,providerId:p.hasKey?p.id:''})
-    .then(function(d){
-      if(!d)return;
-      p.models=d.models||[];
-      if(p.models.length&&p.models.indexOf(p.model)<0)p.model=p.models[0];
-      renderAiProviders();
-      toast('已拉取 '+p.models.length+' 个模型','ok');
-    })
-    .catch(function(e){toast(e.message,'bad');})
-    .then(function(){btn.disabled=false;btn.innerHTML=orig;});
 }
 
 function onProvClick(e){
   var btn=e.target&&e.target.closest?e.target.closest('button'):null;
-  if(!btn)return;
-  if(btn.classList.contains('pw-toggle')){
-    var wrap=btn.parentNode;
-    var input=wrap?wrap.querySelector('input'):null;
-    if(!input)return;
-    var show=input.type==='password';
-    input.type=show?'text':'password';
-    btn.textContent=show?'隐藏':'显示';
-    return;
-  }
-  var card=btn.closest('.prov');
-  if(!card)return;
-  var id=card.getAttribute('data-id');
-  var act=btn.getAttribute('data-act');
-  readProvidersFromDom();
+  var row=e.target&&e.target.closest?e.target.closest('.prov-row'):null;
+  if(!row)return;
+  var id=row.getAttribute('data-id');
   var idx=-1;
   for(var i=0;i<aiState.length;i++)if(aiState[i].id===id)idx=i;
   if(idx<0)return;
+  var swWrap=e.target&&e.target.closest?e.target.closest('.prov-switch'):null;
+  if(swWrap){
+    var on=swWrap.querySelector('input').checked;
+    aiState[idx].enabled=on?1:0;
+    renderAiProviders();
+    toast((aiState[idx].name||'AI')+(on?' 已启用':' 已停用'),on?'ok':'');
+    return;
+  }
+  var act=btn?btn.getAttribute('data-act'):'edit';
 
   if(act==='up'){
     if(idx===0){toast('已经是第一个了');return;}
@@ -1001,20 +1194,10 @@ function onProvClick(e){
     renderAiProviders();
     return;
   }
-  if(act==='models')pullProviderModels(idx,btn);
-}
-
-function addProvider(){
-  readProvidersFromDom();
-  if(aiState.length>=10){toast('最多 10 个 AI','bad');return;}
-  aiSeq++;
-  aiState.push({id:'new-'+aiSeq+'-'+Date.now(),name:'AI '+(aiState.length+1),baseUrl:'',apiKey:'',
-    model:'',temperature:'0.8',enabled:1,hasKey:false,models:[]});
-  renderAiProviders();
+  openAiModal(idx);
 }
 
 function collectProviders(){
-  readProvidersFromDom();
   var out=[];
   for(var i=0;i<aiState.length;i++){
     var p=aiState[i];
@@ -1067,44 +1250,61 @@ function showAi(){
 }
 
 var imageGenState={model:'',baseUrl:'',apiKey:'',hasKey:false,testedModel:'',testedUrl:'',tested:false,result:''};
+var igenEscBound=false;
 
 function renderAiPage(){
   var h='<div class="card"><div class="card-head"><h3>AI 列表</h3>'
-    +'<span class="hint">从上到下依次尝试，前一个失败自动换下一个</span></div>'
+    +'<span class="hint">按顺序尝试，失败自动换下一个；点行可编辑</span></div>'
     +'<div class="prov-list" id="prov-list"></div>'
     +'<div class="form-actions">'
-    +'<button class="btn" id="b-ai-add" type="button">添加 AI</button>'
+    +'<button class="btn" id="b-ai-add" type="button">＋ 添加 AI</button>'
     +'<span class="grow"></span>'
     +'<button class="btn" id="b-ai-save" type="button">'+IX.check+'<span>保存</span></button>'
     +'<button class="btn primary" id="b-ai-save-restart" type="button">'+IX.refresh+'<span>保存并重启</span></button>'
     +'</div></div>';
   h+='<div class="card"><div class="card-head"><h3>内置国内 AI 配置</h3>'
-    +'<span class="hint">点一下自动加一行，地址和模型都填好，只需再填 API Key</span></div>'
+    +'<span class="hint">点一下打开弹窗，地址和模型都填好，只需再填 API Key</span></div>'
     +'<div class="chip-row" id="ai-presets">'+aiPresetChips()+'</div></div>';
   h+='<div class="card"><div class="card-head"><h3>怎么用</h3></div>'
-    +'<p class="tip">每个 AI 填一套 Base URL + API Key + 模型，接口要兼容 OpenAI 的 <b>/chat/completions</b>。'
-    +'列表顺序就是优先级：机器人先问第一个，超时、报错、配额用完就自动切到下一个，'
-    +'全部失败才会回一句「出了点小状况」。停用的 AI 不会参与。<br>'
+    +'<p class="tip">每个 AI 一套 Base URL + API Key + 模型，接口要兼容 OpenAI 的 <b>/chat/completions</b>。'
+    +'添加和编辑都在弹窗里完成，可以先「测试」确认能通再保存。列表顺序就是优先级：机器人先问第一个，'
+    +'超时、报错、配额用完就自动切到下一个，全部失败才会回一句「出了点小状况」。停用的 AI 不参与。<br>'
+    +'注：讯飞星火的「API Key」填控制台里的 <b>APIPassword</b>；腾讯混元已升级为 TokenHub 平台，地址用的是新接口。<br>'
+    +'国外模型（OpenAI、Gemini、Grok 等）在 Cloudflare Workers 上可直连，不需要代理；调用是机器人服务器发的，跟你本地网络无关。<br>'
     +'改完点「保存」立即生效（机器人自动热更新，无需重启）；「保存并重启」会完整重启一遍连接。</p></div>';
+  h+=aiModalHtml();
   $('wrap').innerHTML=h;
   renderAiProviders();
+  bindAiModal();
 
-  $('b-ai-add').addEventListener('click',addProvider);
+  $('b-ai-add').addEventListener('click',function(){openAiModal(-1);});
   $('b-ai-save').addEventListener('click',function(){saveProviders(false,this);});
   $('b-ai-save-restart').addEventListener('click',function(){saveProviders(true,this);});
   $('prov-list').addEventListener('click',onProvClick);
   $('ai-presets').addEventListener('click',onPresetClick);
 }
 
-/* 国内常见 AI 服务商（OpenAI 兼容端点），点预设自动填名称/地址/模型 */
+/* 内置 AI 服务商（OpenAI 兼容端点，地址已按官方文档核实），点预设打开弹窗自动填名称/地址/模型 */
 var AI_PRESETS=[
+  {label:'OpenAI',name:'OpenAI',url:'https://api.openai.com/v1',model:'gpt-5-mini'},
+  {label:'Google Gemini',name:'Google Gemini',url:'https://generativelanguage.googleapis.com/v1beta/openai/',model:'gemini-2.5-flash'},
+  {label:'xAI Grok',name:'xAI Grok',url:'https://api.x.ai/v1',model:'grok-4'},
+  {label:'Groq',name:'Groq（免费额度）',url:'https://api.groq.com/openai/v1',model:'llama-3.3-70b-versatile'},
+  {label:'OpenRouter',name:'OpenRouter 聚合',url:'https://openrouter.ai/api/v1',model:'openai/gpt-4o-mini'},
+  {label:'Mistral',name:'Mistral',url:'https://api.mistral.ai/v1',model:'mistral-small-latest'},
   {label:'DeepSeek',name:'DeepSeek',url:'https://api.deepseek.com/v1',model:'deepseek-chat'},
   {label:'通义千问',name:'通义千问（百炼）',url:'https://dashscope.aliyuncs.com/compatible-mode/v1',model:'qwen-plus'},
   {label:'智谱 GLM',name:'智谱 GLM',url:'https://open.bigmodel.cn/api/paas/v4',model:'glm-4-flash'},
   {label:'Kimi',name:'Kimi（月之暗面）',url:'https://api.moonshot.cn/v1',model:'kimi-latest'},
   {label:'豆包',name:'火山方舟（豆包）',url:'https://ark.cn-beijing.volces.com/api/v3',model:'doubao-seed-1-6-flash-250815'},
   {label:'硅基流动',name:'硅基流动',url:'https://api.siliconflow.cn/v1',model:'deepseek-ai/DeepSeek-V3'},
-  {label:'腾讯混元',name:'腾讯混元',url:'https://api.hunyuan.cloud.tencent.com/v1',model:'hunyuan-turbos-latest'}
+  {label:'腾讯混元',name:'腾讯混元 TokenHub',url:'https://tokenhub.tencentmaas.com/v1',model:'hy3'},
+  {label:'讯飞星火',name:'讯飞星火',url:'https://spark-api-open.xf-yun.com/v1',model:'4.0Ultra'},
+  {label:'MiniMax',name:'MiniMax',url:'https://api.minimaxi.com/v1',model:'MiniMax-M2'},
+  {label:'零一万物',name:'零一万物 Yi',url:'https://api.lingyiwanwu.com/v1',model:'yi-lightning'},
+  {label:'阶跃星辰',name:'阶跃星辰 Step',url:'https://api.stepfun.com/v1',model:'step-2-16k'},
+  {label:'百川智能',name:'百川智能',url:'https://api.baichuan-ai.com/v1',model:'Baichuan4-Turbo'},
+  {label:'魔搭免费',name:'魔搭 ModelScope（免费额度）',url:'https://api-inference.modelscope.cn/v1',model:'deepseek-ai/DeepSeek-V3'}
 ];
 function aiPresetChips(){
   var h='';
@@ -1116,13 +1316,7 @@ function onPresetClick(e){
   if(!btn)return;
   var p=AI_PRESETS[Number(btn.getAttribute('data-i')||'-1')];
   if(!p)return;
-  readProvidersFromDom();
-  if(aiState.length>=10){toast('最多 10 个 AI','bad');return;}
-  aiSeq++;
-  aiState.push({id:'new-'+aiSeq+'-'+Date.now(),name:p.name,baseUrl:p.url,apiKey:'',
-    model:p.model,temperature:'0.8',enabled:1,hasKey:false,models:[]});
-  renderAiProviders();
-  toast('已添加「'+p.name+'」，填上 API Key 再保存','ok');
+  openAiModal(-1,{name:p.name,url:p.url,model:p.model});
 }
 
 function showImageGen(){
@@ -1150,73 +1344,172 @@ function showImageGen(){
   });
 }
 
-function renderImageGenPage(){
-  var h='<div class="card"><div class="card-head"><h3>生图模型</h3>'
-    +'<span class="hint">先测试通过才能保存</span></div>'
-    +'<div class="grid">'
-    +'<div class="field wide"><label for="igen-url">Base URL</label>'
+function igenRowHtml(){
+  var host=imageGenState.baseUrl||'';
+  var k=host.indexOf('://');
+  if(k>=0)host=host.substring(k+3);
+  k=host.indexOf('/');
+  if(k>=0)host=host.substring(0,k);
+  var flag=imageGenState.tested?'<span class="prov-flag on">已测试</span>'
+    :'<span class="prov-flag off">未测试</span>';
+  var keyFlag=imageGenState.hasKey?'<span class="prov-keyok">Key 已设置</span>':'<span class="prov-keyno">Key 未设置</span>';
+  var h='<div class="prov-row" data-igen="1" title="点击编辑">';
+  h+='<span class="prov-no">🎨</span>';
+  h+='<div class="prov-info"><b>'+esc(imageGenState.model||'未配置（生图关闭）')+'</b><small>'
+    +(host?esc(host):'不填地址和 Key 时用「AI 对话」第一个 AI 兜底')+'</small></div>';
+  h+='<div class="prov-meta">'+keyFlag+flag+'</div>';
+  h+='<div class="prov-tools"><button class="btn sm" type="button" data-act="edit">编辑</button></div>';
+  h+='</div>';
+  return h;
+}
+
+function igenModalHtml(){
+  var h='<div class="modal-mask" id="igen-modal-mask" hidden>'
+    +'<div class="modal" role="dialog" aria-modal="true" aria-labelledby="igen-m-title">'
+    +'<div class="modal-head"><h3 id="igen-m-title">编辑生图配置</h3>'
+    +'<button class="modal-x" type="button" id="igen-modal-x" aria-label="关闭">×</button></div>'
+    +'<div class="modal-body">'
+    +'<div class="field"><label for="igen-url">Base URL</label>'
     +'<input id="igen-url" placeholder="https://api.example.com/v1" value="'+esc(imageGenState.baseUrl)+'"></div>'
-    +'<div class="field wide"><label for="igen-key">API Key</label>'
-    +'<div class="pw-wrap"><input id="igen-key" type="password" value="" placeholder="'
+    +'<div class="field"><label for="igen-key">API Key</label>'
+    +'<div class="pw-wrap"><input id="igen-key" type="password" value="'+esc(imageGenState.apiKey||'')+'" placeholder="'
     +(imageGenState.hasKey?'已设置，留空沿用旧 Key':'sk-...')+'" autocomplete="new-password">'
-    +'<button class="pw-toggle" type="button" data-pw="igen-key">显示</button></div></div>'
-    +'<div class="field wide"><label for="igen-model">模型</label>'
+    +'<button class="pw-toggle" type="button" id="igen-key-toggle">显示</button></div></div>'
+    +'<div class="field"><label for="igen-model">模型</label>'
     +'<input id="igen-model" placeholder="qwen-image-3.0-pro" maxlength="64" value="'+esc(imageGenState.model)+'"></div>'
+    +'<div class="chip-label">主流生图模型，点一下直接填入：</div>'
+    +'<div class="chip-row" id="igen-modal-chips">'+igenModelChips()+'</div>'
+    +'<div class="test-result" id="igen-test-result" hidden></div>'
     +'</div>'
-    +'<p class="btn-hint">主流生图模型，点一下直接填入（也可以手填服务商提供的其他模型名）：</p>'
-    +'<div class="chip-row" id="igen-model-presets">'+igenModelChips()+'</div>'
-    +'<div class="btn-row">'
-    +'<button class="btn" id="b-igen-test" type="button">'+IX.play+'<span>测试</span></button>'
-    +'<button class="btn primary" id="b-igen-save" type="button" disabled>'+IX.check+'<span>保存生图模型</span></button>'
+    +'<div class="modal-foot">'
+    +'<button class="btn" type="button" id="b-igen-test">'+IX.play+'<span>测试</span></button>'
+    +'<span class="grow"></span>'
+    +'<button class="btn" type="button" id="igen-m-cancel">取消</button>'
+    +'<button class="btn primary" type="button" id="igen-m-done">'+IX.check+'<span>完成</span></button>'
+    +'</div></div></div>';
+  return h;
+}
+
+function openIgenModal(){
+  $('igen-m-title').textContent='编辑生图配置';
+  $('igen-url').value=imageGenState.baseUrl||'';
+  $('igen-key').value=imageGenState.apiKey||'';
+  $('igen-key').placeholder=imageGenState.hasKey?'已设置，留空沿用旧 Key':'sk-...';
+  $('igen-model').value=imageGenState.model||'';
+  setIgenResult('','');
+  $('igen-modal-mask').hidden=false;
+}
+
+function closeIgenModal(){
+  var m=$('igen-modal-mask');
+  if(m)m.hidden=true;
+}
+
+function setIgenResult(kind,msg){
+  var el=$('igen-test-result');
+  if(!el)return;
+  el.hidden=!kind;
+  el.className='test-result'+(kind?' '+kind:'');
+  if(kind==='ok')el.innerHTML=msg||'';
+  else el.textContent=msg||'';
+}
+
+function saveIgenModal(){
+  var url=$('igen-url').value.trim();
+  var key=$('igen-key').value.trim();
+  var model=$('igen-model').value.trim();
+  if(!url){toast('请填写 Base URL','bad');return;}
+  if(!model){toast('请填写模型名','bad');return;}
+  if(!key&&!imageGenState.hasKey){toast('请填写 API Key','bad');return;}
+  imageGenState.baseUrl=url;
+  imageGenState.model=model;
+  imageGenState.apiKey=key;
+  closeIgenModal();
+  renderImageGenPage();
+  toast('已更新生图配置，点下方「保存」后生效','ok');
+}
+
+function bindIgenModal(){
+  $('b-igen-add').addEventListener('click',openIgenModal);
+  var row=document.querySelector('[data-igen]');
+  if(row)row.addEventListener('click',openIgenModal);
+  $('b-igen-save').addEventListener('click',function(){saveImageGen(this);});
+  $('igen-modal-x').addEventListener('click',closeIgenModal);
+  $('igen-m-cancel').addEventListener('click',closeIgenModal);
+  $('igen-modal-mask').addEventListener('click',function(e){if(e.target===this)closeIgenModal();});
+  var key=$('igen-key');
+  var toggle=$('igen-key-toggle');
+  if(toggle)toggle.addEventListener('click',function(){
+    var show=key.type==='password';
+    key.type=show?'text':'password';
+    this.textContent=show?'隐藏':'显示';
+  });
+  var reset=function(){
+    imageGenState.tested=false;
+    imageGenState.result='';
+    setIgenResult('','');
+    updateImageGenState();
+  };
+  $('igen-url').addEventListener('input',reset);
+  $('igen-model').addEventListener('input',reset);
+  $('igen-key').addEventListener('input',reset);
+  $('b-igen-test').addEventListener('click',function(){testImageGen(this);});
+  $('igen-m-done').addEventListener('click',saveIgenModal);
+  var chips=$('igen-modal-chips');
+  if(chips)chips.addEventListener('click',function(e){
+    var chip=e.target&&e.target.closest?e.target.closest('.chip'):null;
+    if(!chip)return;
+    $('igen-model').value=chip.getAttribute('data-m')||'';
+    reset();
+  });
+  var igenPresets=$('igen-model-presets');
+  if(igenPresets)igenPresets.addEventListener('click',function(e){
+    var chip=e.target&&e.target.closest?e.target.closest('.chip'):null;
+    if(!chip)return;
+    openIgenModal();
+    $('igen-model').value=chip.getAttribute('data-m')||'';
+    imageGenState.tested=false;
+    setIgenResult('','');
+    updateImageGenState();
+  });
+  if(!igenEscBound){
+    igenEscBound=true;
+    document.addEventListener('keydown',function(e){
+      var m=$('igen-modal-mask');
+      if(e.key==='Escape'&&m&&!m.hidden)closeIgenModal();
+    });
+  }
+}
+
+function renderImageGenPage(){
+  var h='<div class="card"><div class="card-head"><h3>生图配置</h3>'
+    +'<span class="hint">先测试通过才能保存；点行或「编辑」在弹窗里改</span></div>'
+    +igenRowHtml()
+    +'<div class="form-actions">'
+    +'<button class="btn" id="b-igen-add" type="button">✎ 编辑生图配置</button>'
+    +'<span class="grow"></span>'
     +'<span class="hint" id="igen-state"></span>'
-    +'</div>'
-    +'<p class="hint" id="igen-result">'+esc(imageGenState.result||'')+'</p></div>';
+    +'<button class="btn primary" id="b-igen-save" type="button" disabled>'+IX.check+'<span>保存生图模型</span></button>'
+    +'</div></div>';
+  h+='<div class="card"><div class="card-head"><h3>主流生图模型</h3>'
+    +'<span class="hint">点一下打开弹窗并填好模型名</span></div>'
+    +'<div class="chip-row" id="igen-model-presets">'+igenModelChips()+'</div></div>';
   h+='<div class="card"><div class="card-head"><h3>怎么用</h3></div>'
     +'<p class="tip">生图用独立的 Base URL / API Key，和「AI 对话」里的对话模型互不影响，可以指向另一家服务商。'
-    +'填好后先点「<b>测试</b>」，服务商会现场画一张示例图；测试通过后保存按钮才会亮，保存后立即生效（机器人自动热更新）。<br>'
+    +'编辑在弹窗里完成，先点「<b>测试</b>」，服务商会现场画一张示例图；测试通过后保存按钮才会亮，保存后立即生效（机器人自动热更新）。<br>'
     +'群里发「/画 一只橘猫，水彩风格」或直接说「帮我画一只猫」就会出图。留空模型表示关闭生图。<br>'
     +'建议填服务商标注了 <b>image_gen</b> 的模型（比如 qwen-image-3.0-pro），接口需兼容 OpenAI 的 <b>/images/generations</b>。'
     +'Base URL 不知道填什么的话，「AI 对话」页的内置配置里有各家的地址。'
     +'不填 Base URL / Key 时，会自动用「AI 对话」里第一个 AI 的配置兜底。</p></div>';
+  h+=igenModalHtml();
   $('wrap').innerHTML=h;
-  var igenInput=$('igen-url');
-  var igenKey=$('igen-key');
-  var igenModel=$('igen-model');
-  var reset=function(){
-    imageGenState.tested=false;
-    imageGenState.result='';
-    var res=$('igen-result');
-    if(res)res.textContent='';
-    updateImageGenState();
-  };
-  if(igenInput)igenInput.addEventListener('input',reset);
-  if(igenModel)igenModel.addEventListener('input',reset);
-  if(igenKey)igenKey.addEventListener('input',reset);
-  var pw=$('igen-key');
-  var wrap=$('igen-key')?$('igen-key').parentNode:null;
-  var toggle=wrap?wrap.querySelector('.pw-toggle'):null;
-  if(toggle)toggle.addEventListener('click',function(){
-    var show=pw.type==='password';
-    pw.type=show?'text':'password';
-    toggle.textContent=show?'隐藏':'显示';
-  });
-  $('b-igen-test').addEventListener('click',function(){testImageGen(this);});
-  $('b-igen-save').addEventListener('click',function(){saveImageGen(this);});
-  var igenPresets=$('igen-model-presets');
-  if(igenPresets)igenPresets.addEventListener('click',function(e){
-    var chip=e.target&&e.target.closest?e.target.closest('.chip'):null;
-    if(!chip||!igenModel)return;
-    igenModel.value=chip.getAttribute('data-m')||'';
-    reset();
-    igenModel.focus();
-  });
-  updateImageGenState();
+  bindIgenModal();
 }
 
-/* 主流生图模型（OpenAI 兼容 /images/generations），点预设直接填入模型名 */
+/* 主流生图模型（OpenAI 兼容 /images/generations），点预设打开弹窗并填入模型名 */
 var IMAGE_MODEL_PRESETS=[
   'qwen-image-3.0-pro','qwen-image','wanx2.1-t2i-plus','seedream-4.0',
-  'doubao-seedream-3-0-t2i','cogview-4','dall-e-3','gpt-image-1','flux-schnell','nano-banana'
+  'doubao-seedream-3-0-t2i','cogview-4','dall-e-3','gpt-image-1.5','gpt-image-1','flux-schnell','nano-banana'
 ];
 function igenModelChips(){
   var h='';
@@ -1227,14 +1520,14 @@ function igenModelChips(){
 function updateImageGenState(){
   var st=$('igen-state');
   var save=$('b-igen-save');
-  var url=$('igen-url')?$('igen-url').value.trim():'';
-  var model=$('igen-model')?$('igen-model').value.trim():'';
-  var ok=imageGenState.tested&&model&&model===imageGenState.testedModel&&url===imageGenState.testedUrl;
+  var ok=imageGenState.tested&&imageGenState.model
+    &&imageGenState.model===imageGenState.testedModel
+    &&imageGenState.baseUrl===imageGenState.testedUrl;
   if(save)save.disabled=!ok;
   if(st){
     if(ok)st.textContent='已测试通过';
-    else if(model||url)st.textContent='未测试';
-    else st.textContent='留空则关闭生图';
+    else if(imageGenState.model)st.textContent='未测试，保存前先在弹窗里测试';
+    else st.textContent='未配置';
   }
 }
 
@@ -1258,16 +1551,12 @@ function testImageGen(btn){
       imageGenState.model=model;
       imageGenState.baseUrl=url;
       imageGenState.tested=!!(r&&r.ok);
-      imageGenState.result=r&&r.ok?('测试通过：'+r.url):('测试失败：'+((r&&r.error)||'未知错误'));
-      var res=$('igen-result');
-      if(res){
-        if(r&&r.ok){
-          res.innerHTML='<span class="ok-text">测试通过，示例图：</span>'
-            +'<a href="'+esc(r.url)+'" target="_blank" rel="noopener noreferrer">打开原图</a>'
-            +'<img class="igen-preview" src="'+esc(r.url)+'" alt="生图示例" referrerpolicy="no-referrer">';
-        }else{
-          res.textContent='测试失败：'+((r&&r.error)||'未知错误');
-        }
+      if(r&&r.ok){
+        setIgenResult('ok','<span class="ok-text">测试通过，示例图：</span>'
+          +'<a href="'+esc(r.url)+'" target="_blank" rel="noopener noreferrer">打开原图</a>'
+          +'<img class="igen-preview" src="'+esc(r.url)+'" alt="生图示例" referrerpolicy="no-referrer">');
+      }else{
+        setIgenResult('bad','测试失败：'+((r&&r.error)||'未知错误'));
       }
       updateImageGenState();
       toast(r&&r.ok?'生图模型可用':'测试失败，请检查地址或模型名',r&&r.ok?'ok':'bad');
@@ -1277,23 +1566,18 @@ function testImageGen(btn){
 }
 
 function saveImageGen(btn){
-  var urlEl=$('igen-url');
-  var keyEl=$('igen-key');
-  var modelEl=$('igen-model');
-  var url=urlEl?urlEl.value.trim():'';
-  var key=keyEl?keyEl.value.trim():'';
-  var model=modelEl?modelEl.value.trim():'';
-  if(!imageGenState.tested||model!==imageGenState.testedModel||url!==imageGenState.testedUrl){
+  if(!imageGenState.tested||imageGenState.model!==imageGenState.testedModel
+    ||imageGenState.baseUrl!==imageGenState.testedUrl){
     toast('请先测试通过再保存','bad');
     return;
   }
   busy(btn,true);
-  api('POST','/api/config',{imageGenBaseUrl:url,imageGenApiKey:key,imageGenModel:model})
+  api('POST','/api/config',{imageGenBaseUrl:imageGenState.baseUrl,
+    imageGenApiKey:imageGenState.apiKey||'',imageGenModel:imageGenState.model})
     .then(function(){
-      imageGenState.model=model;
-      imageGenState.baseUrl=url;
-      if(key)imageGenState.hasKey=true;
-      if(keyEl)keyEl.value='';
+      if(imageGenState.apiKey)imageGenState.hasKey=true;
+      imageGenState.apiKey='';
+      renderImageGenPage();
       toast('生图模型已保存，立即生效','ok');
     })
     .catch(function(e){toast(e.message,'bad');})

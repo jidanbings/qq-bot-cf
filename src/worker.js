@@ -161,6 +161,37 @@ async function testImageGen(baseUrl, apiKey, model) {
   }
 }
 
+/** 测试 AI 对话配置：调 OpenAI 兼容 /chat/completions 发一句话，返回是否可用与回复 */
+async function testAiChat(baseUrl, apiKey, model, temperature) {
+  const payload = {
+    model,
+    messages: [{ role: 'user', content: '你好，这是一条连通性测试，请随便回复一句话。' }],
+    max_tokens: 30,
+    stream: false,
+  };
+  const t = Number(temperature);
+  if (Number.isFinite(t)) payload.temperature = t;
+  try {
+    const started = Date.now();
+    const res = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      return { ok: false, error: `HTTP ${res.status}${text ? ' ' + text.slice(0, 160) : ''}` };
+    }
+    const data = await res.json();
+    const reply = data?.choices?.[0]?.message?.content;
+    if (typeof reply !== 'string' || !reply.trim()) return { ok: false, error: '接口没有返回回复内容' };
+    return { ok: true, reply: reply.trim().slice(0, 60), ms: Date.now() - started };
+  } catch (e) {
+    return { ok: false, error: e && e.name === 'TimeoutError' ? '测试超时（30 秒）' : (e && e.message) || '测试失败' };
+  }
+}
+
 async function handleLogin(request, env, ip) {
   if (!env.ADMIN_TOKEN) {
     throw new HttpError(500, 'server_misconfigured', '未配置 ADMIN_TOKEN，拒绝所有登录');
@@ -295,6 +326,22 @@ async function handleApi(request, env, url) {
         const { baseUrl, apiKey } = await resolveModelEndpoint(env, body);
         const models = await fetchModelList(baseUrl, apiKey);
         return jsonResult({ models });
+      }
+      break;
+
+    case '/api/ai/test':
+      if (method === 'POST') {
+        const body = await readJson(request);
+        const model = typeof body.model === 'string' ? body.model.trim() : '';
+        if (!model) throw new HttpError(400, 'invalid_config', '请先选择或填写模型');
+        const providerId = typeof body.providerId === 'string' ? body.providerId.trim() : '';
+        const stored = providerId ? await getAiProvider(env, providerId) : null;
+        const baseUrl = normalizeUrl(typeof body.baseUrl === 'string' ? body.baseUrl : '') || (stored ? stored.baseUrl : '');
+        const typedKey = typeof body.apiKey === 'string' ? body.apiKey.trim() : '';
+        const apiKey = typedKey || (stored ? stored.apiKey : '');
+        if (!baseUrl) throw new HttpError(400, 'invalid_config', '请先填写 AI Base URL');
+        if (!apiKey) throw new HttpError(400, 'invalid_config', '请先填写 API Key');
+        return jsonResult(await testAiChat(baseUrl, apiKey, model, body.temperature));
       }
       break;
 
