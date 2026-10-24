@@ -967,7 +967,6 @@ function clearLogs(){
     loadConversations();
   }).catch(function(e){toast(e.message,'bad');});
 }
-}
 /* ============================== AI 对话 ============================== */
 var aiState=[];
 var aiSeq=0;
