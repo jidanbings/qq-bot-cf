@@ -360,6 +360,44 @@ button{font-family:inherit}
 .day-sep{display:flex;align-items:center;gap:.8rem;color:var(--muted);font-size:11.5px;margin:.4rem 0}
 .day-sep::before,.day-sep::after{content:"";flex:1;height:1px;background:var(--border)}
 .day-sep span{white-space:nowrap;font-weight:600}
+
+/* ---------- 聊天记录（QQ 风格：桌面双栏 / 手机单栏） ---------- */
+.chat-wrap{display:grid;grid-template-columns:300px minmax(0,1fr);gap:12px;height:calc(100vh - 150px);min-height:420px}
+.chat-list{display:flex;flex-direction:column;min-height:0;background:var(--surface);border:1px solid var(--border);
+  border-radius:14px;overflow:hidden}
+.chat-list-head{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--border);flex:0 0 auto}
+.chat-list-head .hint{margin-right:auto;font-size:11.5px;color:var(--muted)}
+.conv-list{flex:1 1 auto;min-height:0;overflow-y:auto}
+.conv{display:flex;gap:10px;align-items:center;padding:10px 12px;cursor:pointer;border-bottom:1px solid var(--border);transition:background .12s}
+.conv:hover{background:var(--surface-2)}
+.conv.active{background:var(--surface-2);box-shadow:inset 3px 0 0 var(--accent)}
+.conv-av{width:36px;height:36px;border-radius:10px;display:grid;place-items:center;background:var(--surface-2);
+  font-size:16px;flex:0 0 auto}
+.conv-main{min-width:0;flex:1 1 auto}
+.conv-name{font-weight:600;font-size:12.5px;display:flex;gap:6px;align-items:baseline;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.conv-name .hint{font-weight:400;font-size:10.5px;color:var(--muted);flex:0 0 auto}
+.conv-prev{color:var(--muted);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+.conv-time{font-size:10.5px;color:var(--muted);flex:0 0 auto}
+.chat-thread{display:flex;flex-direction:column;min-height:0;background:var(--surface);border:1px solid var(--border);
+  border-radius:14px;overflow:hidden}
+.thread-head{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--border);flex:0 0 auto}
+.thread-head b{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.thread-head .hint{margin-left:auto;font-size:11px;color:var(--muted)}
+.thread-back{display:none}
+.thread-body{flex:1 1 auto;min-height:0;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px}
+.thread-empty{margin:auto;text-align:center;color:var(--muted);font-size:12.5px;line-height:1.8;padding:24px}
+.thread-more{align-self:center;flex:0 0 auto}
+.msg-row{display:flex;gap:8px;align-items:flex-end}
+.msg-row.me{flex-direction:row-reverse}
+.msg-av{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;background:var(--surface-2);
+  font-size:13px;flex:0 0 auto;color:var(--text-2)}
+.msg-bubble{max-width:min(620px,76%);padding:9px 12px;border-radius:14px;font-size:13px;line-height:1.65;
+  white-space:pre-wrap;word-break:break-word;background:var(--surface-2);color:var(--text);
+  border:1px solid var(--border)}
+.msg-row.me .msg-bubble{background:var(--accent);color:#fff;border-color:transparent;border-bottom-right-radius:4px}
+.msg-row .msg-bubble{border-bottom-left-radius:4px}
+.msg-time{align-self:center;font-size:10.5px;color:var(--muted);margin:2px 0}
+
 /* 筛选按钮上的计数 */
 .seg .seg-n{font-size:.68rem;opacity:.75;font-variant-numeric:tabular-nums}
 /* 本地预览示例数据横幅 */
@@ -475,6 +513,13 @@ button{font-family:inherit}
   .logline .ts{font-size:10.5px}
   .logline .ts i{display:none}
   .logline>span:last-child{flex:1 1 100%;order:3}
+  /* 聊天记录：手机端单栏，点进会话全屏（像手机 QQ） */
+  .chat-wrap{grid-template-columns:minmax(0,1fr);height:calc(100dvh - 170px);min-height:0;gap:0}
+  .chat-thread{display:none}
+  .chat-wrap.thread-open .chat-list{display:none}
+  .chat-wrap.thread-open .chat-thread{display:flex}
+  .thread-back{display:inline-flex}
+  .msg-bubble{max-width:84%}
   /* 群管理弹窗：内容多，移动端直接全屏（头部固定/正文滚动/底部贴底） */
   .modal-mask.mask-sheet{padding:0;align-items:stretch}
   .modal-sheet{width:100%;max-height:none;height:100dvh;border-radius:0;border:none;animation:modalInM .18s ease}

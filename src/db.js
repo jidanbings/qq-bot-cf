@@ -632,6 +632,69 @@ export async function clearChatLogs(env) {
   return res.meta?.changes ?? 0;
 }
 
+/* ------------------------------ 会话列表 / 完整对话（后台 QQ 风格聊天记录用） ------------------------------ */
+
+/** 每个会话（群聊/私聊）一条：最后一条消息、条数、类型，按最近活跃排序 */
+export async function listConversations(env, { limit = 100 } = {}) {
+  try {
+    const { results } = await env.DB.prepare(
+      "SELECT scope_id, MAX(id) AS last_id, COUNT(*) AS n FROM chat_log " +
+        "WHERE kind IN ('group','c2c') GROUP BY scope_id ORDER BY last_id DESC LIMIT ?1"
+    )
+      .bind(Math.min(Math.max(Number(limit) || 100, 1), 200))
+      .all();
+    const rows = results || [];
+    if (!rows.length) return [];
+    const ids = rows.map((r) => r.last_id);
+    const { results: lastRows } = await env.DB.prepare(
+      `SELECT id, kind, scope_id, user_content, ai_reply, model, created_at FROM chat_log WHERE id IN (${ids
+        .map(() => '?')
+        .join(',')})`
+    )
+      .bind(...ids)
+      .all();
+    const byId = new Map((lastRows || []).map((r) => [r.id, r]));
+    return rows.map((r) => {
+      const last = byId.get(r.last_id) || {};
+      return {
+        scopeId: r.scope_id,
+        kind: last.kind === 'c2c' ? 'c2c' : 'group',
+        count: r.n,
+        lastAt: last.created_at || '',
+        lastUser: last.user_content || '',
+        lastReply: last.ai_reply || '',
+        lastModel: last.model || null,
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
+/** 单个会话的完整对话（分页：before 传上一页最小 id，返回按时间升序） */
+export async function getConversationMessages(env, scopeId, { before = 0, limit = 50 } = {}) {
+  const size = Math.min(Math.max(Number(limit) || 50, 1), 100);
+  const { results } = await env.DB.prepare(
+    "SELECT id, kind, scope_id, user_content, ai_reply, model, created_at FROM chat_log " +
+      "WHERE scope_id = ?1 AND kind IN ('group','c2c') AND id < ?2 ORDER BY id DESC LIMIT ?3"
+  )
+    .bind(String(scopeId || ''), Number(before) || 999999999, size)
+    .all();
+  const list = results || [];
+  return {
+    items: list.reverse().map((r) => ({
+      id: r.id,
+      kind: r.kind,
+      scopeId: r.scope_id,
+      userContent: r.user_content,
+      aiReply: r.ai_reply,
+      model: r.model,
+      time: r.created_at,
+    })),
+    hasMore: list.length === size,
+  };
+}
+
 /* ------------------------------ 群列表（后台「群管理」用） ------------------------------ */
 
 export async function upsertGroup(env, openid, source) {

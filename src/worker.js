@@ -7,10 +7,12 @@ import {
   ensureKey,
   getAiProvider,
   getConfig,
+  getConversationMessages,
   getSession,
   initSchema,
   listAiProviders,
   listChatLogs,
+  listConversations,
   listGroups,
   listReminders,
   normalizeUrl,
@@ -380,6 +382,23 @@ async function handleApi(request, env, url) {
         );
       }
       break;
+
+    case '/api/conversations':
+      if (method === 'GET') {
+        return jsonResult({ items: await listConversations(env, { limit: 100 }) });
+      }
+      break;
+
+    case '/api/conversations/messages': {
+      if (method !== 'GET') throw new HttpError(405, 'method_not_allowed', '请使用 GET');
+      const scope = String(url.searchParams.get('scope') || '').trim();
+      if (!/^[0-9a-zA-Z_-]{1,64}$/.test(scope)) {
+        throw new HttpError(400, 'invalid_scope', '会话标识格式不对');
+      }
+      const before = Number(url.searchParams.get('before') || 0);
+      const limit = Number(url.searchParams.get('limit') || 50);
+      return jsonResult(await getConversationMessages(env, scope, { before, limit }));
+    }
 
     case '/api/logs/clear':
       if (method === 'POST') return jsonResult({ deleted: await clearChatLogs(env) });

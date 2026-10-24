@@ -760,31 +760,8 @@ function saveConfig(restart){
   });
 }
 
-/* ============================== 聊天记录 ============================== */
-var LOG_PAGE_SIZE=20;
-var LOG_KINDS=[['all','全部'],['group','群聊'],['c2c','私聊'],['system','系统']];
-var logState={page:1,kind:'all'};
-
-function entryHtml(it){
-  if(it.kind==='system'){
-    return '<article class="entry kind-system"><div class="entry-body">'
-      +'<div class="sys-line"><span class="sys-ico">⚙️</span><span class="sys-text">'+esc(it.userContent)+'</span></div>'
-      +'</div><div class="entry-head"><span class="tag sys">系统</span>'
-      +'<span class="time">'+esc(fmtEntryTime(it.time))+'</span></div></article>';
-  }
-  var c2c=it.kind==='c2c';
-  var h='<article class="entry">';
-  h+='<div class="entry-head">';
-  h+='<span class="tag '+(c2c?'c2c':'group')+'">'+(c2c?'私聊':'群聊')+'</span>';
-  h+='<span class="scope" title="会话标识已脱敏">#'+esc(it.scopeId||'')+'</span>';
-  if(it.model)h+='<span class="tag model" title="'+esc(it.model)+'">'+esc(it.model)+'</span>';
-  h+='<span class="time">'+esc(fmtEntryTime(it.time))+'</span>';
-  h+='</div><div class="entry-body">';
-  h+='<div class="bubble-row user"><span class="who">问</span><span class="bubble-text">'+esc(it.userContent)+'</span></div>';
-  h+='<div class="bubble-row ai"><span class="who">答</span><span class="bubble-text">'+esc(it.aiReply)+'</span></div>';
-  h+='</div></article>';
-  return h;
-}
+/* ============================== 聊天记录（QQ 风格会话） ============================== */
+var chatState={scope:'',items:[],hasMore:false};
 
 function dayKey(d){
   return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate());
@@ -800,160 +777,196 @@ function daySepHtml(iso){
   return '<div class="day-sep"><span>'+label+' · '+pad2(d.getMonth()+1)+'/'+pad2(d.getDate())+'</span></div>';
 }
 
-/* 本地预览示例数据：只在 127.0.0.1 / localhost 显示，部署后永远是真实记录 */
-function isLocalPreview(){
-  var h=location.hostname;
-  return h==='127.0.0.1'||h==='localhost';
-}
-function demoItems(){
-  var now=Date.now();
-  function ago(min){return new Date(now-min*60000).toISOString();}
-  return [
-    {kind:'group',scopeId:'a3f8…9c21',userContent:'帮我画一只橘猫，水彩风格',aiReply:'[图片] 已生成 🖼',model:'生图 · qwen-image-3.0-pro',time:ago(3)},
-    {kind:'group',scopeId:'a3f8…9c21',userContent:'今天上海天气怎么样？',aiReply:'今天上海多云，18～24℃，出门带件薄外套比较稳妥。',model:'DeepSeek · deepseek-chat',time:ago(16)},
-    {kind:'system',scopeId:'system',userContent:'AI「DeepSeek」调用失败（HTTP 429），自动尝试下一个备用',time:ago(24)},
-    {kind:'c2c',scopeId:'b91c…44da',userContent:'用一句话介绍你自己',aiReply:'我是跑在 Cloudflare 上的 AI 助手，随叫随到～',model:'DeepSeek · deepseek-chat',time:ago(47)},
-    {kind:'group',scopeId:'77c0…12ab',userContent:'翻译成中文：Good things take time',aiReply:'好东西都需要时间沉淀。',model:'智谱 GLM · glm-4-flash',time:ago(88)},
-    {kind:'system',scopeId:'system',userContent:'新成员加入群聊，已自动发送欢迎语',time:ago(150)},
-    {kind:'c2c',scopeId:'e55b…90cc',userContent:'写一句生日祝福，要押韵',aiReply:'生日快乐笑开颜，岁岁平安福满天！',model:'DeepSeek · deepseek-chat',time:ago(1500)},
-    {kind:'system',scopeId:'system',userContent:'后台修改配置，已热更新生效',time:ago(1620)}
-  ];
-}
-function demoLogsHtml(){
-  var items=demoItems();
-  var h='<div class="demo-note">本地预览：下面是示例数据，部署到 Cloudflare 后这里显示真实聊天记录</div><div class="entries">';
-  var prevDay='';
-  for(var i=0;i<items.length;i++){
-    var day=(items[i].time||'').slice(0,10);
-    if(day&&day!==prevDay){h+=daySepHtml(items[i].time);prevDay=day;}
-    h+=entryHtml(items[i]);
-  }
-  h+='</div>';
-  return h;
+function pad2s(n){return n<10?('0'+n):String(n);}
+function shortTime(iso){
+  var d=new Date(iso);
+  if(isNaN(d.getTime()))return '';
+  var now=new Date();
+  if(dayKey(d)===dayKey(now))return pad2s(d.getHours())+':'+pad2s(d.getMinutes());
+  return (d.getMonth()+1)+'/'+d.getDate();
 }
 
-function emptyHtml(){
-  var kind=logState.kind;
-  var title='还没有聊天记录';
-  var desc='机器人回复第一条消息后，问答会成对记录在这里，最多保留最近 2000 条。';
-  if(kind==='group'){title='还没有群聊记录';desc='在群里 @ 机器人提问之后，这里就会出现记录。';}
-  if(kind==='c2c'){title='还没有私聊记录';desc='私聊机器人提问之后，这里就会出现记录。';}
-  if(kind==='system'){title='还没有系统消息';desc='配置更新、AI 自动切换、入群欢迎等事件会记录在这里。';}
-  return '<div class="empty"><span class="empty-ico">'+IX.chat+'</span><b>'+title+'</b><p>'+desc+'</p>'
-    +'<div class="btn-row"><a class="btn" href="#status">去看看运行状态'+IX.arrow+'</a></div></div>';
+function chatShell(){
+  return '<div class="chat-wrap" id="chat-wrap">'
+    +'<div class="chat-list"><div class="chat-list-head"><b>会话</b><span class="hint" id="chat-count"></span>'
+    +'<button class="btn sm" id="chat-refresh" type="button">'+IX.refresh+'</button>'
+    +'<button class="btn sm danger" id="chat-clear" type="button">'+IX.trash+'</button></div>'
+    +'<div class="conv-list" id="conv-list"><p class="muted">加载中…</p></div></div>'
+    +'<div class="chat-thread" id="chat-thread">'
+    +'<div class="thread-head"><button class="btn sm thread-back" id="chat-back" type="button">'+IX.arrow+'<span>返回</span></button>'
+    +'<b id="thread-title">对话</b><span class="hint" id="thread-meta"></span></div>'
+    +'<div class="thread-body" id="thread-body"><div class="thread-empty">选择一个会话，查看你和机器人的完整对话</div></div>'
+    +'</div></div>';
 }
 
-function logShell(){
-  var h='<div class="toolbar"><div class="seg" id="log-kind">';
-  for(var i=0;i<LOG_KINDS.length;i++){
-    h+='<button type="button" data-kind="'+LOG_KINDS[i][0]+'"'+(logState.kind===LOG_KINDS[i][0]?' class="active"':'')
-      +'><span>'+LOG_KINDS[i][1]+'</span><span class="seg-n" data-k="'+LOG_KINDS[i][0]+'"></span></button>';
-  }
-  h+='</div>';
-  h+='<button class="btn sm" id="b-refresh" type="button">'+IX.refresh+'<span>刷新</span></button>';
-  h+='<button class="btn sm danger" id="b-clear" type="button">'+IX.trash+'<span>清空全部</span></button>';
-  h+='<span class="count" id="log-count">读取中…</span></div>';
-  h+='<div id="log-list"></div>';
-  h+='<div class="pager" id="log-pager"></div>';
-  return h;
+function convRowHtml(c){
+  var kindTxt=c.kind==='c2c'?'私聊':'群聊';
+  var prev=c.lastUser?('我：'+c.lastUser):(c.lastReply||'');
+  return '<div class="conv" data-scope="'+esc(c.scopeId)+'" data-kind="'+esc(c.kind)+'">'
+    +'<span class="conv-av">'+(c.kind==='c2c'?'💬':'👥')+'</span>'
+    +'<div class="conv-main"><div class="conv-name">'+esc(kindTxt)+' #'+esc(c.scopeId)
+    +'<span class="hint">'+esc(String(c.count))+' 条</span></div>'
+    +'<div class="conv-prev">'+esc(prev||'（无内容）')+'</div></div>'
+    +'<span class="conv-time">'+esc(shortTime(c.lastAt))+'</span></div>';
 }
 
-function paintKindCounts(counts){
-  var seg=$('log-kind');
-  if(!seg||!counts)return;
-  var ns=seg.querySelectorAll('.seg-n');
-  for(var i=0;i<ns.length;i++){
-    var k=ns[i].getAttribute('data-k');
-    var n=counts[k];
-    ns[i].textContent=n?' '+n:'';
-  }
-}
-
-function paintPager(d){
-  var el=$('log-pager');
-  if(!el)return;
-  if(!d.totalPages||d.totalPages<=1){el.innerHTML='';return;}
-  el.innerHTML='<button class="btn sm" id="pg-prev" type="button"'+(d.page<=1?' disabled':'')+'>上一页</button>'
-    +'<span class="pg-info">第 '+d.page+' / '+d.totalPages+' 页</span>'
-    +'<button class="btn sm" id="pg-next" type="button"'+(d.page>=d.totalPages?' disabled':'')+'>下一页</button>';  var prev=$('pg-prev'),next=$('pg-next');
-  if(prev)prev.addEventListener('click',function(){showLogs(d.page-1);});
-  if(next)next.addEventListener('click',function(){showLogs(d.page+1);});
-}
-
-function loadLogs(page){
-  var list=$('log-list');
+function loadConversations(){
+  var list=$('conv-list');
   if(!list)return Promise.resolve();
-  logState.page=Math.max(1,Number(page)||1);
-  list.innerHTML=skeletonLogs();
-  var count=$('log-count');
-  if(count)count.textContent='读取中…';
-  return api('GET','/api/logs?page='+logState.page+'&pageSize='+LOG_PAGE_SIZE+'&kind='+logState.kind)
-    .then(function(d){
-      if(!d)return;
-      logState.page=d.page;
-      paintKindCounts(d.kindCounts);
-      if(!d.items.length&&isLocalPreview()){
-        list.innerHTML=demoLogsHtml();
-        if(count)count.textContent='示例数据（本地预览）';
-        var nav2=$('nav-count');
-        if(nav2)nav2.textContent='示例';
-        paintPager({page:1,totalPages:1});
-        return;
-      }
-      if(!d.items.length){
-        list.innerHTML=emptyHtml();
-      }else{
-        var h='<div class="entries">';
-        var prevDay='';
-        for(var i=0;i<d.items.length;i++){
-          var day=(d.items[i].time||'').slice(0,10);
-          if(day&&day!==prevDay){h+=daySepHtml(d.items[i].time);prevDay=day;}
-          h+=entryHtml(d.items[i]);
-        }
-        h+='</div>';
-        list.innerHTML=h;
-      }
-      if(count)count.textContent='共 '+d.total+' 条';
-      var nav=$('nav-count');
-      if(nav)nav.textContent=d.total>999?'999+':String(d.total);
-      paintPager(d);
-    })
-    .catch(function(e){
-      list.innerHTML='<div class="empty"><span class="empty-ico">'+IX.alert+'</span><b>读取失败</b><p>'+esc(e.message)+'</p></div>';
-      if(count)count.textContent='—';
-    });
+  list.innerHTML='<p class="muted">加载中…</p>';
+  return api('GET','/api/conversations').then(function(d){
+    var items=(d&&d.items)||[];
+    if(!items.length){
+      list.innerHTML='<div class="thread-empty">还没有会话记录<br>机器人回复过消息后，这里会按会话分组显示</div>';
+      var c=$('chat-count'); if(c)c.textContent='';
+      var nav=$('nav-count'); if(nav)nav.textContent='0';
+      return;
+    }
+    var total=0;
+    for(var i=0;i<items.length;i++)total+=Number(items[i].count)||0;
+    var h='';
+    for(var k=0;k<items.length;k++)h+=convRowHtml(items[k]);
+    list.innerHTML=h;
+    var c2=$('chat-count'); if(c2)c2.textContent='共 '+items.length+' 个会话';
+    var nav2=$('nav-count'); if(nav2)nav2.textContent=total>999?'999+':String(total);
+    if(chatState.scope){
+      var rows=list.querySelectorAll('.conv');
+      for(var j=0;j<rows.length;j++)rows[j].classList.toggle('active',rows[j].getAttribute('data-scope')===chatState.scope);
+    }
+  }).catch(function(e){
+    list.innerHTML='<div class="thread-empty">'+esc(e.message)+'</div>';
+  });
 }
 
-function showLogs(page){
+function msgRowHtml(it){
+  var h='';
+  if(it.userContent)h+='<div class="msg-row me"><span class="msg-av">我</span><div class="msg-bubble">'+esc(it.userContent)+'</div></div>';
+  if(it.aiReply)h+='<div class="msg-row"><span class="msg-av">🤖</span><div class="msg-bubble">'+esc(it.aiReply)+'</div></div>';
+  return h;
+}
+
+function renderThread(scrollBottom){
+  var body=$('thread-body');
+  if(!body)return;
+  var items=chatState.items;
+  var h='';
+  if(chatState.hasMore){
+    h+='<button class="btn sm thread-more" id="thread-more" type="button">'+IX.refresh+'<span>加载更早</span></button>';
+  }
+  var prevDay='';
+  var prevTs=0;
+  for(var i=0;i<items.length;i++){
+    var it=items[i];
+    var day=(it.time||'').slice(0,10);
+    if(day&&day!==prevDay){h+=daySepHtml(it.time);prevDay=day;prevTs=0;}
+    var ts=new Date(it.time).getTime();
+    if(!isNaN(ts)&&prevTs&&ts-prevTs>30*60000)h+='<div class="msg-time">'+esc(shortTime(it.time))+'</div>';
+    if(!isNaN(ts))prevTs=ts;
+    h+=msgRowHtml(it);
+  }
+  body.innerHTML=h;
+  if(scrollBottom)body.scrollTop=body.scrollHeight;
+}
+
+function bindThreadMore(){
+  var more=$('thread-more');
+  if(!more)return;
+  more.addEventListener('click',function(){
+    var oldest=chatState.items[0];
+    if(!oldest)return;
+    loadThread(chatState.scope,oldest.id);
+  });
+}
+
+function loadThread(scope,before){
+  var body=$('thread-body');
+  var first=!before;
+  if(first&&body)body.innerHTML='<div class="thread-empty">加载中…</div>';
+  var q='/api/conversations/messages?scope='+encodeURIComponent(scope)+(before?('&before='+before):'');
+  return api('GET',q).then(function(d){
+    var items=(d&&d.items)||[];
+    chatState.hasMore=!!(d&&d.hasMore);
+    if(before){chatState.items=items.concat(chatState.items);}
+    else{chatState.items=items;}
+    var meta=$('thread-meta');
+    if(meta)meta.textContent=chatState.items.length?('已加载 '+chatState.items.length+' 条'):'';
+    if(!chatState.items.length){
+      var bb=$('thread-body');
+      if(bb)bb.innerHTML='<div class="thread-empty">这个会话还没有记录</div>';
+      return;
+    }
+    var oldH=body?body.scrollHeight:0;
+    var oldTop=body?body.scrollTop:0;
+    renderThread(first);
+    if(before&&body)body.scrollTop=body.scrollHeight-oldH+oldTop;
+    bindThreadMore();
+  }).catch(function(e){
+    var bb=$('thread-body');
+    if(bb)bb.innerHTML='<div class="thread-empty">'+esc(e.message)+'</div>';
+  });
+}
+
+function openConversation(scope){
+  chatState.scope=scope;
+  chatState.items=[];
+  chatState.hasMore=false;
+  var wrap=$('chat-wrap');
+  if(wrap)wrap.classList.add('thread-open');
+  var list=$('conv-list');
+  if(list){
+    var rows=list.querySelectorAll('.conv');
+    for(var i=0;i<rows.length;i++)rows[i].classList.toggle('active',rows[i].getAttribute('data-scope')===scope);
+  }
+  var title=$('thread-title');
+  if(title)title.textContent='会话 #'+scope;
+  var meta=$('thread-meta');
+  if(meta)meta.textContent='';
+  return loadThread(scope,0);
+}
+
+function closeChatThread(){
+  var wrap=$('chat-wrap');
+  if(wrap)wrap.classList.remove('thread-open');
+  chatState.scope='';
+  var list=$('conv-list');
+  if(list){
+    var rows=list.querySelectorAll('.conv');
+    for(var i=0;i<rows.length;i++)rows[i].classList.remove('active');
+  }
+}
+
+function onConvClick(e){
+  var row=e.target&&e.target.closest?e.target.closest('.conv'):null;
+  if(!row)return;
+  openConversation(row.getAttribute('data-scope'));
+}
+
+function showLogs(){
   stopStatusTimer();
   rendered=false;
   setActive('logs');
   setTopActions('');
   setPill('聊天记录','');
-  var wrap=$('wrap');
-  if(!$('log-list')){
-    wrap.innerHTML=logShell();
-    $('b-refresh').addEventListener('click',function(){loadLogs(logState.page);});
-    $('b-clear').addEventListener('click',clearLogs);
-    var seg=$('log-kind');
-    var btns=seg.querySelectorAll('button');
-    for(var i=0;i<btns.length;i++){
-      btns[i].addEventListener('click',function(){
-        logState.kind=this.getAttribute('data-kind');
-        for(var j=0;j<btns.length;j++)btns[j].className=(btns[j]===this?'active':'');
-        loadLogs(1);
-      });
-    }
-  }
-  return loadLogs(page||logState.page);
+  $('wrap').innerHTML=chatShell();
+  $('chat-back').addEventListener('click',closeChatThread);
+  $('chat-refresh').addEventListener('click',function(){loadConversations();});
+  $('chat-clear').addEventListener('click',clearLogs);
+  $('conv-list').addEventListener('click',onConvClick);
+  loadConversations();
 }
 
 function clearLogs(){
   if(!confirm('确定清空所有聊天记录？此操作不可撤销。'))return;
   api('POST','/api/logs/clear',{}).then(function(d){
     toast('已清空 '+(d&&d.deleted!=null?d.deleted:0)+' 条记录','ok');
-    return loadLogs(1);
+    chatState.scope='';
+    chatState.items=[];
+    var body=$('thread-body');
+    if(body)body.innerHTML='<div class="thread-empty">选择一个会话，查看你和机器人的完整对话</div>';
+    closeChatThread();
+    loadConversations();
   }).catch(function(e){toast(e.message,'bad');});
+}
 }
 /* ============================== AI 对话 ============================== */
 var aiState=[];
