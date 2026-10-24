@@ -735,6 +735,18 @@ export class QQBotDO {
     }).catch(() => {});
   }
 
+  /** 把一次「非文本回复」（发图 / 发梗图 / 指令回复）也写进聊天记录，后台才能看到完整对话 */
+  logExchange({ isC2C, scopeId, userId, userContent, aiReply, model }) {
+    addChatLog(this.env, {
+      kind: isC2C ? 'c2c' : 'group',
+      scopeId,
+      userId,
+      userContent: String(userContent ?? '').slice(0, 500),
+      aiReply: String(aiReply ?? '').slice(0, 500),
+      model: model || null,
+    }).catch((e) => this.logger.warn(`Chat log write failed: ${e.message}`));
+  }
+
   /** 记录群 openid 到 D1 groups 表（后台「群管理」页的数据源），失败不影响主流程 */
   touchGroup(openid) {
     upsertGroup(this.env, openid, 'auto').catch(() => {});
@@ -879,7 +891,7 @@ export class QQBotDO {
         await this.sendReply({ isC2C, scopeId, content: '用法：/画 一只橘猫，水彩风格', msgId });
         return;
       }
-      await this.handleImageGen({ isC2C, scopeId, msgId, prompt });
+      await this.handleImageGen({ isC2C, scopeId, msgId, prompt, userId, userContent: content });
       return;
     }
 
@@ -906,7 +918,7 @@ export class QQBotDO {
           });
           return;
         }
-        await this.handleImageGen({ isC2C, scopeId, msgId, prompt: genPrompt });
+        await this.handleImageGen({ isC2C, scopeId, msgId, prompt: genPrompt, userId, userContent: content });
         return;
       }
     }
@@ -914,7 +926,7 @@ export class QQBotDO {
     // /梗图 /表情包：发内置梗图（不写名字就随机来一张）
     if (/^\/?(梗图|表情包|meme)(\s|$)/i.test(content)) {
       const name = content.replace(/^\/?(梗图|表情包|meme)\s*/i, '').trim();
-      const sent = await this.sendMeme({ isC2C, scopeId, msgId, name });
+      const sent = await this.sendMeme({ isC2C, scopeId, msgId, name, userId, userContent: content });
       if (!sent) {
         const names = (this.memesCache || []).map((m) => m.name);
         if (!names.length) {
@@ -1106,7 +1118,7 @@ export class QQBotDO {
         history.push({ role: 'assistant', content: '（已按要求生成并发送图片）' });
         // 标记前面如果写了话，就当作配图文案（图发完再发这句）
         const caption = reply.slice(0, reply.indexOf('[GEN_IMAGE]')).trim();
-        await this.handleImageGen({ isC2C, scopeId, msgId, prompt: genMatch[1].trim(), caption });
+        await this.handleImageGen({ isC2C, scopeId, msgId, prompt: genMatch[1].trim(), caption, userId, userContent: content });
         return;
       }
       // 兜底：AI 声称「生成好了」却漏了标记，用用户描述 + 回复内容补画
@@ -1117,7 +1129,7 @@ export class QQBotDO {
           .slice(0, 400);
         if (prompt) {
           history.push({ role: 'assistant', content: '（已按要求生成并发送图片）' });
-          await this.handleImageGen({ isC2C, scopeId, msgId, prompt });
+          await this.handleImageGen({ isC2C, scopeId, msgId, prompt, userId, userContent: content });
           return;
         }
       }
@@ -1129,7 +1141,7 @@ export class QQBotDO {
       if (toolCall) {
         // 模型偶尔会在调用前加一句「好的，我这就去…」：只保留工具结果，避免一次回两条重复消息
         const head = toolCall.text;
-        await this.runTool(toolCall, { isC2C, scopeId, key, msgId });
+        await this.runTool(toolCall, { isC2C, scopeId, key, msgId, userId, userContent: content });
         history.push({ role: 'assistant', content: head || '（已执行工具）' });
         session.lastUsed = Date.now();
         await this.saveSession(key, session);
@@ -1183,7 +1195,8 @@ export class QQBotDO {
         kind: isC2C ? 'c2c' : 'group',
         scopeId,
         userId,
-        userContent: content,
+        // 带图的消息在记录里标一下，后台能看出这是图片消息
+        userContent: imageUrl ? `[图片] ${content}` : content,
         aiReply: normalizeFaceTags(reply),
         model: used ? `${used.name} · ${used.model}`.slice(0, 128) : null,
       });
@@ -1609,7 +1622,7 @@ export class QQBotDO {
   }
 
   /** 发一张内置梗图（base64 直传，走官方富媒体图片消息）；发完再补一句配文 */
-  async sendMeme({ isC2C, scopeId, msgId, name, caption }) {
+  async sendMeme({ isC2C, scopeId, msgId, name, caption, userId, userContent }) {
     const meme = await this.pickMeme(name);
     if (!meme) return null;
     this.logger.info(`Meme: ${meme.name}`);
@@ -1623,6 +1636,14 @@ export class QQBotDO {
       if (sent) {
         const line = String(caption || '').trim() || MEME_CAPTIONS[Math.floor(Math.random() * MEME_CAPTIONS.length)];
         await this.sendReply({ isC2C, scopeId, content: line, msgId });
+        this.logExchange({
+          isC2C,
+          scopeId,
+          userId,
+          userContent: String(userContent || '').trim() || '（梗图）',
+          aiReply: `[梗图] ${meme.name}\n${line}`,
+          model: '梗图',
+        });
       }
       return sent;
     } catch (e) {
@@ -1632,7 +1653,7 @@ export class QQBotDO {
   }
 
   /** /画 指令：调用生图模型（OpenAI 兼容 /images/generations），把图发回会话，再补一句配文 */
-  async handleImageGen({ isC2C, scopeId, msgId, prompt, caption }) {
+  async handleImageGen({ isC2C, scopeId, msgId, prompt, caption, userId, userContent }) {
     const model = String(this.config.imageGenModel || '').trim();
     const provider = (this.config.aiProviders || []).find(
       (p) => p && p.enabled !== 0 && p.baseUrl && p.apiKey
@@ -1680,6 +1701,14 @@ export class QQBotDO {
       // 图发完补一句，像正常人那样说句话（AI 写了配文就用它的）
       const line = String(caption || '').trim() || IMAGE_CAPTIONS[Math.floor(Math.random() * IMAGE_CAPTIONS.length)];
       await this.sendReply({ isC2C, scopeId, content: line, msgId });
+      this.logExchange({
+        isC2C,
+        scopeId,
+        userId,
+        userContent: String(userContent || '').trim() || '（生图）',
+        aiReply: `[图片] ${line}`,
+        model: `生图 · ${model}`,
+      });
     } catch (e) {
       this.logger.warn(`Image gen failed: ${e.message}`);
       await this.sendReply({
@@ -1929,20 +1958,20 @@ export class QQBotDO {
     }
   }
 
-  async runTool(call, { isC2C, scopeId, key, msgId }) {
+  async runTool(call, { isC2C, scopeId, key, msgId, userId, userContent }) {
     const name = call.name;
     try {
       if (name === 'image') {
         const prompt = String(call.args.prompt || '').trim();
         if (!prompt) return this.sendReply({ isC2C, scopeId, content: '画什么？给我个画面描述吧～', msgId });
-        return this.handleImageGen({ isC2C, scopeId, msgId, prompt, caption: call.tail });
+        return this.handleImageGen({ isC2C, scopeId, msgId, prompt, caption: call.tail, userId, userContent });
       }
       if (name === 'meme') {
         const meme = await this.pickMeme(call.args.name);
         if (!meme) {
           return this.sendReply({ isC2C, scopeId, content: '梗图库里没找到这张～ 要不换一张？', msgId });
         }
-        const sent = await this.sendMeme({ isC2C, scopeId, msgId, name: meme.name, caption: call.tail });
+        const sent = await this.sendMeme({ isC2C, scopeId, msgId, name: meme.name, caption: call.tail, userId, userContent });
         if (!sent) {
           return this.sendReply({ isC2C, scopeId, content: `梗图「${meme.name}」发送失败了，稍后再试～`, msgId });
         }
