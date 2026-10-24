@@ -59,6 +59,11 @@ bindings = [
   { name = "RATE_LIMITER", class_name = "RateLimiter" }
 ]
 
+# Workers AI 绑定：内置 TTS（MeloTTS）用它合成语音，不需要额外 API Key。
+# 免费额度每天 10,000 neurons，MeloTTS 按音频分钟计费（约 $0.0002/分钟），日常够用。
+[ai]
+binding = "AI"
+
 # Durable Object 的类迁移，保持原样即可；已有项目不要改动 tag
 [[migrations]]
 tag = "v1"

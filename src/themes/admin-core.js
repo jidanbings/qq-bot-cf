@@ -590,7 +590,9 @@ var FIELDS=[
     {key:'autoRecall',label:'AI 故障自动撤回',type:'select',options:[['0','关'],['1','开']],
       hint:'AI 全部不可用时，自动撤回上一条机器人回复，避免留下「没答上来」的消息'},
     {key:'toolCalling',label:'AI 工具调用',type:'select',options:[['1','开（画图 / 定时提醒 / 查群信息）'],['0','关（纯聊天）']],
-      hint:'开启后 AI 可以调用内置工具：生成图片、定时提醒、查本群资料 / 机器人状态 / 禁言状态'}
+      hint:'开启后 AI 可以调用内置工具：生成图片、定时提醒、查本群资料 / 机器人状态 / 禁言状态'},
+    {key:'voiceLang',label:'语音语言',type:'select',options:[['zh','中文'],['en','English'],['ja','日本語'],['ko','한국어']],
+      hint:'内置 TTS（Cloudflare Workers AI MeloTTS）合成语音时用的语种，不需要额外 Key'}
   ]},
   {id:'welcome',icon:IX.bot,title:'入群欢迎',desc:'新成员进群 / 机器人被拉进新群时自动发言',items:[
     {key:'welcomeEnabled',label:'开启欢迎',type:'select',options:[['0','关'],['1','开']],

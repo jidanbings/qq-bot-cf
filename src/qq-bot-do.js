@@ -57,6 +57,14 @@ function toBase64(bytes) {
   return out;
 }
 
+/** base64 → 字节数组（TTS 返回二进制音频时用） */
+function fromBase64(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
 /** 按文件魔数识别图片 MIME，避免把非图片内容发给 AI */
 function sniffImageMime(bytes, contentType) {
   const h = (len, offset = 0) => {
@@ -847,6 +855,9 @@ export class QQBotDO {
               '/梗图 —— 随机来一张内置梗图；/梗图 名字 指定一张',
               '/表情 —— 随机一个 emoji',
               '',
+              '**🔊 语音**',
+              '/语音 你好呀 —— 用内置 TTS 合成语音发给你（不需要额外 Key）',
+              '',
               '**🧰 指令**',
               '- /菜单 —— 弹出按钮面板',
               '- /撤回 —— 撤回我上一条消息',
@@ -859,6 +870,7 @@ export class QQBotDO {
               '🎨 生图：/画 一只橘猫，水彩风格（说「画一张…」也行）',
               '⏰ 提醒：「10 分钟后提醒我喝水」「明天 8 点提醒我开会」「每天 8:00 提醒我背单词」',
               '😄 表情：/梗图 随机梗图，/梗图 名字 指定，/表情 随机 emoji',
+              '🔊 语音：/语音 你好呀 —— 内置 TTS 合成语音',
               '🧰 指令：/菜单 弹出按钮面板 · /撤回 撤回我上一条 · /帮助 看这条',
             ].join('\n'),
       });
@@ -953,6 +965,25 @@ export class QQBotDO {
         msgId,
         content: EMOJIS[Math.floor(Math.random() * EMOJIS.length)],
       });
+      return;
+    }
+
+    // /语音 文字：内置 TTS（Workers AI MeloTTS）合成语音发送
+    if (/^\/?(语音|voice)(\s|$)/i.test(content)) {
+      const text = content.replace(/^\/?(语音|voice)\s*/i, '').trim();
+      if (!text) {
+        await this.sendReply({ isC2C, scopeId, content: '用法：/语音 你好呀（用内置 TTS 合成语音）', msgId });
+        return;
+      }
+      const sent = await this.sendVoice({ isC2C, scopeId, msgId, text, userId, userContent: content });
+      if (!sent) {
+        await this.sendReply({
+          isC2C,
+          scopeId,
+          content: '语音合成失败了（可能是 Workers AI 没启用或额度用完），稍后再试～',
+          msgId,
+        });
+      }
       return;
     }
 
@@ -1219,6 +1250,7 @@ export class QQBotDO {
           '\n可用工具：' +
           '\n- image：{"prompt":"画面描述"} —— 画图 / 生成图片' +
           '\n- meme：{"name":"梗图名"} —— 发一张内置梗图（名字只能从下面的梗图清单里选）' +
+          '\n- voice：{"text":"要说的话"} —— 用语音说出来（内置 TTS，用户明确要语音或简单问候时用）' +
           '\n- remind：{"when":"明天 8:30 / 10分钟后 / 每天 8:00 / 每周一 9:00","text":"提醒内容"} —— 定时提醒' +
           '\n- group_info：{} —— 查本群资料（仅群聊）' +
           '\n- group_state：{} —— 查机器人在本群的状态（仅群聊）' +
@@ -1412,10 +1444,16 @@ export class QQBotDO {
   }
 
   /** 发送富媒体（图片）消息：先上传拿 file_info，再发 msg_type=7，返回新消息 id */
+  /** 发图片（富媒体消息）——兼容原调用 */
   async sendImage({ isC2C, scopeId, imageUrl, msgId }) {
+    return this.sendMedia({ isC2C, scopeId, msgId, fileType: 1, source: imageUrl });
+  }
+
+  /** 发富媒体消息（图片 / 语音 / 视频 / 文件）：先上传拿 file_info，再 msg_type=7 发送 */
+  async sendMedia({ isC2C, scopeId, msgId, fileType, source, fileExt }) {
     const token = await this.getToken();
     const base = this.apiBase();
-    const fileInfo = await this.uploadRichMedia({ isC2C, scopeId, imageUrl, token });
+    const fileInfo = await this.uploadRichMedia({ isC2C, scopeId, source, token, fileType, fileExt });
     if (!fileInfo) return null;
     const sendUrl = isC2C
       ? `${base}/v2/users/${scopeId}/messages`
@@ -1432,33 +1470,40 @@ export class QQBotDO {
     });
     if (!res.ok) {
       const text = await res.text().catch(() => '');
-      this.logger.warn(`Send image failed: HTTP ${res.status}${text ? ' ' + text.slice(0, 120) : ''}`);
+      this.logger.warn(`Send media failed: HTTP ${res.status}${text ? ' ' + text.slice(0, 120) : ''}`);
       return null;
     }
     const data = await res.json().catch(() => ({}));
     return data.id || null;
   }
 
-  /** 上传图片获取 file_info（官方富媒体流程）；生图 b64 走 file_data 二进制直传 */
-  async uploadRichMedia({ isC2C, scopeId, imageUrl, token }) {
+  /**
+   * 上传富媒体拿 file_info（官方富媒体流程）。
+   * source 支持 data URI（二进制直传）或公网 URL（平台代拉取）；
+   * fileType：1 图片 / 2 视频 / 3 语音 / 4 文件。
+   */
+  async uploadRichMedia({ isC2C, scopeId, source, token, fileType = 1, fileExt }) {
     const base = this.apiBase();
     const uploadUrl = isC2C
       ? `${base}/v2/users/${scopeId}/files`
       : `${base}/v2/groups/${scopeId}/files`;
+    const prefix = fileType === 3 ? 'audio' : fileType === 2 ? 'video' : fileType === 4 ? 'file' : 'image';
     let body;
-    const dataUri = imageUrl.match(/^data:image\/([a-z0-9.+-]+);base64,(.+)$/i);
+    const dataUri = source.match(/^data:([^;]+);base64,(.+)$/i);
     if (dataUri) {
-      // 二进制直传（官方 file_data 字段，≤5MB）：生图接口只回 b64_json 时走这条路
-      const ext = dataUri[1].toLowerCase() === 'jpeg' ? 'jpg' : dataUri[1].toLowerCase();
+      // 二进制直传（官方 file_data 字段，≤5MB）
+      const mime = dataUri[1].toLowerCase();
+      const ext =
+        fileExt || (mime === 'image/jpeg' ? 'jpg' : mime === 'audio/mpeg' ? 'mp3' : mime.split('/')[1] || 'bin');
       if (dataUri[2].length > 7_000_000) {
         this.logger.warn(`Binary upload aborted: base64 ≈ ${Math.round(dataUri[2].length / 1024)}KB（二进制直传限 5MB）`);
         return null;
       }
-      body = { file_type: 1, file_name: `image.${ext}`, file_data: dataUri[2], srv_send_msg: false };
-      this.logger.info(`Rich media upload: file_data binary ≈ ${Math.round(dataUri[2].length * 0.75 / 1024)}KB`);
+      body = { file_type: fileType, file_name: `${prefix}.${ext}`, file_data: dataUri[2], srv_send_msg: false };
+      this.logger.info(`Rich media upload: ${prefix}.${ext} ≈ ${Math.round(dataUri[2].length * 0.75 / 1024)}KB`);
     } else {
       // 公网 URL：平台代拉取（srv_send_msg=false 只预上传拿 file_info，不占主动消息额度）
-      body = { file_type: 1, url: imageUrl, srv_send_msg: false };
+      body = { file_type: fileType, url: source, srv_send_msg: false };
     }
     const res = await fetch(uploadUrl, {
       method: 'POST',
@@ -1468,16 +1513,66 @@ export class QQBotDO {
     });
     if (!res.ok) {
       const text = await res.text().catch(() => '');
-      this.logger.warn(`Upload image failed: HTTP ${res.status}${text ? ' ' + text.slice(0, 120) : ''}`);
+      this.logger.warn(`Upload ${prefix} failed: HTTP ${res.status}${text ? ' ' + text.slice(0, 120) : ''}`);
       return null;
     }
     const data = await res.json();
     if (!data.file_info) {
-      this.logger.warn(`Upload image returned no file_info: ${JSON.stringify(data).slice(0, 200)}`);
+      this.logger.warn(`Upload ${prefix} returned no file_info: ${JSON.stringify(data).slice(0, 200)}`);
       return null;
     }
     return data.file_info;
   }
+
+  /* ------------------------------ 内置 TTS（Cloudflare Workers AI · MeloTTS） ------------------------------ */
+
+  /** 文本 → MP3 字节（不用额外 Key，走 Workers AI 绑定） */
+  async synthVoice(text, lang = 'zh') {
+    const ai = this.env && this.env.AI;
+    if (!ai || typeof ai.run !== 'function') {
+      throw new Error('当前环境没有 Workers AI 绑定（wrangler.toml 里需要 [ai] binding = "AI"）');
+    }
+    const out = await ai.run('@cf/myshell-ai/melotts', {
+      prompt: String(text).slice(0, 300),
+      lang: String(lang || 'zh').slice(0, 8),
+    });
+    let bytes = null;
+    if (out instanceof ArrayBuffer) bytes = new Uint8Array(out);
+    else if (out instanceof Uint8Array) bytes = out;
+    else if (out && typeof out.arrayBuffer === 'function') bytes = new Uint8Array(await out.arrayBuffer());
+    else if (out && typeof out.audio === 'string') bytes = fromBase64(out.audio);
+    else if (out && out.body && typeof out.body.getReader === 'function') {
+      bytes = new Uint8Array(await new Response(out.body).arrayBuffer());
+    }
+    if (!bytes || !bytes.length) throw new Error('TTS 没有返回音频数据');
+    return bytes;
+  }
+
+  /** 合成语音并发送（QQ 语音消息：file_type=3，mp3 可直接用） */
+  async sendVoice({ isC2C, scopeId, msgId, text, userId, userContent }) {
+    const clean = String(text || '').trim().slice(0, 300);
+    if (!clean) return null;
+    try {
+      const bytes = await this.synthVoice(clean, this.config.voiceLang || 'zh');
+      const dataUri = `data:audio/mpeg;base64,${toBase64(bytes)}`;
+      const sent = await this.sendMedia({ isC2C, scopeId, msgId, fileType: 3, source: dataUri, fileExt: 'mp3' });
+      if (sent) {
+        this.logExchange({
+          isC2C,
+          scopeId,
+          userId,
+          userContent: String(userContent || '').trim() || '（语音）',
+          aiReply: `[语音] ${clean}`,
+          model: '语音 · MeloTTS',
+        });
+      }
+      return sent;
+    } catch (e) {
+      this.logger.warn(`Voice send failed: ${e.message}`);
+      return null;
+    }
+  }
+
 
   /** 下载图片并转成 base64 data URI（供不支持外链抓取的 AI 服务商识别） */
   async downloadImageAsBase64(imageUrl) {
@@ -1975,6 +2070,16 @@ export class QQBotDO {
         if (!sent) {
           return this.sendReply({ isC2C, scopeId, content: `梗图「${meme.name}」发送失败了，稍后再试～`, msgId });
         }
+        return sent;
+      }
+      if (name === 'voice') {
+        const text = String(call.args.text || '').trim();
+        if (!text) return this.sendReply({ isC2C, scopeId, content: '要说什么？给我一段文字吧～', msgId });
+        const sent = await this.sendVoice({ isC2C, scopeId, msgId, text, userId, userContent: content });
+        if (!sent) {
+          return this.sendReply({ isC2C, scopeId, content: '语音合成失败了（可能是 Workers AI 没启用或额度用完），稍后再试～', msgId });
+        }
+        if (call.tail) await this.sendReply({ isC2C, scopeId, content: call.tail, msgId });
         return sent;
       }
       if (name === 'remind') {
