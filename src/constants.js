@@ -1,6 +1,6 @@
 export const COOKIE_NAME = 'bot_session';
 
-export const APP_VERSION = '3.5.1';
+export const APP_VERSION = '3.6.0-beta';
 
 export const LOGIN_LIMIT = { limit: 5, windowMs: 15 * 60 * 1000 };
 export const API_LIMIT = { limit: 120, windowMs: 60 * 1000 };

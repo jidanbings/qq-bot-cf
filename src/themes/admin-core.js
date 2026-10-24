@@ -124,6 +124,7 @@ var META={
   ai:{title:'AI 对话',crumb:'设置 / AI 对话'},
   imagegen:{title:'生图模型',crumb:'设置 / 生图模型'},
   groups:{title:'群管理',crumb:'管理 / 群管理'},
+  reminders:{title:'定时任务',crumb:'管理 / 定时任务'},
   logs:{title:'聊天记录',crumb:'数据 / 聊天记录'}
 };
 var currentTab='status';
@@ -582,7 +583,9 @@ var FIELDS=[
     {key:'markdownReply',label:'Markdown 回复',type:'select',options:[['0','关（纯文本）'],['1','开（标题/列表/加粗等生效）']],
       hint:'AI 回复含标题、列表、加粗、链接时按 Markdown 发送，排版更好；纯文本回复不受影响'},
     {key:'autoRecall',label:'AI 故障自动撤回',type:'select',options:[['0','关'],['1','开']],
-      hint:'AI 全部不可用时，自动撤回上一条机器人回复，避免留下「没答上来」的消息'}
+      hint:'AI 全部不可用时，自动撤回上一条机器人回复，避免留下「没答上来」的消息'},
+    {key:'toolCalling',label:'AI 工具调用',type:'select',options:[['1','开（画图 / 定时提醒 / 查群信息）'],['0','关（纯聊天）']],
+      hint:'开启后 AI 可以调用内置工具：生成图片、定时提醒、查本群资料 / 机器人状态 / 禁言状态'}
   ]},
   {id:'welcome',icon:IX.bot,title:'入群欢迎',desc:'新成员进群 / 机器人被拉进新群时自动发言',items:[
     {key:'welcomeEnabled',label:'开启欢迎',type:'select',options:[['0','关'],['1','开']],
@@ -1483,6 +1486,8 @@ function bindIgenModal(){
       if(e.key==='Escape'&&m&&!m.hidden)closeIgenModal();
     });
   }
+  // 每次重绘后按当前状态刷新保存按钮（弹窗点「完成」会重绘整页，不刷新会一直灰着）
+  updateImageGenState();
 }
 
 function renderImageGenPage(){
@@ -1974,6 +1979,88 @@ function openGrpModal(openid,autoMembers){
   if(autoMembers)loadGrpMembers('');
 }
 
+/* ============================== 定时任务 ============================== */
+var remState={items:[]};
+
+function showReminders(){
+  stopStatusTimer();
+  rendered=false;
+  setActive('reminders');
+  setTopActions('');
+  setPill('定时任务','');
+  $('wrap').innerHTML='<div class="card"><div class="card-head"><h3>定时任务</h3>'
+    +'<span class="hint" id="rem-count"></span></div>'
+    +'<p class="tip">机器人收到消息后会识别「明天 8 点提醒我开会」「10 分钟后提醒我喝水」这类请求并存到这里；到点由每分钟巡检主动发消息。'
+    +'重复任务（每天 / 每周）发完自动顺延到下一次。<b>注意</b>：QQ 对主动消息有频率和配额限制，发送失败的任务会在下面标红并记入聊天记录。</p>'
+    +'<div class="form-actions"><button class="btn" type="button" id="rem-refresh">'+IX.refresh+'<span>刷新</span></button></div>'
+    +'<div class="prov-list" id="rem-list"><p class="muted">加载中…</p></div></div>';
+  $('rem-refresh').addEventListener('click',function(){loadReminders();});
+  loadReminders();
+}
+
+function loadReminders(){
+  api('GET','/api/reminders').then(function(d){
+    remState.items=(d&&d.items)||[];
+    renderReminders();
+  }).catch(function(e){
+    var box=$('rem-list');
+    if(box)box.innerHTML='<p class="error-text">'+esc(e.message)+'</p>';
+  });
+}
+
+function remStatusHtml(status){
+  var map={pending:['等待中','ok'],sending:['发送中','warn'],done:['已发送',''],failed:['发送失败','bad'],cancelled:['已取消','']};
+  var s=map[status]||[status||'未知',''];
+  return '<span class="pill-state'+(s[1]?' '+s[1]:'')+'"><i></i>'+esc(s[0])+'</span>';
+}
+
+function remRepeatText(rule){
+  if(!rule)return '';
+  if(rule==='daily')return '每天';
+  var m=/^weekly:([1-7])$/.exec(String(rule));
+  return m?('每周'+['','一','二','三','四','五','六','日'][Number(m[1])]):rule;
+}
+
+function renderReminders(){
+  var box=$('rem-list');
+  if(!box)return;
+  var items=remState.items;
+  var pending=0;
+  for(var i=0;i<items.length;i++)if(items[i].status==='pending'||items[i].status==='sending')pending++;
+  var c=$('rem-count');
+  if(c)c.textContent='待发送 '+pending+' 条 / 共 '+items.length+' 条';
+  if(!items.length){
+    box.innerHTML='<p class="muted">还没有定时任务。在群里说「明天 8 点提醒我开会」就能创建。</p>';
+    return;
+  }
+  var h='';
+  for(var k=0;k<items.length;k++){
+    var it=items[k];
+    var canCancel=it.status==='pending'||it.status==='sending';
+    h+='<div class="prov-row" data-rem="'+it.id+'">';
+    h+='<span class="prov-no">⏰</span>';
+    h+='<div class="prov-info"><b>'+esc(it.text)+'</b><small>'
+      +(it.isC2C?'私聊':'群聊')+' · '+esc(it.scopeMasked||'')
+      +(it.repeatRule?' · '+esc(remRepeatText(it.repeatRule)):'')
+      +(it.lastError?' · <span class="error-text">'+esc(it.lastError)+'</span>':'')
+      +'</small></div>';
+    h+='<div class="prov-meta"><span class="prov-time">'+esc(fmtEntryTime(it.dueAt))+'</span>'+remStatusHtml(it.status)+'</div>';
+    if(canCancel)h+='<div class="prov-tools"><button class="btn sm ghost" type="button" data-remcancel="'+it.id+'">取消</button></div>';
+    h+='</div>';
+  }
+  box.innerHTML=h;
+  box.onclick=function(e){
+    var btn=e.target&&e.target.closest?e.target.closest('[data-remcancel]'):null;
+    if(!btn)return;
+    var id=Number(btn.getAttribute('data-remcancel'));
+    if(!confirm('取消这条定时任务？'))return;
+    api('POST','/api/reminders/cancel',{id:id}).then(function(){
+      toast('已取消','ok');
+      loadReminders();
+    }).catch(function(err){toast(err.message,'bad');});
+  };
+}
+
 /* ============================== 路由 ============================== */
 function route(){
   var tab=(location.hash||'#status').slice(1);
@@ -1981,6 +2068,7 @@ function route(){
   else if(tab==='ai')showAi();
   else if(tab==='imagegen')showImageGen();
   else if(tab==='groups')showGroups();
+  else if(tab==='reminders')showReminders();
   else if(tab==='logs')showLogs(1);
   else showStatus();
 }

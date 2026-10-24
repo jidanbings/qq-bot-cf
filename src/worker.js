@@ -1,6 +1,7 @@
 import { adminPage, homePage, loginPage, setupPage, keyRecoveryPage, recoverGatePage } from './html.js';
 import {
   clearChatLogs,
+  cancelReminder,
   createSession,
   deleteSession,
   ensureKey,
@@ -11,6 +12,7 @@ import {
   listAiProviders,
   listChatLogs,
   listGroups,
+  listReminders,
   normalizeUrl,
   purgeExpiredSessions,
   randomHex,
@@ -502,6 +504,39 @@ async function handleApi(request, env, url) {
         throw new HttpError(502, 'qq_api', (data && data.error) || '禁言设置失败');
       }
       return jsonResult({ openid, memberOpenid, op });
+    }
+
+    /* -------- 定时提醒 -------- */
+
+    case '/api/reminders':
+      if (method === 'GET') {
+        const rows = await listReminders(env, { limit: 200 });
+        const items = [];
+        for (const r of rows) {
+          items.push({
+            id: r.id,
+            dueAt: r.due_at,
+            text: r.text,
+            isC2C: !!r.is_c2c,
+            scopeMasked: await maskId(r.scope_id),
+            repeatRule: r.repeat_rule || null,
+            status: r.status,
+            createdAt: r.created_at,
+            firedAt: r.fired_at,
+            lastError: r.last_error || null,
+          });
+        }
+        return jsonResult({ items });
+      }
+      break;
+
+    case '/api/reminders/cancel': {
+      if (method !== 'POST') throw new HttpError(405, 'method_not_allowed', '请使用 POST');
+      const body = await readJson(request);
+      const id = Number(body?.id) || 0;
+      if (!id) throw new HttpError(400, 'invalid_id', '缺少提醒 id');
+      const cancelled = await cancelReminder(env, id);
+      return jsonResult({ id, cancelled });
     }
 
     default:

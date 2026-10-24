@@ -1,4 +1,14 @@
-import { addChatLog, getConfig, upsertGroup } from './db.js';
+import {
+  addChatLog,
+  addReminder,
+  claimReminder,
+  dueReminders,
+  finishReminder,
+  getConfig,
+  rescheduleReminder,
+  upsertGroup,
+} from './db.js';
+import { parseReminder, nextDueFrom } from './utils/reminder.js';
 import {
   APP_VERSION,
   QQ_BASE,
@@ -199,6 +209,11 @@ export class QQBotDO {
       case '/ensure': {
         // 每分钟 cron 看门狗顺带热更新配置：即使 reload 通知丢了，配置最多 1 分钟内也会生效
         try { await this.loadConfig(); } catch {}
+        // 到点的定时提醒 / 清理长时间不用的会话
+        try { await this.fireDueReminders(); } catch (e) { this.logger.warn(`Reminder scan: ${e.message}`); }
+        if (this.state && typeof this.state.waitUntil === 'function') {
+          this.state.waitUntil(this.pruneStoredSessions());
+        }
         const workerVersion = url.searchParams.get('v') || '';
         if (workerVersion && workerVersion !== APP_VERSION) {
           const now = Date.now();
@@ -796,6 +811,10 @@ export class QQBotDO {
               '/画 一只橘猫，水彩风格',
               '也可以直接说「画一张…」「生成一张…」',
               '',
+              '**⏰ 定时提醒**',
+              '直接说「10 分钟后提醒我喝水」「明天 8 点提醒我开会」「每天 8:00 提醒我背单词」',
+              '到点我会主动发消息；重复提醒会自动顺延',
+              '',
               '**🧰 指令**',
               '- /菜单 —— 弹出按钮面板',
               '- /撤回 —— 撤回我上一条消息',
@@ -806,6 +825,7 @@ export class QQBotDO {
               '',
               '💬 聊天：直接 @我 说点什么，发图片给我可以看图说话',
               '🎨 生图：/画 一只橘猫，水彩风格（说「画一张…」也行）',
+              '⏰ 提醒：「10 分钟后提醒我喝水」「明天 8 点提醒我开会」「每天 8:00 提醒我背单词」',
               '🧰 指令：/菜单 弹出按钮面板 · /撤回 撤回我上一条 · /帮助 看这条',
             ].join('\n'),
       });
@@ -814,7 +834,7 @@ export class QQBotDO {
 
     // /撤回 指令：撤回本会话最近一条机器人消息
     if (/^\/?(撤回|recall|undo)(\s|$)/.test(content)) {
-      const session = this.sessions.get(key);
+      const session = await this.loadSession(key);
       const lastBotMsg = session?.lastBotMsg;
       if (!lastBotMsg) {
         await this.sendReply({ isC2C, scopeId, content: '没有可以撤回的消息～', msgId });
@@ -822,6 +842,7 @@ export class QQBotDO {
       }
       const ok = await this.recallMessage({ isC2C, scopeId, msgId: lastBotMsg.msgId });
       session.lastBotMsg = null;
+      await this.saveSession(key, session);
       if (ok) {
         this.logger.info(`Recalled message in ${isC2C ? 'c2c' : 'group'} ${scopeId.slice(0, 8)}...`);
       } else {
@@ -831,8 +852,8 @@ export class QQBotDO {
     }
 
     // /画 指令：调用生图模型画图
-    if (/^\/?(画图|画|image|draw)(\s|$)/.test(content)) {
-      const prompt = content.replace(/^\/?(画图|画|image|draw)\s*/, '').trim();
+    if (/^\/?(画图|画|image|draw|生成图片|生成图)(\s|$)/.test(content)) {
+      const prompt = content.replace(/^\/?(画图|画|image|draw|生成图片|生成图)\s*/, '').trim();
       if (!prompt) {
         await this.sendReply({ isC2C, scopeId, content: '用法：/画 一只橘猫，水彩风格', msgId });
         return;
@@ -843,19 +864,53 @@ export class QQBotDO {
 
     // 自然语言直接点「画图」：不绕对话模型，直接生图
     const genIntent = content.match(
-      /^(?:帮我|给我|请)?(?:画一张|画一幅|画一个|画一只|画个|画一下|画图|绘制|生成一张|生成一幅|生成图片|生成个)\s*(.+)$/s
+      /^(?:帮我|给我|请|麻烦)?\s*(?:画一张|画一幅|画一个|画一只|画只|画张|画幅|画个|画一下|画图|画图片|绘制一张|绘制一幅|绘制一个|绘制图|绘制|生成一张图|生成一幅图|生成一张|生成一幅|生成一个|生成图片|生成图|生成个|来一张)\s*(.+)$/s
     );
     if (genIntent) {
-      if (!this.config.imageGenModel) {
-        await this.sendReply({
-          isC2C,
-          scopeId,
-          content: '我还没接上生图能力——后台「对话行为」里把「生图模型」填上（比如 qwen-image-3.0-pro），我就能画了。',
-          msgId,
-        });
+      // 「画张图」这类没带主体的，去掉量词后为空就提示用法，别拿「图」当提示词去画
+      const genPrompt = genIntent[1].trim().replace(/^(?:一张|一幅|一个|一只|只|个|张|幅|下|图)\s*/, '').trim();
+      // 「生成一张表格/二维码」这类不是要画画的，交给对话模型处理
+      const notDrawing = /二维码|条形码|表格|代码|文档|名单|清单|报告|文件|链接|文案|密码/.test(genPrompt);
+      if (!notDrawing) {
+        if (!genPrompt) {
+          await this.sendReply({ isC2C, scopeId, content: '画什么？用法：/画 一只橘猫，水彩风格', msgId });
+          return;
+        }
+        if (!this.config.imageGenModel) {
+          await this.sendReply({
+            isC2C,
+            scopeId,
+            content: '我还没接上生图能力——打开后台「生图模型」页，填好模型名，点「测试」通过后保存，我就能画了。',
+            msgId,
+          });
+          return;
+        }
+        await this.handleImageGen({ isC2C, scopeId, msgId, prompt: genPrompt });
         return;
       }
-      await this.handleImageGen({ isC2C, scopeId, msgId, prompt: genIntent[1].trim() });
+    }
+
+    // 定时提醒：识别「X 点提醒我…」直接落库，不绕 AI（AI 未配置也能用）
+    const reminderIntent = parseReminder(content);
+    if (reminderIntent) {
+      await addReminder(this.env, {
+        scopeKey: key,
+        isC2C,
+        scopeId,
+        dueAt: reminderIntent.dueAt,
+        text: reminderIntent.text,
+        repeatRule: reminderIntent.repeatRule,
+      });
+      const whenText =
+        reminderIntent.whenText ||
+        new Date(reminderIntent.dueAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+      await this.sendReply({
+        isC2C,
+        scopeId,
+        content: `⏰ 好的，${whenText}提醒你：${reminderIntent.text}${reminderIntent.repeatRule ? '（以后按这个时间重复提醒）' : ''}`,
+        msgId,
+      });
+      this.logSystem(`新增定时提醒：${reminderIntent.text.slice(0, 60)} @ ${reminderIntent.dueAt}`);
       return;
     }
 
@@ -871,7 +926,7 @@ export class QQBotDO {
     }
 
     const historyLimit = Number(this.config.historyLimit) || 20;
-    let session = this.sessions.get(key);
+    let session = await this.loadSession(key);
     if (!session) {
       this.pruneSessions();
       session = {
@@ -879,6 +934,7 @@ export class QQBotDO {
         lastUsed: Date.now(),
         lastBotMsg: null,
         sysKey: this.sysKey(),
+        summary: '',
       };
       this.sessions.set(key, session);
     }
@@ -896,6 +952,8 @@ export class QQBotDO {
     while (history.length > historyLimit + 1) history.splice(1, 1);
 
     const msgs = history.slice();
+    // 早前对话的压缩摘要（历史被裁剪后，长期记忆靠它保留）
+    if (session.summary) msgs.splice(1, 0, { role: 'system', content: `【早前对话摘要】${session.summary}` });
     let aiImage = null;
     if (imageUrl) {
       aiImage = await this.downloadImageAsBase64(imageUrl);
@@ -929,8 +987,8 @@ export class QQBotDO {
                 ? 0.8
                 : Number(provider.temperature),
             }),
-            // 带图请求 vision 模型处理更慢，超时放宽到 120 秒；纯文本仍 30 秒
-            signal: AbortSignal.timeout(imageUrl ? 120000 : 30000),
+            // 带图请求 vision 模型处理更慢，超时 180 秒；纯文本 90 秒（长回答不再答到一半被超时切断、切下一个模型重答）
+            signal: AbortSignal.timeout(imageUrl ? 180000 : 90000),
           });
           if (!res.ok) {
             const text = await res.text().catch(() => '');
@@ -971,6 +1029,7 @@ export class QQBotDO {
       if (this.config.autoRecall === '1' && lastBotMsg?.msgId) {
         await this.recallMessage({ isC2C, scopeId, msgId: lastBotMsg.msgId });
         session.lastBotMsg = null;
+        await this.saveSession(key, session);
         this.logger.info(`Auto-recalled previous message (AI failed)`);
         return;
       }
@@ -1007,6 +1066,20 @@ export class QQBotDO {
       }
     }
 
+    // 工具调用：[TOOL]{"name":...} 标记 → 执行内置工具（提醒 / 群信息 / 禁言状态 / 画图）
+    if (this.config.toolCalling !== '0') {
+      const toolCall = this.extractToolCall(reply);
+      if (toolCall) {
+        const head = toolCall.text;
+        if (head) await this.sendReply({ isC2C, scopeId, content: head, msgId });
+        await this.runTool(toolCall, { isC2C, scopeId, key, msgId });
+        history.push({ role: 'assistant', content: head || '（已执行工具）' });
+        session.lastUsed = Date.now();
+        await this.saveSession(key, session);
+        return;
+      }
+    }
+
     let sentId = null;
     // 图片回复：AI 回复里带 markdown 图片时，先发图再补文字
     const imgMatch = reply.match(/!\[[^\]]*\]\((https?:\/\/[^)\s]+)\)/);
@@ -1038,6 +1111,14 @@ export class QQBotDO {
 
     if (session && msgId) session.lastBotMsg = { msgId: sentId, at: Date.now() };
     history.push({ role: 'assistant', content: reply });
+    if (session) {
+      session.lastUsed = Date.now();
+      await this.saveSession(key, session);
+      // 历史太长时后台压缩旧消息（不阻塞回复）
+      if (used && this.state && typeof this.state.waitUntil === 'function') {
+        this.state.waitUntil(this.maybeSummarize(key, session, used));
+      }
+    }
     this.logger.info(`Replied to ${isC2C ? 'c2c' : 'group'} chat: ${reply.slice(0, 50)}...`);
 
     try {
@@ -1054,19 +1135,31 @@ export class QQBotDO {
     }
   }
 
-  /** 组装系统提示词（人设 + 生图能力说明） */
+  /** 组装系统提示词（人设 + 生图能力 + 工具调用说明） */
   buildSystemPrompt() {
     const basePrompt = this.config.systemPrompt ||
       '你是一个友好、靠谱、乐于助人的QQ机器人助手。回答保持简洁、自然、口语化，用中文交流。';
     const genHint = this.config.imageGenModel
       ? '\n\n【生图能力】你支持生成图片。当用户要求你画图、绘制或生成图片时，你必须只输出一行：[GEN_IMAGE] <具体的图片描述>，不要输出任何其他文字（不要说「生成好了」「马上画」之类）。系统会自动调用生图模型把图片发给用户。用户只是聊天、没有要求画图时正常回答。'
       : '\n\n【注意】你没有生图能力，也没有图片生成工具。当用户要求画图时，如实说明「需要先在后台配置生图模型才能画」，绝对不要假装已经生成图片或说「生成好了」。';
-    return basePrompt + genHint;
+    const toolHint =
+      this.config.toolCalling !== '0'
+        ? '\n\n【工具调用】当用户要你「做事」而不只是聊天时，在回复的最后单独一行输出一个工具调用（格式固定，不要放进代码块）：' +
+          '\n[TOOL]{"name":"工具名","args":{...}}' +
+          '\n可用工具：' +
+          '\n- image：{"prompt":"画面描述"} —— 画图 / 生成图片' +
+          '\n- remind：{"when":"明天 8:30 / 10分钟后 / 每天 8:00 / 每周一 9:00","text":"提醒内容"} —— 定时提醒' +
+          '\n- group_info：{} —— 查本群资料（仅群聊）' +
+          '\n- group_state：{} —— 查机器人在本群的状态（仅群聊）' +
+          '\n- mute_state：{} —— 查本群禁言状态（仅群聊）' +
+          '\n规则：一次只调用一个工具；能直接回答的问题不要调用工具；不要编造工具的执行结果；用户没有明确要求时不要调用工具。'
+        : '';
+    return basePrompt + genHint + toolHint;
   }
 
-  /** 系统提示词指纹：人设或生图模型变了就要重建 session 里的 system 消息 */
+  /** 系统提示词指纹：人设 / 生图模型 / 工具开关变了就要重建 session 里的 system 消息 */
   sysKey() {
-    return `${this.config.systemPrompt || ''}|${this.config.imageGenModel || ''}`;
+    return `${this.config.systemPrompt || ''}|${this.config.imageGenModel || ''}|${this.config.toolCalling || ''}`;
   }
 
   /** 同一 msg_id 的被动回复需要递增 msg_seq（不传默认 1，第二条起会被去重/拒绝） */
@@ -1496,5 +1589,299 @@ export class QQBotDO {
       const byAge = [...this.sessions.entries()].sort((a, b) => a[1].lastUsed - b[1].lastUsed);
       for (const [key] of byAge.slice(0, byAge.length - MAX_SESSIONS + 1)) this.sessions.delete(key);
     }
+  }
+
+  /* -------------------- 会话持久化（DO SQLite 存储：重启/驱逐后上下文不丢） -------------------- */
+
+  sessionKey(key) {
+    return `sess:${key}`;
+  }
+
+  async loadSession(key) {
+    const cached = this.sessions.get(key);
+    if (cached) return cached;
+    try {
+      const saved = await this.state.storage.get(this.sessionKey(key));
+      if (saved && typeof saved === 'object' && Array.isArray(saved.history) && saved.history.length) {
+        this.sessions.set(key, saved);
+        return saved;
+      }
+    } catch (e) {
+      this.logger.warn(`Session load failed: ${e.message}`);
+    }
+    return null;
+  }
+
+  async saveSession(key, session) {
+    this.sessions.set(key, session);
+    try {
+      let payload = session;
+      // DO 单个值有大小上限：历史太长时只保留 system + 最近 30 条再落盘
+      if (JSON.stringify(session).length > 110000 && Array.isArray(session.history) && session.history.length > 31) {
+        payload = { ...session, history: session.history.slice(0, 1).concat(session.history.slice(-30)) };
+      }
+      await this.state.storage.put(this.sessionKey(key), payload);
+    } catch (e) {
+      this.logger.warn(`Session save failed: ${e.message}`);
+    }
+  }
+
+  /** 每分钟 cron 顺带清理长时间不用的会话（内存 + DO 存储） */
+  async pruneStoredSessions() {
+    const cutoff = Date.now() - SESSION_IDLE_MS;
+    for (const [k, s] of [...this.sessions.entries()]) {
+      if (!s || (s.lastUsed || 0) < cutoff) this.sessions.delete(k);
+    }
+    try {
+      const map = await this.state.storage.list({ prefix: 'sess:', limit: 200 });
+      const dead = [];
+      for (const [k, v] of map) {
+        if (!v || (v.lastUsed || 0) < cutoff) dead.push(k);
+      }
+      if (dead.length) await this.state.storage.delete(dead);
+    } catch (e) {
+      this.logger.warn(`Session prune failed: ${e.message}`);
+    }
+  }
+
+  /** 一次非流式 AI 调用（摘要压缩等内部用途） */
+  async chatOnce(provider, messages, { timeout = 60000 } = {}) {
+    const res = await fetch(`${provider.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${provider.apiKey}` },
+      body: JSON.stringify({ model: provider.model, messages, temperature: 0.3 }),
+      signal: AbortSignal.timeout(timeout),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`HTTP ${res.status}${text ? ' ' + text.slice(0, 120) : ''}`);
+    }
+    const data = await res.json();
+    return String(data.choices?.[0]?.message?.content || '').trim();
+  }
+
+  /** 历史太长时把最早的一批消息压成摘要（后台异步，失败只丢旧消息） */
+  async maybeSummarize(key, session, provider) {
+    const limit = Number(this.config.historyLimit) || 20;
+    if (!Array.isArray(session.history) || session.history.length <= limit + 4) return;
+    const cut = session.history.length - 1 - limit;
+    if (cut <= 0) return;
+    const old = session.history.slice(1, 1 + cut);
+    session.history.splice(1, cut);
+    try {
+      const text = old
+        .map((m) => `${m.role === 'user' ? '用户' : '助手'}：${typeof m.content === 'string' ? m.content : '[图片]'}`)
+        .join('\n')
+        .slice(0, 3500);
+      const summary = await this.chatOnce(provider, [
+        {
+          role: 'system',
+          content: '把这段聊天记录压缩成不超过 120 字的中文摘要，只保留重要事实、用户偏好和未完成的事，不要客套话。',
+        },
+        { role: 'user', content: text },
+      ]);
+      const merged = [session.summary || '', summary].filter(Boolean).join('；');
+      if (merged) session.summary = merged.slice(0, 400);
+      this.logger.info(`Session summarized (${cut} msgs -> ${session.summary.length} chars)`);
+    } catch (e) {
+      this.logger.warn(`Session summary failed: ${e.message}`);
+    }
+    await this.saveSession(key, session);
+  }
+
+  /* ------------------------------ 定时提醒（AI 自主任务） ------------------------------ */
+
+  /** 到点的提醒：主动消息发送；重复任务顺延，普通任务标记完成 */
+  async fireDueReminders() {
+    if (!this.isAlive()) return;
+    const due = await dueReminders(this.env, new Date().toISOString(), 5);
+    for (const r of due) {
+      const claimed = await claimReminder(this.env, r.id);
+      if (!claimed) continue;
+      const isC2C = !!r.is_c2c;
+      const sent = await this.sendReply({
+        isC2C,
+        scopeId: r.scope_id,
+        content: `⏰ 提醒：${r.text}`,
+        msgId: '',
+      }).catch(() => null);
+      if (!sent) {
+        await finishReminder(this.env, r.id, false, '主动消息发送失败（可能配额不足或不在群）');
+        this.logSystem(`提醒发送失败：${String(r.text).slice(0, 60)}`);
+        continue;
+      }
+      if (r.repeat_rule) {
+        const next = nextDueFrom(r.repeat_rule, r.due_at);
+        if (next) {
+          await rescheduleReminder(this.env, r.id, next);
+          this.logSystem(`重复提醒已顺延：${String(r.text).slice(0, 60)} → ${next}`);
+        } else {
+          await finishReminder(this.env, r.id, true, null);
+        }
+      } else {
+        await finishReminder(this.env, r.id, true, null);
+        this.logSystem(`提醒已发送：${String(r.text).slice(0, 60)}`);
+      }
+    }
+  }
+
+  /* ------------------------------ 工具调用 ------------------------------ */
+
+  /** 从 AI 回复里提取 [TOOL]{json} 调用（花括号配对扫描，正文里有花括号也不会误伤） */
+  extractToolCall(reply) {
+    const s = String(reply || '');
+    const idx = s.indexOf('[TOOL]');
+    if (idx < 0) return null;
+    const head = s.slice(0, idx).trim();
+    const tail = s.slice(idx + 6).trim();
+    const start = tail.indexOf('{');
+    if (start < 0) return null;
+    let depth = 0;
+    let end = -1;
+    let inStr = false;
+    let esc = false;
+    for (let i = start; i < tail.length; i++) {
+      const ch = tail[i];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (ch === '\\') esc = true;
+        else if (ch === '"') inStr = false;
+        continue;
+      }
+      if (ch === '"') inStr = true;
+      else if (ch === '{') depth++;
+      else if (ch === '}') {
+        depth--;
+        if (depth === 0) {
+          end = i;
+          break;
+        }
+      }
+    }
+    if (end < 0) return null;
+    try {
+      const parsed = JSON.parse(tail.slice(start, end + 1));
+      return {
+        name: String(parsed.name || parsed.tool || '').trim(),
+        args: parsed.args && typeof parsed.args === 'object' ? parsed.args : {},
+        text: head,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  async runTool(call, { isC2C, scopeId, key, msgId }) {
+    const name = call.name;
+    try {
+      if (name === 'image') {
+        const prompt = String(call.args.prompt || '').trim();
+        if (!prompt) return this.sendReply({ isC2C, scopeId, content: '画什么？给我个画面描述吧～', msgId });
+        return this.handleImageGen({ isC2C, scopeId, msgId, prompt });
+      }
+      if (name === 'remind') {
+        const when = String(call.args.when || '').trim();
+        const text = String(call.args.text || '').trim();
+        if (!when || !text) {
+          return this.sendReply({
+            isC2C,
+            scopeId,
+            content: '提醒需要「时间 + 内容」，比如：10 分钟后提醒我喝水',
+            msgId,
+          });
+        }
+        const parsed = parseReminder(`${when} 提醒我 ${text}`);
+        if (!parsed) {
+          return this.sendReply({
+            isC2C,
+            scopeId,
+            content: `没听懂时间「${when.slice(0, 40)}」，试试「明天 8:30」「10 分钟后」「每天 8:00」这种说法`,
+            msgId,
+          });
+        }
+        await addReminder(this.env, {
+          scopeKey: key,
+          isC2C,
+          scopeId,
+          dueAt: parsed.dueAt,
+          text: parsed.text,
+          repeatRule: parsed.repeatRule,
+        });
+        this.logSystem(`新增定时提醒（AI 工具）：${parsed.text.slice(0, 60)} @ ${parsed.dueAt}`);
+        return this.sendReply({
+          isC2C,
+          scopeId,
+          content: `⏰ 好的，${parsed.whenText}提醒你：${parsed.text}${parsed.repeatRule ? '（重复提醒）' : ''}`,
+          msgId,
+        });
+      }
+      if (name === 'group_info') {
+        if (isC2C) return this.sendReply({ isC2C, scopeId, content: '群资料只能在群里查～', msgId });
+        const info = await this.qqGroupInfo(scopeId);
+        return this.sendReply({ isC2C, scopeId, content: this.formatGroupInfo(info), msgId });
+      }
+      if (name === 'group_state') {
+        if (isC2C) return this.sendReply({ isC2C, scopeId, content: '这个只能在群里查～', msgId });
+        const st = await this.qqBotState(scopeId);
+        return this.sendReply({ isC2C, scopeId, content: this.formatBotState(st), msgId });
+      }
+      if (name === 'mute_state') {
+        if (isC2C) return this.sendReply({ isC2C, scopeId, content: '这个只能在群里查～', msgId });
+        const ms = await this.qqMuteState(scopeId);
+        return this.sendReply({ isC2C, scopeId, content: this.formatMuteState(ms), msgId });
+      }
+      return this.sendReply({ isC2C, scopeId, content: `我不认识工具「${name}」`, msgId });
+    } catch (e) {
+      this.logger.warn(`Tool ${name} failed: ${e.message}`);
+      return this.sendReply({
+        isC2C,
+        scopeId,
+        content: `工具「${name}」执行失败：${e.message.slice(0, 80)}`,
+        msgId,
+      });
+    }
+  }
+
+  formatGroupInfo(info) {
+    const lines = [`群名：${info.group_name || '(未命名)'}`];
+    if (info.class_text) lines.push(`分类：${info.class_text}`);
+    if (info.member_num != null) lines.push(`人数：${info.member_num}`);
+    if (info.finger_memo) lines.push(`简介：${String(info.finger_memo).slice(0, 200)}`);
+    const tags = Array.isArray(info.tags)
+      ? info.tags.map((t) => (typeof t === 'string' ? t : t && t.name)).filter(Boolean)
+      : [];
+    if (tags.length) lines.push(`标签：${tags.slice(0, 8).join('、')}`);
+    return lines.join('\n');
+  }
+
+  formatBotState(st) {
+    const roleMap = { owner: '群主', admin: '管理员', member: '普通成员' };
+    const recvMap = { all: '全部消息', only_mention: '仅 @我', mention_and_context: '仅 @我 + 上下文' };
+    const lines = [`我的角色：${roleMap[st.member_role] || st.member_role || '未知'}`];
+    if (st.joined_at) {
+      lines.push(`入群时间：${new Date(st.joined_at).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`);
+    }
+    if (st.recv_msg_setting) lines.push(`消息接收：${recvMap[st.recv_msg_setting] || st.recv_msg_setting}`);
+    lines.push(`允许主动推送：${st.allow_proactive_msg ? '是' : '否'}`);
+    return lines.join('\n');
+  }
+
+  formatMuteState(ms) {
+    const mode = ms && ms.global_rule ? ms.global_rule.mode : 'none';
+    const modeTxt = mode === 'always' ? '全员禁言中' : mode === 'schedule' ? '定时/周期禁言' : '未开启全员禁言';
+    const members = Array.isArray(ms && ms.members) ? ms.members : [];
+    const lines = [`全员禁言：${modeTxt}`];
+    if (members.length) {
+      lines.push(`被禁言成员（${members.length}）：`);
+      for (const m of members.slice(0, 5)) {
+        const until = m.mute_expire_at
+          ? new Date(m.mute_expire_at).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
+          : '—';
+        lines.push(`· ${m.username || '(无昵称)'} 到 ${until}`);
+      }
+    } else {
+      lines.push('当前没有成员被禁言');
+    }
+    return lines.join('\n');
   }
 }

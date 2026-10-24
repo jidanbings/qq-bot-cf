@@ -17,6 +17,7 @@ export const CONFIG_FIELDS = {
   imageGenModel: { type: 'string', max: 64 },
   imageGenBaseUrl: { type: 'url', max: 512 },
   imageGenApiKey: { type: 'string', max: 256, secret: true },
+  toolCalling: { type: 'flag' },
   doVersion: { type: 'string', max: 32 },
 };
 
@@ -69,15 +70,35 @@ const SCHEMA_STATEMENTS = [
     added_at  TEXT NOT NULL,
     last_seen TEXT
   )`,
+  `CREATE TABLE IF NOT EXISTS reminders (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    scope_key   TEXT NOT NULL,
+    is_c2c      INTEGER NOT NULL DEFAULT 0,
+    scope_id    TEXT NOT NULL,
+    due_at      TEXT NOT NULL,
+    text        TEXT NOT NULL,
+    repeat_rule TEXT,
+    status      TEXT NOT NULL DEFAULT 'pending',
+    created_at  TEXT NOT NULL,
+    fired_at    TEXT,
+    last_error  TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders (status, due_at)`,
 ];
 
 async function hasSchema(env) {
   try {
     const { results } = await env.DB.prepare(
-      `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('config', 'sessions', 'chat_log', 'groups')`
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('config', 'sessions', 'chat_log', 'groups', 'reminders')`
     ).all();
     const names = new Set((results || []).map((r) => r.name));
-    return names.has('config') && names.has('sessions') && names.has('chat_log') && names.has('groups');
+    return (
+      names.has('config') &&
+      names.has('sessions') &&
+      names.has('chat_log') &&
+      names.has('groups') &&
+      names.has('reminders')
+    );
   } catch {
     return false;
   }
@@ -639,3 +660,90 @@ export async function listGroups(env) {
 export async function removeGroup(env, openid) {
   await env.DB.prepare('DELETE FROM groups WHERE openid = ?1').bind(String(openid || '').trim()).run();
 }
+
+/* ------------------------------ 定时提醒（AI 自主任务） ------------------------------ */
+
+export async function addReminder(env, { scopeKey, isC2C, scopeId, dueAt, text, repeatRule }) {
+  const now = new Date().toISOString();
+  const res = await env.DB.prepare(
+    'INSERT INTO reminders (scope_key, is_c2c, scope_id, due_at, text, repeat_rule, status, created_at) ' +
+      'VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)'
+  )
+    .bind(
+      String(scopeKey || ''),
+      isC2C ? 1 : 0,
+      String(scopeId || ''),
+      String(dueAt || ''),
+      String(text || '').slice(0, 500),
+      repeatRule || null,
+      'pending',
+      now
+    )
+    .run();
+  return res.meta?.last_row_id ?? null;
+}
+
+export async function listReminders(env, { limit = 100 } = {}) {
+  try {
+    const { results } = await env.DB.prepare(
+      "SELECT id, scope_key, is_c2c, scope_id, due_at, text, repeat_rule, status, created_at, fired_at, last_error " +
+        "FROM reminders ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END, due_at ASC LIMIT ?1"
+    )
+      .bind(limit)
+      .all();
+    return results || [];
+  } catch {
+    return [];
+  }
+}
+
+/** 到期待发送的任务（先到先发） */
+export async function dueReminders(env, nowIso, limit = 5) {
+  try {
+    const { results } = await env.DB.prepare(
+      "SELECT id, scope_key, is_c2c, scope_id, due_at, text, repeat_rule FROM reminders " +
+        "WHERE status = 'pending' AND due_at <= ?1 ORDER BY due_at ASC LIMIT ?2"
+    )
+      .bind(nowIso, limit)
+      .all();
+    return results || [];
+  } catch {
+    return [];
+  }
+}
+
+/** 抢占一条待发任务，返回 true 表示本实例拿到了（防多个 cron 同时发） */
+export async function claimReminder(env, id) {
+  const res = await env.DB.prepare(
+    "UPDATE reminders SET status = 'sending' WHERE id = ?1 AND status = 'pending'"
+  )
+    .bind(id)
+    .run();
+  return (res.meta?.changes ?? 0) > 0;
+}
+
+export async function finishReminder(env, id, ok, error) {
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    "UPDATE reminders SET status = ?1, fired_at = ?2, last_error = ?3 WHERE id = ?4"
+  )
+    .bind(ok ? 'done' : 'failed', now, error || null, id)
+    .run();
+}
+
+/** 重复任务：到期后顺延到下一次，状态回到 pending */
+export async function rescheduleReminder(env, id, nextDue) {
+  await env.DB.prepare("UPDATE reminders SET due_at = ?1, status = 'pending', fired_at = ?2 WHERE id = ?3")
+    .bind(nextDue, new Date().toISOString(), id)
+    .run();
+}
+
+export async function cancelReminder(env, id) {
+  const res = await env.DB.prepare(
+    "UPDATE reminders SET status = 'cancelled' WHERE id = ?1 AND status IN ('pending', 'sending')"
+  )
+    .bind(id)
+    .run();
+  return (res.meta?.changes ?? 0) > 0;
+}
+
