@@ -1,4 +1,5 @@
 import { adminPage, homePage, loginPage, setupPage, keyRecoveryPage, recoverGatePage } from './html.js';
+import { FAVICON_SVG, FAVICON_PNG_32, FAVICON_ICO, APPLE_TOUCH_PNG } from './assets/icons.js';
 import {
   clearChatLogs,
   cancelReminder,
@@ -630,9 +631,37 @@ async function handleRecover(request, env, keyState) {
   return htmlResponse(keyRecoveryPage(nonce, { hasKey: keyState.action === 'mismatch' }), nonce);
 }
 
+function base64Bytes(b64) {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+/** 站点图标路由：/favicon.svg、/favicon.ico、/favicon-32.png、/apple-touch-icon.png */
+const ICON_ROUTES = {
+  '/favicon.svg': { type: 'image/svg+xml; charset=utf-8', body: () => FAVICON_SVG },
+  '/favicon.ico': { type: 'image/x-icon', body: () => base64Bytes(FAVICON_ICO) },
+  '/favicon-32.png': { type: 'image/png', body: () => base64Bytes(FAVICON_PNG_32) },
+  '/apple-touch-icon.png': { type: 'image/png', body: () => base64Bytes(APPLE_TOUCH_PNG) },
+};
+
 async function handle(request, env) {
   const url = new URL(request.url);
   const path = url.pathname;
+
+  const icon = ICON_ROUTES[path];
+  if (icon) {
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+      return new Response(null, { status: 405, headers: { Allow: 'GET, HEAD' } });
+    }
+    return new Response(request.method === 'HEAD' ? null : icon.body(), {
+      headers: {
+        'Content-Type': icon.type,
+        'Cache-Control': 'public, max-age=604800',
+      },
+    });
+  }
 
   const missingSecrets = ['ADMIN_TOKEN', 'CONFIG_ENC_KEY'].filter((k) => !env[k]);
 

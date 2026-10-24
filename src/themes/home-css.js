@@ -456,6 +456,15 @@ export const HOME_CSS = `
   letter-spacing:.02em;
 }
 .home .copyright .c-sep{margin:0 .5em;opacity:.55}
+.home .foot-links{text-align:center;margin-top:10px}
+.home .foot-link{
+  display:inline-flex;align-items:center;gap:7px;
+  font-size:12.5px;color:var(--fg-3);text-decoration:none;
+  padding:4px 10px;border-radius:999px;border:1px solid transparent;
+  transition:color .15s,border-color .15s,background .15s;
+}
+.home .foot-link svg{width:15px;height:15px;opacity:.85;flex:0 0 auto}
+.home .foot-link:hover{color:var(--brand-2);border-color:var(--line-2);background:var(--panel-2)}
 
 /* ============================ 焦点可见 ============================ */
 .home a:focus-visible,.home .btn:focus-visible,.home .seg button:focus-visible{

@@ -3,11 +3,18 @@ import { ADMIN_JS } from './themes/admin-core.js';
 import { HOME_CSS } from './themes/home-css.js';
 import { LOGIN_CSS } from './themes/login-css.js';
 import { shellA } from './themes/theme-a.js';
+import { BOT_PATHS } from './assets/icons.js';
 
 const ROBOT_ICON =
-  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' +
-  '<path d="M12 2a4 4 0 0 1 4 4v2H8V6a4 4 0 0 1 4-4z"/><rect x="3" y="8" width="18" height="14" rx="3"/>' +
-  '<circle cx="9" cy="15" r="1.5" fill="currentColor" stroke="none"/><circle cx="15" cy="15" r="1.5" fill="currentColor" stroke="none"/></svg>';
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+  BOT_PATHS +
+  '</svg>';
+
+const FAVICON_LINKS =
+  '<link rel="icon" href="/favicon.svg" type="image/svg+xml">' +
+  '<link rel="icon" href="/favicon-32.png" type="image/png" sizes="32x32">' +
+  '<link rel="shortcut icon" href="/favicon.ico">' +
+  '<link rel="apple-touch-icon" href="/apple-touch-icon.png">';
 
 const ARROW_ICON =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
@@ -49,6 +56,27 @@ const ARROW_DOWN =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
   '<line x1="12" y1="5" x2="12" y2="19"/><polyline points="6 13 12 19 18 13"/></svg>';
 
+const BELL_ICON =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">' +
+  '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>';
+
+const TOOL_ICON =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">' +
+  '<path d="M14.7 6.3a4.5 4.5 0 0 0-6 6L3 18l3 3 5.7-5.7a4.5 4.5 0 0 0 6-6L14 13l-3-3z"/></svg>';
+
+const IMAGE_ICON =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">' +
+  '<rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>';
+
+const MIC_ICON =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">' +
+  '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="17" x2="12" y2="21"/><line x1="8" y1="21" x2="16" y2="21"/></svg>';
+
+const GITHUB_ICON =
+  '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">' +
+  '<path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>' +
+  '</svg>';
+
 function homeVars() {
   return (
     '--grid:linear-gradient(var(--grid-line) 1px,transparent 1px),' +
@@ -87,10 +115,28 @@ const FEATURES = [
     tags: ['多套配置', '自动切换', '/chat/completions'],
   },
   {
-    icon: SHIELD_ICON,
-    title: '密钥加密存储',
-    desc: '机器人 Secret 与 AI Key 以 AES-256-GCM 加密后落库，主密钥只存在 Worker Secret 里，后台永不回显明文。',
-    tags: ['AES-256-GCM', 'enc:v1', '不回显'],
+    icon: BELL_ICON,
+    title: '定时提醒，到点主动找你',
+    desc: '直接说「10 分钟后提醒我喝水」「每天 8:00 提醒我背单词」，不用指令。提醒存在 D1，跨重启不丢；重复任务发完自动顺延，后台「定时任务」页可查看和取消。',
+    tags: ['自然语言', '每分钟巡检', '重复顺延', '后台可管理'],
+  },
+  {
+    icon: TOOL_ICON,
+    title: 'AI 会自己调工具',
+    desc: 'AI 不再只会聊天：需要画图、发梗图、发语音、设提醒、查群资料 / 禁言状态时，它会自己选用哪个工具，一次只调一个，结果直接发回会话。',
+    tags: ['[TOOL] 协议', '画图', '梗图', '语音', '查群'],
+  },
+  {
+    icon: IMAGE_ICON,
+    title: '内置 35 张梗图 + 表情',
+    desc: '梗图直接存在 D1 里（不占包体），/梗图 随机来一张、/梗图 名字 指定；AI 也会在气氛合适时自己挑一张发，图后还补一句话。/表情 随机 emoji——官方群里发不了原生表情包，就用 emoji 顶上。',
+    tags: ['35 张', 'D1 存储', 'AI 自动挑图', '/表情'],
+  },
+  {
+    icon: MIC_ICON,
+    title: '语音消息，免 Key',
+    desc: '用 Cloudflare Workers AI 的 MeloTTS 合成语音，不需要额外买 TTS 服务：/语音 你好呀 直接发语音条，AI 也会在合适时用语音回你。音量还能增益 +6 / +9dB。',
+    tags: ['MeloTTS', 'Workers AI', '免 Key', '音量增益'],
   },
   {
     icon: LIFE_ICON,
@@ -104,22 +150,46 @@ const FEATURES = [
     wide: true,
   },
   {
+    icon: DB_ICON,
+    title: '记得住，也忘得掉',
+    desc: '每个会话的上下文存在 Durable Object 的 SQLite 里，重启、换版本都不丢；历史太长时自动把旧消息压成摘要继续带着，不会把上下文越滚越贵。',
+    tags: ['DO SQLite', '重启不丢', '摘要压缩'],
+  },
+  {
+    icon: SHIELD_ICON,
+    title: '密钥加密存储',
+    desc: '机器人 Secret 与 AI Key 以 AES-256-GCM 加密后落库，主密钥只存在 Worker Secret 里，后台永不回显明文。',
+    tags: ['AES-256-GCM', 'enc:v1', '不回显'],
+  },
+  {
+    icon: IMAGE_ICON,
+    title: '看得懂你发的图',
+    desc: '把图片发给机器人，它会先把图下载下来交给视觉模型理解，再回答你的问题；回复里的图、生图、梗图都走官方富媒体上传发送，不需要外部图床。',
+    tags: ['image_url', '多模态', '富媒体上传'],
+  },
+  {
+    icon: BOLT_ICON,
+    title: '官方小功能都接齐了',
+    desc: 'Markdown 排版回复、图片上传转存后发送、/撤回 指令、入群欢迎语、/菜单 按钮面板——都是官方文档里的正经接口，后台一键开关。',
+    tags: ['Markdown', '/撤回', '入群欢迎', '/菜单'],
+  },
+  {
     icon: GAUGE_ICON,
     title: '该拒的会拒',
     desc: '群黑名单、敏感词、登录限流、接口限流各管一段，刷屏和探测进不到 AI 那一层。',
     tags: ['黑名单', '敏感词', '5 次 / 15 分钟'],
   },
   {
-    icon: DB_ICON,
-    title: '看得见的历史',
-    desc: '每条问答都落到 D1，按群聊 / 私聊分类翻页，随时清空。只保留最近 2000 条，不会越滚越大。',
-    tags: ['群聊 / 私聊', '分页', '可清空'],
+    icon: CHAT_ICON,
+    title: '群管理，一页管完',
+    desc: '自动收集机器人所在的群，每个群一键开关回复（秒级生效）。点开能看群资料、机器人群内状态、实时禁言名单，还能手动禁言 / 解除。',
+    tags: ['群列表', '回复开关', '禁言状态', '手动禁言'],
   },
   {
     icon: CHAT_ICON,
-    title: '官方玩法都支持',
-    desc: 'Markdown 排版回复、图片回复自动转存发送、/撤回 指令、入群欢迎语——都是官方文档里的正经接口，后台一键开关。',
-    tags: ['Markdown', '图片回复', '/撤回', '入群欢迎'],
+    title: '像 QQ 一样的聊天记录',
+    desc: '后台「聊天记录」改成会话列表 + 对话气泡：左边选会话、右边看完整对话，手机上点进去全屏；系统消息单独置顶，图片 / 梗图 / 语音都会记一条，支持按会话删除。',
+    tags: ['会话列表', '气泡对话', '手机适配', '按会话删除'],
   },
 ];
 
@@ -168,7 +238,7 @@ function featureTile(f, index) {
 
 export function homePage(nonce, reqUrl) {
   const adminHost = adminAddress(reqUrl);
-  return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>QQ Bot · 跑在 Cloudflare Workers 上的 QQ AI 机器人</title><meta name="description" content="基于 Cloudflare Workers 与 Durable Objects 的 QQ 机器人：接入 QQ 开放平台，在群聊和单聊里用任意 OpenAI 兼容模型自然对话，自带加密配置与可视化管理后台。"><meta name="robots" content="index,follow"><style nonce="${nonce}">
+  return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${FAVICON_LINKS}<title>QQ Bot · 跑在 Cloudflare Workers 上的 QQ AI 机器人</title><meta name="description" content="基于 Cloudflare Workers 与 Durable Objects 的 QQ 机器人：接入 QQ 开放平台，在群聊和单聊里用任意 OpenAI 兼容模型自然对话，会画图、发梗图、发语音、定提醒，自带加密配置与可视化管理后台。"><meta name="robots" content="index,follow"><style nonce="${nonce}">
 :root{${homeVars()}}
 ${HOME_CSS}
 </style></head><body class="home motion t-light">
@@ -193,7 +263,7 @@ ${HOME_CSS}
       <div>
         <span class="pill reveal"><span class="live"></span>单实例常驻 · 自动保活<b>Serverless</b></span>
         <h1 class="reveal d1">把你的 QQ 号<br>变成<span class="grad">会思考的助手</span></h1>
-        <p class="lede reveal d2">接入 QQ 开放平台官方网关，在群聊与私聊中由 AI 自然作答。整个机器人跑在 Cloudflare 边缘网络上：一个 Worker、一个 Durable Object、一张 D1 表，不需要服务器，也不需要运维。</p>
+        <p class="lede reveal d2">接入 QQ 开放平台官方网关，在群聊与私聊中由 AI 自然作答：会画图、会发梗图、会发语音、会自己定提醒，还记得住你们之前聊过什么。整个机器人跑在 Cloudflare 边缘网络上：一个 Worker、一个 Durable Object、一张 D1 表，不需要服务器，也不需要运维。</p>
         <div class="cta reveal d3">
           <a class="btn btn-primary" href="/login">进入管理后台${ARROW_ICON}</a>
           <a class="btn btn-ghost" href="#features">看看它能做什么</a>
@@ -221,6 +291,8 @@ ${HOME_CSS}
               <span class="chip">模型<b>已选择</b></span>
               <span class="chip">密钥<b>已加密</b></span>
               <span class="chip">上下文<b>20 条</b></span>
+              <span class="chip">梗图<b>35 张</b></span>
+              <span class="chip">语音<b>内置 TTS</b></span>
             </div>
             <div class="chats">
               <div class="msg out">
@@ -234,7 +306,7 @@ ${HOME_CSS}
             </div>
             <div class="metrics">
               <span class="metric"><b class="ok">正常</b><span>网关连接</span></span>
-              <span class="metric"><b>7 天</b><span>后台会话</span></span>
+              <span class="metric"><b>35 张</b><span>内置梗图</span></span>
               <span class="metric"><b>2000</b><span>聊天记录上限</span></span>
             </div>
           </div>
@@ -253,7 +325,7 @@ ${HOME_CSS}
       <div class="cell reveal"><b>0</b><span>需要维护的服务器</span></div>
       <div class="cell reveal d1"><b>全兼容</b><span>OpenAI Chat Completions</span></div>
       <div class="cell reveal d2"><b>60s</b><span>掉线巡检间隔</span></div>
-      <div class="cell reveal d3"><b>1 个</b><span>管理后台，手机也能开</span></div>
+      <div class="cell reveal d3"><b>35 张</b><span>内置梗图 / 表情</span></div>
     </div>
   </section>
 
@@ -267,22 +339,6 @@ ${HOME_CSS}
       </div>
       <div class="bento">
         ${FEATURES.map(featureTile).join('')}
-        <figure class="tile reveal">
-          <div class="t-ico">${GAUGE_ICON}</div>
-          <figcaption>
-            <h3>该拒的会拒</h3>
-            <p>群黑名单、敏感词、登录限流、接口限流各管一段，恶意刷屏进不到 AI 那一层。</p>
-          </figcaption>
-          <div class="t-extra"><div class="tags"><span class="tag">黑名单</span><span class="tag">敏感词</span><span class="tag">5 次/15 分钟</span></div></div>
-        </figure>
-        <figure class="tile reveal d1">
-          <div class="t-ico">${CHAT_ICON}</div>
-          <figcaption>
-            <h3>看得见的历史</h3>
-            <p>每条问答都落到 D1，按群聊 / 私聊分类翻页，随时清空。只保留最近 2000 条，不会越滚越大。</p>
-          </figcaption>
-          <div class="t-extra"><div class="tags"><span class="tag">群聊 / 私聊</span><span class="tag">分页</span><span class="tag">可清空</span></div></div>
-        </figure>
       </div>
     </div>
   </section>
@@ -299,10 +355,11 @@ ${HOME_CSS}
         <div class="flow-list">
           <div class="fitem"><span class="fnum">01</span><div><h4>鉴权与建连</h4><p>取 AppAccessToken，向网关换取 WebSocket 地址，HELLO 后 IDENTIFY 建立会话；已有会话则走 RESUME 续上，不重复消耗配额。</p></div></div>
           <div class="fitem"><span class="fnum">02</span><div><h4>事件过滤</h4><p>按 <b>msg_id + msg_seq</b> 去重（平台会重复推送）、剥掉 @ 标记、命中群黑名单或敏感词直接丢弃。</p></div></div>
-          <div class="fitem"><span class="fnum">03</span><div><h4>排队与会话隔离</h4><p>同一会话串行、不同会话并行。内存里最多 100 个会话，长时间不用会被回收。</p></div></div>
-          <div class="fitem"><span class="fnum">04</span><div><h4>调用 AI</h4><p>带上该会话的历史记录请求兼容接口，30 秒超时；网络抖动、5xx 与 429 先重试一次，仍失败就换列表里的下一个 AI。图片以 image_url 传入。</p></div></div>
-          <div class="fitem"><span class="fnum">05</span><div><h4>被动回复</h4><p>带 msg_id 回复原消息，超长自动截断，群聊可选择是否 @ 对方；凭证过期会重新获取并补发一次。</p></div></div>
-          <div class="fitem"><span class="fnum">06</span><div><h4>落库</h4><p>只有真正发出去的回复才写入历史与聊天记录，失败会给一条兜底文案，不会让群里的人等到沉默。</p></div></div>
+          <div class="fitem"><span class="fnum">03</span><div><h4>排队与会话隔离</h4><p>同一会话串行、不同会话并行。上下文存在 Durable Object 的 SQLite 里，重启、换版本都不丢；历史太长会自动压成摘要继续带。</p></div></div>
+          <div class="fitem"><span class="fnum">04</span><div><h4>调用 AI</h4><p>带上该会话的历史记录请求兼容接口，90 秒超时（带图 180 秒）；网络抖动、5xx 与 429 先重试一次，仍失败就换列表里的下一个 AI。图片以 image_url 传入。</p></div></div>
+          <div class="fitem"><span class="fnum">05</span><div><h4>工具调用与富媒体</h4><p>AI 要「做事」时输出 <b>[TOOL]</b>（画图 / 梗图 / 语音 / 提醒 / 查群），一次只调一个：生图与梗图先上传成 QQ 媒体，语音用 Workers AI 的 MeloTTS 合成再上传，图发完还会补一句话；提醒类工具直接落 D1。</p></div></div>
+          <div class="fitem"><span class="fnum">06</span><div><h4>被动回复</h4><p>带 msg_id 回复原消息，超长自动截断，群聊可选择是否 @ 对方；凭证过期会重新获取并补发一次。</p></div></div>
+          <div class="fitem"><span class="fnum">07</span><div><h4>落库</h4><p>文本回复、图片、梗图、语音都会写一条记录（发图前先出图、再补一句话）；失败会给一条兜底文案，不会让群里的人等到沉默。</p></div></div>
         </div>
       </div>
 
@@ -327,17 +384,18 @@ ${HOME_CSS}
     <div class="wrap">
       <div class="sec-head">
         <span class="eyebrow">部署</span>
-        <h2 class="title">三个命令，跑起来</h2>
-        <p class="lede">先在 Cloudflare 控制台把 <b>ADMIN_TOKEN</b> 与 <b>CONFIG_ENC_KEY</b> 加成 Secret，再一条命令发布。密钥只存在于 Cloudflare，不经过仓库，也不落在本机文件里。</p>
+        <h2 class="title">四步，跑起来</h2>
+        <p class="lede">先把自定义域名绑好（workers.dev 入口已禁用，后台只能走域名访问），再加两个 Secret，然后一条命令发布——D1 库与内置梗图都会在部署时自动就绪。</p>
       </div>
       <div class="bento">
         <figure class="tile wide reveal">
           <div class="win-bar"><span class="win-dots"><span class="d1"></span><span class="d2"></span><span class="d3"></span></span><span class="win-url">deploy</span></div>
           <div class="t-extra">
             <ul class="steps">
-              <li class="step"><i>1</i><span><b>控制台添加 Secret</b> · ADMIN_TOKEN 与 CONFIG_ENC_KEY</span></li>
-              <li class="step"><i>2</i><span><b>npm run deploy</b> · 检查 Secret → 迁移 → 发布</span></li>
-              <li class="step"><i>3</i><span><b>登录后台填配置</b> · QQ 凭据 + AI 接口 → 点启动</span></li>
+              <li class="step"><i>1</i><span><b>绑定自定义域名</b> · 控制台 Domains & Routes</span></li>
+              <li class="step"><i>2</i><span><b>添加两个 Secret</b> · ADMIN_TOKEN 与 CONFIG_ENC_KEY</span></li>
+              <li class="step"><i>3</i><span><b>npm run deploy</b> · 自动建库 → 生成配置 → 发布 → 导入梗图</span></li>
+              <li class="step"><i>4</i><span><b>登录后台填配置</b> · QQ 凭据 + AI 接口 → 点启动</span></li>
             </ul>
           </div>
         </figure>
@@ -348,11 +406,18 @@ ${HOME_CSS}
             <p>环境变量只有 <b>ADMIN_TOKEN</b>（后台密码）和 <b>CONFIG_ENC_KEY</b>（加密主密钥）。其余配置都存在 D1 里，后台随时改。</p>
           </figcaption>
         </figure>
-        <figure class="tile reveal d2">
+        <figure class="tile wide reveal d2">
           <div class="t-ico">${BOLT_ICON}</div>
           <figcaption>
             <h3>本地也能调</h3>
-            <p><b>npm run dev</b> 起本地环境，<b>npm run tail</b> 看线上日志。沙箱开关一开，未上线的机器人也能先跑通全流程。</p>
+            <p><b>npm run dev</b> 起本地环境（自动带上 D1 绑定），<b>npm run seed:memes</b> 导入本地梗图，<b>npm run tail</b> 看线上日志。沙箱开关一开，未上线的机器人也能先跑通全流程。</p>
+          </figcaption>
+        </figure>
+        <figure class="tile reveal d3">
+          <div class="t-ico">${SHIELD_ICON}</div>
+          <figcaption>
+            <h3>workers.dev 默认全关</h3>
+            <p>预览地址与 workers.dev 入口都在配置里关掉了，后台只能走自定义域名；机器人收发消息走的是出站 WebSocket，不需要任何公网入站入口。</p>
           </figcaption>
         </figure>
       </div>
@@ -379,6 +444,7 @@ ${HOME_CSS}
 <footer class="foot">
   <div class="wrap">
     <p class="copyright"><span>©</span> 2026 <span class="c-sep">|</span> QQ Bot</p>
+    <p class="foot-links"><a class="foot-link" href="https://github.com/jidanbings" target="_blank" rel="noopener noreferrer">${GITHUB_ICON}<span>开源项目</span></a></p>
   </div>
 </footer>
 
@@ -485,7 +551,7 @@ export function setupPage(nonce, missing) {
 
   const pending = missing.length;
 
-  return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>QQ Bot · 尚未完成配置</title><meta name="robots" content="noindex"><style nonce="${nonce}">
+  return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${FAVICON_LINKS}<title>QQ Bot · 尚未完成配置</title><meta name="robots" content="noindex"><style nonce="${nonce}">
 ${LOGIN_CSS}
 </style></head><body>
 <div class="setup">
@@ -510,7 +576,7 @@ ${LOGIN_CSS}
 }
 
 export function recoverGatePage(nonce, { error } = {}) {
-  return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>QQ Bot · 配置恢复</title><meta name="robots" content="noindex"><style nonce="${nonce}">
+  return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${FAVICON_LINKS}<title>QQ Bot · 配置恢复</title><meta name="robots" content="noindex"><style nonce="${nonce}">
 ${LOGIN_CSS}
 </style></head><body>
 <div class="login">
@@ -537,7 +603,7 @@ export function keyRecoveryPage(nonce, { hasKey }) {
   const first = hasKey
     ? '<li><b>换回原来那把</b>：回 Cloudflare 控制台 <code>Variables and Secrets</code>，把 CONFIG_ENC_KEY 改回最初部署时用的那个值。改完刷新本页即可。</li>'
     : '<li><b>补回 CONFIG_ENC_KEY</b>：到 Cloudflare 控制台 <code>Variables and Secrets</code> 添加一个 Secret，值必须是最初加密这批数据用的那一个，否则解不开。</li>';
-  return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>QQ Bot · ${title}</title><meta name="robots" content="noindex"><style nonce="${nonce}">
+  return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${FAVICON_LINKS}<title>QQ Bot · ${title}</title><meta name="robots" content="noindex"><style nonce="${nonce}">
 ${LOGIN_CSS}
 </style></head><body>
 <div class="setup">
@@ -562,7 +628,7 @@ ${LOGIN_CSS}
 }
 
 export function loginPage(nonce) {
-  return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>QQ Bot 管理后台</title><style nonce="${nonce}">
+  return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${FAVICON_LINKS}<title>QQ Bot 管理后台</title><style nonce="${nonce}">
 ${LOGIN_CSS}
 </style></head><body>
 <div class="login">

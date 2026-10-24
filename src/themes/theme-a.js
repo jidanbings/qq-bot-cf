@@ -1,3 +1,4 @@
+import { BOT_PATHS } from '../assets/icons.js';
 
 const CSS_A = `
 *{box-sizing:border-box;margin:0;padding:0}
@@ -586,12 +587,12 @@ export const ICONS_A = {
 };
 
 export function shellA(nonce) {
-  return `<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>QQ Bot 管理后台</title><style nonce="${nonce}">
+  return `<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="icon" href="/favicon-32.png" type="image/png" sizes="32x32"><link rel="shortcut icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><meta name="robots" content="noindex"><title>QQ Bot 管理后台</title><style nonce="${nonce}">
 ${CSS_A}
 </style></head><body>
 <aside class="side" id="side">
   <div class="side-brand">
-    <span class="side-logo">${SVG('<rect x="3" y="8" width="18" height="14" rx="3"/><path d="M12 2a4 4 0 0 1 4 4v2H8V6a4 4 0 0 1 4-4z"/><circle cx="9" cy="15" r="1.4" fill="currentColor" stroke="none"/><circle cx="15" cy="15" r="1.4" fill="currentColor" stroke="none"/>')}</span>
+    <span class="side-logo">${SVG(BOT_PATHS)}</span>
     <div><b>QQ Bot</b><small>Workers Edition</small></div>
   </div>
 

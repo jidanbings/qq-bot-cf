@@ -1,12 +1,12 @@
 {
   "name": "qq-bot-cf",
-  "version": "3.6.3-beta.2",
+  "version": "3.6.5",
   "type": "module",
   "private": true,
   "scripts": {
     "setup": "node scripts/setup.mjs",
     "deploy": "node scripts/deploy.mjs",
-    "dev": "wrangler dev",
+    "dev": "node scripts/dev.mjs",
     "preview:home": "node scripts/preview.mjs",
     "tail": "wrangler tail",
     "seed:memes": "node scripts/memes.mjs --local"

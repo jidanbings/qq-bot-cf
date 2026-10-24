@@ -157,7 +157,11 @@ QQ 官方限制每 24 小时可新建的 session 数（默认 1500），等配�
 
 **聊天记录里存的是什么？会保存 QQ 的 openid 吗？**
 
-不会。Durable Object 的持久化存储里只有一个布尔值（`desired_running`，标记是否该保持在线），没有任何聊天内容；会话上下文只活在 DO 的内存里，重启即清空。落到 D1 的只有 `chat_log` 表：问题原文、回答原文，以及 `scope_id` / `user_id` —— 后两个存的是 openid 的 SHA-256 指纹（8 位十六进制），原始 openid 不入库、不写日志。系统事件（配置热更新、AI 自动切换、入群欢迎等）也记在这张表里，不包含任何密钥或原文以外的敏感信息。这张表只留最近 2000 条，后台可一键清空，后台「聊天记录」页可按 全部/群聊/私聊/系统 筛选查看。
+不会。会持久化的数据分三处，都不含原始 openid：
+
+- **D1 `chat_log`**：问题原文、回答原文，`scope_id` / `user_id` 存的是 openid 的 SHA-256 指纹（8 位十六进制），原始 openid 不入库、不写日志。系统事件（配置热更新、AI 自动切换、入群欢迎等）也记在这张表里。图片 / 梗图 / 语音会记成 `[图片] …`、`[梗图] 名字`、`[语音] …` 占位；只留最近 2000 条，后台「聊天记录」是 QQ 风格的会话列表 + 对话气泡，系统消息置顶，支持按会话删除。
+- **D1 `memes`**：内置梗图（压缩后的 JPEG base64）与名称 / 描述，部署时从仓库 `assets/memes` 自动导入。
+- **Durable Object SQLite**：每个会话的上下文（最近若干轮 + 摘要）用于「记得住」；另外只存一个布尔值 `desired_running` 标记是否该保持在线。重启、换版本都不会丢会话。
 
 ---
 
@@ -165,7 +169,9 @@ QQ 官方限制每 24 小时可新建的 session 数（默认 1500），等配�
 
 ```bash
 npx wrangler login    # 首次
-npm run deploy        # 自动建库 + 部署（建表由 Worker 启动时自动完成）
+npm run deploy        # 自动建库 + 部署（建表由 Worker 启动时自动完成，部署后自动导入梗图）
+npm run dev           # 本地开发（自动生成带 D1 绑定的 .wrangler/deploy.toml，默认 127.0.0.1:8787）
+npm run seed:memes    # 把内置梗图导入本地 D1（本地开发时用）
 ```
 
 `npm run setup` 只剩「选账号 / 绑自定义域名」的用途，直接 `npm run deploy` 也能跑通。
@@ -186,6 +192,16 @@ npm run deploy        # 自动建库 + 部署（建表由 Worker 启动时自动
 ### 部署期：不用配任何东西
 
 D1 库由 `npm run deploy` 自动查找/创建，库 ID 缓存在 `.wrangler/d1.json`（已 gitignore）。其余配置（QQ 凭据、AI 接口、提示词、黑名单等）都从后台改，加密后存 D1。
+
+---
+
+## 🎨 图标与许可
+
+项目图标、后台侧边栏图标与网站图标（favicon）使用 [Lucide](https://lucide.dev) 的 `bot` 图标，采用 **ISC License**——允许商用、修改与再分发，只需保留版权与许可声明：
+
+- 版权：Copyright (c) for portions of Lucide are held by Cole Bemis 2013-2022 as part of Feather (MIT). All other copyright (c) for Lucide are held by Lucide Contributors 2022.
+- 许可全文：<https://github.com/lucide-icons/lucide/blob/main/LICENSE>
+- favicon 的渐变底色与白色描边是在原图标基础上做的样式处理，仍遵循同一许可。
 
 ---
 
