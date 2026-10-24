@@ -5,10 +5,12 @@ import {
   dueReminders,
   finishReminder,
   getConfig,
+  listMemes,
   rescheduleReminder,
   upsertGroup,
 } from './db.js';
 import { parseReminder, nextDueFrom } from './utils/reminder.js';
+import { normalizeFaceTags } from './utils/qq-face.js';
 import {
   APP_VERSION,
   QQ_BASE,
@@ -27,6 +29,13 @@ const MENTION_RE = /<@[!&]?[^>\s]{0,64}>/g;
 const MAX_SESSIONS = 100;
 const SESSION_IDLE_MS = 60 * 60 * 1000;
 const MAX_PENDING_MESSAGES = 100;
+// 「原生表情」在群聊/单聊官方 API 里发不了（表情表态仅频道支持），
+// 这里用 Unicode emoji 代替：QQ 客户端会按表情样式渲染。
+const EMOJIS = [
+  '😀', '😄', '😊', '😉', '😍', '🤔', '😅', '😂', '🤣', '😭',
+  '😴', '🥹', '😎', '👍', '👏', '🙏', '💪', '🤝', '🎉', '✨',
+  '🔥', '💯', '🌟', '☕', '🌙', '🐟', '🍚',
+];
 
 function stripMentions(text) {
   return String(text ?? '').replace(MENTION_RE, '').trim();
@@ -71,6 +80,7 @@ export class QQBotDO {
     this.token = null;
     this.tokenExpiry = 0;
     this.sessions = new Map();
+    this.memesCache = null;
     this.heartbeatTimer = null;
     this.config = {};
     this.seq = null;
@@ -750,7 +760,7 @@ export class QQBotDO {
       if (this.msgIdFifo.length > 500) this.recentMsgIds.delete(this.msgIdFifo.shift());
     }
 
-    let content = stripMentions(data.content);
+    let content = normalizeFaceTags(stripMentions(data.content));
     if (/^@\S+\s+/.test(content)) content = content.replace(/^@\S+\s+/, '');
     const attachments = Array.isArray(data.attachments) ? data.attachments : [];
     const imageUrl = attachments[0]?.url || null;
@@ -787,6 +797,9 @@ export class QQBotDO {
   async processMessage(key, job) {
     const { isC2C, userId, scopeId, content, imageUrl, msgId } = job;
 
+    // 梗图缓存（首次读取 D1，之后走内存；失败不阻塞聊天）
+    await this.ensureMemes().catch(() => {});
+
     // /菜单 指令：发送带按钮的面板（指令按钮自动往输入框填 @我 内容，跳转按钮直接开链接）
     if (/^\/?(菜单|menu|按钮)(\s|$)/i.test(content)) {
       await this.sendMenu({ isC2C, scopeId, msgId });
@@ -815,6 +828,10 @@ export class QQBotDO {
               '直接说「10 分钟后提醒我喝水」「明天 8 点提醒我开会」「每天 8:00 提醒我背单词」',
               '到点我会主动发消息；重复提醒会自动顺延',
               '',
+              '**😄 表情与梗图**',
+              '/梗图 —— 随机来一张内置梗图；/梗图 名字 指定一张',
+              '/表情 —— 随机一个 emoji',
+              '',
               '**🧰 指令**',
               '- /菜单 —— 弹出按钮面板',
               '- /撤回 —— 撤回我上一条消息',
@@ -826,6 +843,7 @@ export class QQBotDO {
               '💬 聊天：直接 @我 说点什么，发图片给我可以看图说话',
               '🎨 生图：/画 一只橘猫，水彩风格（说「画一张…」也行）',
               '⏰ 提醒：「10 分钟后提醒我喝水」「明天 8 点提醒我开会」「每天 8:00 提醒我背单词」',
+              '😄 表情：/梗图 随机梗图，/梗图 名字 指定，/表情 随机 emoji',
               '🧰 指令：/菜单 弹出按钮面板 · /撤回 撤回我上一条 · /帮助 看这条',
             ].join('\n'),
       });
@@ -888,6 +906,39 @@ export class QQBotDO {
         await this.handleImageGen({ isC2C, scopeId, msgId, prompt: genPrompt });
         return;
       }
+    }
+
+    // /梗图 /表情包：发内置梗图（不写名字就随机来一张）
+    if (/^\/?(梗图|表情包|meme)(\s|$)/i.test(content)) {
+      const name = content.replace(/^\/?(梗图|表情包|meme)\s*/i, '').trim();
+      const sent = await this.sendMeme({ isC2C, scopeId, msgId, name });
+      if (!sent) {
+        const names = (this.memesCache || []).map((m) => m.name);
+        if (!names.length) {
+          await this.sendReply({ isC2C, scopeId, msgId, content: '梗图库还空着——部署时会自动导入，稍后再试～' });
+        } else if (name) {
+          await this.sendReply({
+            isC2C,
+            scopeId,
+            msgId,
+            content: `没有叫「${name}」的梗图～ 现有：${names.slice(0, 5).join('、')}…（不写名字就随机来一张）`,
+          });
+        } else {
+          await this.sendReply({ isC2C, scopeId, msgId, content: '梗图发送失败了，稍后再试一次吧～' });
+        }
+      }
+      return;
+    }
+
+    // /表情：发一个 emoji（官方接口不支持群聊/单聊发原生表情包，用 Unicode emoji 代替）
+    if (/^\/?(表情|emoji)(\s|$)/i.test(content)) {
+      await this.sendReply({
+        isC2C,
+        scopeId,
+        msgId,
+        content: EMOJIS[Math.floor(Math.random() * EMOJIS.length)],
+      });
+      return;
     }
 
     // 定时提醒：识别「X 点提醒我…」直接落库，不绕 AI（AI 未配置也能用）
@@ -1111,7 +1162,7 @@ export class QQBotDO {
     if (!sentId) return;
 
     if (session && msgId) session.lastBotMsg = { msgId: sentId, at: Date.now() };
-    history.push({ role: 'assistant', content: reply });
+    history.push({ role: 'assistant', content: normalizeFaceTags(reply) });
     if (session) {
       session.lastUsed = Date.now();
       await this.saveSession(key, session);
@@ -1128,7 +1179,7 @@ export class QQBotDO {
         scopeId,
         userId,
         userContent: content,
-        aiReply: reply,
+        aiReply: normalizeFaceTags(reply),
         model: used ? `${used.name} · ${used.model}`.slice(0, 128) : null,
       });
     } catch (e) {
@@ -1149,13 +1200,21 @@ export class QQBotDO {
           '\n[TOOL]{"name":"工具名","args":{...}}' +
           '\n可用工具：' +
           '\n- image：{"prompt":"画面描述"} —— 画图 / 生成图片' +
+          '\n- meme：{"name":"梗图名"} —— 发一张内置梗图（名字只能从下面的梗图清单里选）' +
           '\n- remind：{"when":"明天 8:30 / 10分钟后 / 每天 8:00 / 每周一 9:00","text":"提醒内容"} —— 定时提醒' +
           '\n- group_info：{} —— 查本群资料（仅群聊）' +
           '\n- group_state：{} —— 查机器人在本群的状态（仅群聊）' +
           '\n- mute_state：{} —— 查本群禁言状态（仅群聊）' +
           '\n规则：一次只调用一个工具；**需要调用工具时，整条回复只能有这一行工具调用**，不要输出任何寒暄、确认或解释（系统会用工具结果自动回复用户）；能直接回答的问题不要调用工具；不要编造工具的执行结果；用户没有明确要求时不要调用工具。'
         : '';
-    return basePrompt + genHint + toolHint;
+    const memes = this.memesCache || [];
+    const memeHint = memes.length
+      ? '\n\n【表情与梗图】你可以自然地在回复里用 emoji 表情（例如 😄🤔👍 这种字符，直接用就行）。' +
+        '需要发梗图时用工具 meme，名字只能从下面清单里选：\n' +
+        memes.map((m) => `- ${m.name}：${String(m.description || '').slice(0, 40)}`).join('\n') +
+        '\n规则：聊天气氛合适时偶尔发一张，不要每条都发；用户明确想要梗图/表情包时优先发一张。'
+      : '';
+    return basePrompt + genHint + toolHint + memeHint;
   }
 
   /** 系统提示词指纹：人设 / 生图模型 / 工具开关变了就要重建 session 里的 system 消息 */
@@ -1183,7 +1242,7 @@ export class QQBotDO {
       ? `${this.apiBase()}/v2/users/${scopeId}/messages`
       : `${this.apiBase()}/v2/groups/${scopeId}/messages`;
 
-    let finalContent = stripMentions(content);
+    let finalContent = normalizeFaceTags(stripMentions(content));
     if (/^@\S+\s+/.test(finalContent)) finalContent = finalContent.replace(/^@\S+\s+/, '');
     finalContent = finalContent.slice(0, 1500);
     if (!finalContent) finalContent = '……';
@@ -1518,6 +1577,50 @@ export class QQBotDO {
     });
   }
 
+  /* ------------------------------ 内置梗图（D1 存储，部署时自动导入） ------------------------------ */
+
+  /** 从 D1 读梗图（名字 + 描述 + base64），进程内缓存；部署换版本时 DO 会重启，天然刷新 */
+  async ensureMemes() {
+    if (this.memesCache) return this.memesCache;
+    try {
+      const rows = await listMemes(this.env);
+      this.memesCache = (rows || []).filter((r) => r && r.name && r.data);
+    } catch (e) {
+      this.logger.warn(`Memes load failed: ${e.message}`);
+      this.memesCache = [];
+    }
+    return this.memesCache;
+  }
+
+  /** 给了名字就精确/模糊匹配，没给就随机 */
+  async pickMeme(name) {
+    const list = await this.ensureMemes();
+    if (!list.length) return null;
+    const q = String(name || '').trim();
+    if (!q) return list[Math.floor(Math.random() * list.length)];
+    const exact = list.find((m) => m.name === q);
+    if (exact) return exact;
+    return list.find((m) => m.name.includes(q) || q.includes(m.name)) || null;
+  }
+
+  /** 发一张内置梗图（base64 直传，走官方富媒体图片消息） */
+  async sendMeme({ isC2C, scopeId, msgId, name }) {
+    const meme = await this.pickMeme(name);
+    if (!meme) return null;
+    this.logger.info(`Meme: ${meme.name}`);
+    try {
+      return await this.sendImage({
+        isC2C,
+        scopeId,
+        imageUrl: `data:image/jpeg;base64,${meme.data}`,
+        msgId,
+      });
+    } catch (e) {
+      this.logger.warn(`Meme send failed: ${e.message}`);
+      return null;
+    }
+  }
+
   /** /画 指令：调用生图模型（OpenAI 兼容 /images/generations），把图发回会话 */
   async handleImageGen({ isC2C, scopeId, msgId, prompt }) {
     const model = String(this.config.imageGenModel || '').trim();
@@ -1818,6 +1921,17 @@ export class QQBotDO {
         const prompt = String(call.args.prompt || '').trim();
         if (!prompt) return this.sendReply({ isC2C, scopeId, content: '画什么？给我个画面描述吧～', msgId });
         return this.handleImageGen({ isC2C, scopeId, msgId, prompt });
+      }
+      if (name === 'meme') {
+        const meme = await this.pickMeme(call.args.name);
+        if (!meme) {
+          return this.sendReply({ isC2C, scopeId, content: '梗图库里没找到这张～ 要不换一张？', msgId });
+        }
+        const sent = await this.sendMeme({ isC2C, scopeId, msgId, name: meme.name });
+        if (!sent) {
+          return this.sendReply({ isC2C, scopeId, content: `梗图「${meme.name}」发送失败了，稍后再试～`, msgId });
+        }
+        return sent;
       }
       if (name === 'remind') {
         const when = String(call.args.when || '').trim();

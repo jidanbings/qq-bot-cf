@@ -84,12 +84,18 @@ const SCHEMA_STATEMENTS = [
     last_error  TEXT
   )`,
   `CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders (status, due_at)`,
+  `CREATE TABLE IF NOT EXISTS memes (
+    name        TEXT PRIMARY KEY,
+    description TEXT NOT NULL DEFAULT '',
+    data        TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+  )`,
 ];
 
 async function hasSchema(env) {
   try {
     const { results } = await env.DB.prepare(
-      `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('config', 'sessions', 'chat_log', 'groups', 'reminders')`
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('config', 'sessions', 'chat_log', 'groups', 'reminders', 'memes')`
     ).all();
     const names = new Set((results || []).map((r) => r.name));
     return (
@@ -97,7 +103,8 @@ async function hasSchema(env) {
       names.has('sessions') &&
       names.has('chat_log') &&
       names.has('groups') &&
-      names.has('reminders')
+      names.has('reminders') &&
+      names.has('memes')
     );
   } catch {
     return false;
@@ -852,3 +859,14 @@ export async function cancelReminder(env, id) {
   return (res.meta?.changes ?? 0) > 0;
 }
 
+
+/* ------------------------------ 内置梗图（D1 存储，部署时自动导入） ------------------------------ */
+
+export async function listMemes(env) {
+  try {
+    const { results } = await env.DB.prepare('SELECT name, description, data FROM memes ORDER BY name').all();
+    return results || [];
+  } catch {
+    return [];
+  }
+}
