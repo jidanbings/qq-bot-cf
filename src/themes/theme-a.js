@@ -71,9 +71,9 @@ button{font-family:inherit}
 .side-links a,.side-links button{display:flex;align-items:center;gap:.5rem;padding:.5rem .75rem;border-radius:8px;
   color:var(--muted);text-decoration:none;font-size:.78rem;background:none;border:none;cursor:pointer;width:100%;
   text-align:left;transition:all .15s}
-.side-links a:hover,.side-links button:hover{background:#dbeafe;color:var(--text)}
+.side-links a:hover,.side-links button:hover{background:var(--nav-hover);color:var(--text)}
 .side-links button#logout{color:var(--muted)}
-.side-links button#logout:hover{background:#fee2e2;color:var(--red)}
+.side-links button#logout:hover{background:var(--red-soft);color:var(--red)}
 .side-links svg{width:14px;height:14px}
 
 /* ============================ 主区（照抄 user.html .main-area） ============================ */
@@ -125,7 +125,7 @@ button{font-family:inherit}
 .btn.success{background:var(--green);border:none;color:#fff}
 .btn.success:hover{background:var(--green);filter:brightness(.95)}
 .btn.danger{color:var(--red);border-color:#fecaca;background:var(--red-soft)}
-.btn.danger:hover{background:#fee2e2;border-color:#fca5a5}
+.btn.danger:hover{background:var(--red-soft);border-color:var(--red)}
 .btn.ghost{border-color:transparent;color:var(--text-2)}
 .btn.ghost:hover{background:var(--surface-3);border-color:var(--border-strong);color:var(--text)}
 .btn.sm{padding:.25rem .8rem;border-radius:30px;font-size:.72rem;gap:.3rem}
@@ -228,7 +228,7 @@ button{font-family:inherit}
 .field>label .req-flag{font-size:10px;font-weight:600;color:var(--accent);background:var(--accent-light);padding:1px 6px;border-radius:6px}
 .field input,.field textarea,.field select{width:100%;padding:.65rem .85rem;border:1.5px solid var(--border-strong);border-radius:12px;
   background:var(--surface);color:var(--text);font-size:.9rem;font-family:inherit;outline:none;transition:all .2s}
-.field input:hover,.field textarea:hover,.field select:hover{border-color:#cbd5e1}
+.field input:hover,.field textarea:hover,.field select:hover{border-color:var(--border-strong)}
 .field input:focus,.field textarea:focus,.field select:focus{border-color:var(--accent);box-shadow:0 0 0 4px var(--primary-ring)}
 .field input::placeholder,.field textarea::placeholder{color:var(--muted);opacity:.75}
 .field textarea{min-height:130px;resize:vertical;line-height:1.6;font-family:inherit}
@@ -263,7 +263,7 @@ button{font-family:inherit}
 .ok-text{color:var(--green);font-weight:600}
 .prov-empty{text-align:center;padding:2rem 1rem;color:var(--muted);font-size:.9rem}
 /* 紧凑 AI 行（编辑在弹窗里） */
-.prov-list{margin:-.4rem 0 .2rem}
+.prov-list{margin:0 0 .2rem}
 .prov-row{display:flex;align-items:center;gap:.7rem;padding:.7rem .4rem;border-bottom:1px solid var(--border);cursor:pointer}
 .prov-row:last-child{border-bottom:none}
 .prov-row:hover{background:var(--surface-2)}
@@ -372,30 +372,44 @@ button{font-family:inherit}
 .conv:hover{background:var(--surface-2)}
 .conv.active{background:var(--surface-2);box-shadow:inset 3px 0 0 var(--accent)}
 .conv-av{width:36px;height:36px;border-radius:10px;display:grid;place-items:center;background:var(--surface-2);
-  font-size:16px;flex:0 0 auto}
+  font-size:16px;flex:0 0 auto;color:var(--text-2)}
+.conv-av svg{width:18px;height:18px}
+.conv-av.sys{background:var(--accent-light);color:var(--accent)}
 .conv-main{min-width:0;flex:1 1 auto}
 .conv-name{font-weight:600;font-size:12.5px;display:flex;gap:6px;align-items:baseline;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .conv-name .hint{font-weight:400;font-size:10.5px;color:var(--muted);flex:0 0 auto}
 .conv-prev{color:var(--muted);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
 .conv-time{font-size:10.5px;color:var(--muted);flex:0 0 auto}
+.conv-del{flex:0 0 auto;width:26px;height:26px;padding:0;border-radius:8px;border:1px solid var(--border-strong);
+  background:var(--surface);color:var(--text-2);cursor:pointer;opacity:0;transition:opacity .12s;display:grid;place-items:center}
+.conv-del:hover{color:var(--red);border-color:var(--red)}
+.conv-del svg{width:13px;height:13px}
+.conv:hover .conv-del{opacity:1}
 .chat-thread{display:flex;flex-direction:column;min-height:0;background:var(--surface);border:1px solid var(--border);
   border-radius:14px;overflow:hidden}
-.thread-head{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--border);flex:0 0 auto}
-.thread-head b{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.thread-head .hint{margin-left:auto;font-size:11px;color:var(--muted)}
-.thread-back{display:none}
+.thread-head{position:relative;display:flex;align-items:center;justify-content:center;gap:8px;padding:10px 14px;
+  border-bottom:1px solid var(--border);flex:0 0 auto;min-height:48px}
+.thread-head b{font-size:13px;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:70%}
+.thread-head .hint{position:absolute;right:44px;top:50%;transform:translateY(-50%);font-size:11px;color:var(--muted);
+  max-width:38%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.thread-back{position:absolute;left:8px;top:50%;transform:translateY(-50%);display:none}
 .thread-body{flex:1 1 auto;min-height:0;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px}
 .thread-empty{margin:auto;text-align:center;color:var(--muted);font-size:12.5px;line-height:1.8;padding:24px}
 .thread-more{align-self:center;flex:0 0 auto}
+.msg-group{position:relative;display:flex;flex-direction:column;gap:8px}
+.msg-stamp{font-size:10.5px;color:var(--muted);text-align:center;font-variant-numeric:tabular-nums}
 .msg-row{display:flex;gap:8px;align-items:flex-end}
 .msg-row.me{flex-direction:row-reverse}
 .msg-av{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;background:var(--surface-2);
   font-size:13px;flex:0 0 auto;color:var(--text-2)}
+.msg-av svg{width:15px;height:15px}
+.msg-av.sys{background:var(--accent-light);color:var(--accent)}
 .msg-bubble{max-width:min(620px,76%);padding:9px 12px;border-radius:14px;font-size:13px;line-height:1.65;
   white-space:pre-wrap;word-break:break-word;background:var(--surface-2);color:var(--text);
   border:1px solid var(--border)}
 .msg-row.me .msg-bubble{background:var(--accent);color:#fff;border-color:transparent;border-bottom-right-radius:4px}
 .msg-row .msg-bubble{border-bottom-left-radius:4px}
+.msg-bubble.sys{color:var(--text-2);font-style:normal;max-width:min(560px,70%)}
 .msg-time{align-self:center;font-size:10.5px;color:var(--muted);margin:2px 0}
 
 /* 筛选按钮上的计数 */
@@ -409,7 +423,7 @@ button{font-family:inherit}
 .pager button{display:inline-flex;align-items:center;justify-content:center;padding:.35rem .95rem;background:var(--surface);
   border-radius:40px;border:1.5px solid var(--border-strong);cursor:pointer;font-size:.76rem;color:var(--text-2);
   transition:all .15s;font-weight:500}
-.pager button:hover{background:var(--surface-2);border-color:#cbd5e1}
+.pager button:hover{background:var(--surface-2);border-color:var(--border-strong)}
 .pager button:disabled{opacity:.25;cursor:not-allowed}
 .pager .pg-info{font-variant-numeric:tabular-nums;font-size:.76rem;color:var(--muted)}
 
@@ -469,6 +483,7 @@ button{font-family:inherit}
   .burger svg{width:18px;height:18px}
   .m-title{font-size:14.5px;font-weight:650;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .m-state{margin-left:auto}
+  .m-top>.pill-state{margin-left:auto}
   .m-mask{display:block;position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:39;opacity:0;
     pointer-events:none;transition:opacity .25s}
   .m-mask.show{opacity:1;pointer-events:auto}
@@ -506,7 +521,7 @@ button{font-family:inherit}
   .modal-foot .btn{flex:1 1 auto}
   .prov-row{flex-wrap:wrap}
   .prov-meta{margin-left:auto}
-  .prov-tools{width:100%;margin-left:2.2rem;justify-content:flex-end}
+  .prov-tools{flex:1 1 100%;width:auto;margin-left:0;justify-content:flex-end}
   .entry-head .time{margin-left:0;width:100%}
   .toolbar .count{margin-left:0;width:100%}
   .logline{flex-wrap:wrap;gap:2px 8px}
@@ -519,7 +534,10 @@ button{font-family:inherit}
   .chat-wrap.thread-open .chat-list{display:none}
   .chat-wrap.thread-open .chat-thread{display:flex}
   .thread-back{display:inline-flex}
+  .thread-head .hint{display:none}
+  .thread-head b{max-width:calc(100% - 170px)}
   .msg-bubble{max-width:84%}
+  .conv-del{opacity:.55}
   /* 群管理弹窗：内容多，移动端直接全屏（头部固定/正文滚动/底部贴底） */
   .modal-mask.mask-sheet{padding:0;align-items:stretch}
   .modal-sheet{width:100%;max-height:none;height:100dvh;border-radius:0;border:none;animation:modalInM .18s ease}

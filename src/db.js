@@ -695,6 +695,48 @@ export async function getConversationMessages(env, scopeId, { before = 0, limit 
   };
 }
 
+/** 系统消息（配置变更 / AI 切换 / 入群欢迎等）的统计 + 最后一条，用于会话列表置顶项 */
+export async function systemSummary(env) {
+  try {
+    const { results } = await env.DB.prepare("SELECT COUNT(*) AS n FROM chat_log WHERE kind = 'system'").all();
+    const { results: last } = await env.DB.prepare(
+      "SELECT created_at, user_content FROM chat_log WHERE kind = 'system' ORDER BY id DESC LIMIT 1"
+    ).all();
+    const first = (results && results[0]) || {};
+    const tail = (last && last[0]) || null;
+    return {
+      count: Number(first.n) || 0,
+      lastAt: tail ? tail.created_at : '',
+      lastText: tail ? tail.user_content : '',
+    };
+  } catch {
+    return { count: 0, lastAt: '', lastText: '' };
+  }
+}
+
+/** 系统消息分页（按时间升序返回） */
+export async function getSystemMessages(env, { before = 0, limit = 50 } = {}) {
+  const size = Math.min(Math.max(Number(limit) || 50, 1), 100);
+  const { results } = await env.DB.prepare(
+    "SELECT id, user_content, created_at FROM chat_log WHERE kind = 'system' AND id < ?1 ORDER BY id DESC LIMIT ?2"
+  )
+    .bind(Number(before) || 999999999, size)
+    .all();
+  const list = results || [];
+  return {
+    items: list.reverse().map((r) => ({ id: r.id, content: r.user_content, time: r.created_at })),
+    hasMore: list.length === size,
+  };
+}
+
+/** 删除整个会话的记录（群聊 / 私聊传 scope 指纹；系统消息传 'system'） */
+export async function deleteConversation(env, scopeId) {
+  const scope = String(scopeId || '').trim();
+  if (!scope) return 0;
+  const res = await env.DB.prepare('DELETE FROM chat_log WHERE scope_id = ?1').bind(scope).run();
+  return res.meta?.changes ?? 0;
+}
+
 /* ------------------------------ 群列表（后台「群管理」用） ------------------------------ */
 
 export async function upsertGroup(env, openid, source) {

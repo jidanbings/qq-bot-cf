@@ -4,11 +4,13 @@ import {
   cancelReminder,
   createSession,
   deleteSession,
+  deleteConversation,
   ensureKey,
   getAiProvider,
   getConfig,
   getConversationMessages,
   getSession,
+  getSystemMessages,
   initSchema,
   listAiProviders,
   listChatLogs,
@@ -22,6 +24,7 @@ import {
   resetEncryptedConfig,
   saveAiProviders,
   saveConfig,
+  systemSummary,
   toPublicConfig,
   upsertGroup,
 } from './db.js';
@@ -385,7 +388,18 @@ async function handleApi(request, env, url) {
 
     case '/api/conversations':
       if (method === 'GET') {
-        return jsonResult({ items: await listConversations(env, { limit: 100 }) });
+        return jsonResult({
+          items: await listConversations(env, { limit: 100 }),
+          system: await systemSummary(env),
+        });
+      }
+      break;
+
+    case '/api/system-messages':
+      if (method === 'GET') {
+        const before = Number(url.searchParams.get('before') || 0);
+        const limit = Number(url.searchParams.get('limit') || 50);
+        return jsonResult(await getSystemMessages(env, { before, limit }));
       }
       break;
 
@@ -398,6 +412,14 @@ async function handleApi(request, env, url) {
       const before = Number(url.searchParams.get('before') || 0);
       const limit = Number(url.searchParams.get('limit') || 50);
       return jsonResult(await getConversationMessages(env, scope, { before, limit }));
+    }
+
+    case '/api/conversations/delete': {
+      if (method !== 'POST') throw new HttpError(405, 'method_not_allowed', '请使用 POST');
+      const body = await readJson(request);
+      const scope = String(body?.scope || '').trim();
+      if (!/^[0-9a-zA-Z_-]{1,64}$/.test(scope)) throw new HttpError(400, 'invalid_scope', '会话标识格式不对');
+      return jsonResult({ scope, deleted: await deleteConversation(env, scope) });
     }
 
     case '/api/logs/clear':

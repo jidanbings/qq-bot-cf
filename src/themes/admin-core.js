@@ -17,6 +17,9 @@ var IX={
   key:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="4.5"/><path d="M11 12 20 3"/><path d="M16.5 6.5 19 9"/></svg>',
   gauge:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 18a9 9 0 1 1 17 0"/><line x1="12" y1="14" x2="16.5" y2="9.5"/></svg>',
   chat:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.4 8.4 0 0 1-8.5 8.5 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7A8.4 8.4 0 0 1 4 11.5 8.5 8.5 0 0 1 12.5 3 8.4 8.4 0 0 1 21 11.5z"/></svg>',
+  groups:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+  system:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
+  user:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
   shield:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>',
   spark:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M18 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"/></svg>',
   filter:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h18l-7 8v6l-4 2v-8z"/></svg>',
@@ -24,7 +27,8 @@ var IX={
   play:'<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M8 5v14l11-7z"/></svg>',
   stop:'<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>',
   trash:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>',
-  arrow:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>'
+  arrow:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>',
+  back:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>'
 };
 
 /**
@@ -148,7 +152,8 @@ function setPill(text,kind){
   var cls='pill-state'+(kind?' '+kind:'');
   var html='<i></i>'+esc(text);
   if(pill){pill.className=cls;pill.innerHTML=html;}
-  if(m){m.className=cls;m.innerHTML=html;}
+  // 保留 m-state 类名，否则移动端顶栏的 margin-left:auto 会失效（状态会贴在标题后面）
+  if(m){m.className=cls+' m-state';m.innerHTML=html;}
 }
 
 function setTopActions(html){
@@ -761,7 +766,7 @@ function saveConfig(restart){
 }
 
 /* ============================== 聊天记录（QQ 风格会话） ============================== */
-var chatState={scope:'',items:[],hasMore:false};
+var chatState={scope:'',kind:'',items:[],hasMore:false};
 
 function dayKey(d){
   return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate());
@@ -785,15 +790,22 @@ function shortTime(iso){
   if(dayKey(d)===dayKey(now))return pad2s(d.getHours())+':'+pad2s(d.getMinutes());
   return (d.getMonth()+1)+'/'+d.getDate();
 }
+function fullTime(iso){
+  var d=new Date(iso);
+  if(isNaN(d.getTime()))return '';
+  var now=new Date();
+  var hm=pad2s(d.getHours())+':'+pad2s(d.getMinutes())+':'+pad2s(d.getSeconds());
+  if(dayKey(d)===dayKey(now))return hm;
+  return pad2s(d.getMonth()+1)+'-'+pad2s(d.getDate())+' '+hm;
+}
 
 function chatShell(){
   return '<div class="chat-wrap" id="chat-wrap">'
     +'<div class="chat-list"><div class="chat-list-head"><b>会话</b><span class="hint" id="chat-count"></span>'
-    +'<button class="btn sm" id="chat-refresh" type="button">'+IX.refresh+'</button>'
-    +'<button class="btn sm danger" id="chat-clear" type="button">'+IX.trash+'</button></div>'
+    +'<button class="btn sm" id="chat-refresh" type="button">'+IX.refresh+'</button></div>'
     +'<div class="conv-list" id="conv-list"><p class="muted">加载中…</p></div></div>'
     +'<div class="chat-thread" id="chat-thread">'
-    +'<div class="thread-head"><button class="btn sm thread-back" id="chat-back" type="button">'+IX.arrow+'<span>返回</span></button>'
+    +'<div class="thread-head"><button class="btn sm thread-back" id="chat-back" type="button">'+IX.back+'<span>返回</span></button>'
     +'<b id="thread-title">对话</b><span class="hint" id="thread-meta"></span></div>'
     +'<div class="thread-body" id="thread-body"><div class="thread-empty">选择一个会话，查看你和机器人的完整对话</div></div>'
     +'</div></div>';
@@ -803,11 +815,23 @@ function convRowHtml(c){
   var kindTxt=c.kind==='c2c'?'私聊':'群聊';
   var prev=c.lastUser?('我：'+c.lastUser):(c.lastReply||'');
   return '<div class="conv" data-scope="'+esc(c.scopeId)+'" data-kind="'+esc(c.kind)+'">'
-    +'<span class="conv-av">'+(c.kind==='c2c'?'💬':'👥')+'</span>'
+    +'<span class="conv-av">'+(c.kind==='c2c'?IX.chat:IX.groups)+'</span>'
     +'<div class="conv-main"><div class="conv-name">'+esc(kindTxt)+' #'+esc(c.scopeId)
     +'<span class="hint">'+esc(String(c.count))+' 条</span></div>'
     +'<div class="conv-prev">'+esc(prev||'（无内容）')+'</div></div>'
-    +'<span class="conv-time">'+esc(shortTime(c.lastAt))+'</span></div>';
+    +'<span class="conv-time">'+esc(shortTime(c.lastAt))+'</span>'
+    +'<button class="conv-del" type="button" data-del="'+esc(c.scopeId)+'" title="删除这个会话">'+IX.trash+'</button></div>';
+}
+
+function sysConvRowHtml(s){
+  var prev=s&&s.lastText?s.lastText:'配置变更、AI 切换、入群欢迎等系统事件';
+  return '<div class="conv conv-sys" data-scope="system" data-kind="system">'
+    +'<span class="conv-av sys">'+IX.system+'</span>'
+    +'<div class="conv-main"><div class="conv-name">系统消息'
+    +(s&&s.count?'<span class="hint">'+esc(String(s.count))+' 条</span>':'')+'</div>'
+    +'<div class="conv-prev">'+esc(prev)+'</div></div>'
+    +'<span class="conv-time">'+esc(s&&s.lastAt?shortTime(s.lastAt):'')+'</span>'
+    +'<button class="conv-del" type="button" data-del="system" title="删除全部系统消息">'+IX.trash+'</button></div>';
 }
 
 function loadConversations(){
@@ -816,19 +840,16 @@ function loadConversations(){
   list.innerHTML='<p class="muted">加载中…</p>';
   return api('GET','/api/conversations').then(function(d){
     var items=(d&&d.items)||[];
-    if(!items.length){
-      list.innerHTML='<div class="thread-empty">还没有会话记录<br>机器人回复过消息后，这里会按会话分组显示</div>';
-      var c=$('chat-count'); if(c)c.textContent='';
-      var nav=$('nav-count'); if(nav)nav.textContent='0';
-      return;
-    }
-    var total=0;
+    var sys=(d&&d.system)||{count:0};
+    var total=Number(sys.count)||0;
     for(var i=0;i<items.length;i++)total+=Number(items[i].count)||0;
-    var h='';
+    var h=sysConvRowHtml(sys);
     for(var k=0;k<items.length;k++)h+=convRowHtml(items[k]);
     list.innerHTML=h;
-    var c2=$('chat-count'); if(c2)c2.textContent='共 '+items.length+' 个会话';
-    var nav2=$('nav-count'); if(nav2)nav2.textContent=total>999?'999+':String(total);
+    var c2=$('chat-count');
+    if(c2)c2.textContent=items.length?('共 '+items.length+' 个会话'):'';
+    var nav2=$('nav-count');
+    if(nav2)nav2.textContent=total>999?'999+':String(total);
     if(chatState.scope){
       var rows=list.querySelectorAll('.conv');
       for(var j=0;j<rows.length;j++)rows[j].classList.toggle('active',rows[j].getAttribute('data-scope')===chatState.scope);
@@ -838,11 +859,19 @@ function loadConversations(){
   });
 }
 
-function msgRowHtml(it){
-  var h='';
-  if(it.userContent)h+='<div class="msg-row me"><span class="msg-av">我</span><div class="msg-bubble">'+esc(it.userContent)+'</div></div>';
-  if(it.aiReply)h+='<div class="msg-row"><span class="msg-av">🤖</span><div class="msg-bubble">'+esc(it.aiReply)+'</div></div>';
-  return h;
+function exchangeHtml(it){
+  var h='<div class="msg-group" data-id="'+esc(String(it.id))+'">'
+    +'<div class="msg-stamp">'+esc(fullTime(it.time))+'</div>';
+  if(it.userContent)h+='<div class="msg-row me"><span class="msg-av">'+IX.user+'</span><div class="msg-bubble">'+esc(it.userContent)+'</div></div>';
+  if(it.aiReply)h+='<div class="msg-row"><span class="msg-av bot">'+IX.bot+'</span><div class="msg-bubble">'+esc(it.aiReply)+'</div></div>';
+  return h+'</div>';
+}
+
+function systemItemHtml(it){
+  return '<div class="msg-group" data-id="'+esc(String(it.id))+'">'
+    +'<div class="msg-stamp">'+esc(fullTime(it.time))+'</div>'
+    +'<div class="msg-row"><span class="msg-av sys">'+IX.system+'</span><div class="msg-bubble sys">'+esc(it.content)+'</div></div>'
+    +'</div>';
 }
 
 function renderThread(scrollBottom){
@@ -854,15 +883,12 @@ function renderThread(scrollBottom){
     h+='<button class="btn sm thread-more" id="thread-more" type="button">'+IX.refresh+'<span>加载更早</span></button>';
   }
   var prevDay='';
-  var prevTs=0;
   for(var i=0;i<items.length;i++){
     var it=items[i];
     var day=(it.time||'').slice(0,10);
-    if(day&&day!==prevDay){h+=daySepHtml(it.time);prevDay=day;prevTs=0;}
-    var ts=new Date(it.time).getTime();
-    if(!isNaN(ts)&&prevTs&&ts-prevTs>30*60000)h+='<div class="msg-time">'+esc(shortTime(it.time))+'</div>';
-    if(!isNaN(ts))prevTs=ts;
-    h+=msgRowHtml(it);
+    if(day&&day!==prevDay){h+=daySepHtml(it.time);prevDay=day;}
+    if(chatState.kind==='system')h+=systemItemHtml(it);
+    else h+=exchangeHtml(it);
   }
   body.innerHTML=h;
   if(scrollBottom)body.scrollTop=body.scrollHeight;
@@ -882,7 +908,9 @@ function loadThread(scope,before){
   var body=$('thread-body');
   var first=!before;
   if(first&&body)body.innerHTML='<div class="thread-empty">加载中…</div>';
-  var q='/api/conversations/messages?scope='+encodeURIComponent(scope)+(before?('&before='+before):'');
+  var q=scope==='system'
+    ? ('/api/system-messages'+(before?('?before='+before):''))
+    : ('/api/conversations/messages?scope='+encodeURIComponent(scope)+(before?('&before='+before):''));
   return api('GET',q).then(function(d){
     var items=(d&&d.items)||[];
     chatState.hasMore=!!(d&&d.hasMore);
@@ -906,8 +934,9 @@ function loadThread(scope,before){
   });
 }
 
-function openConversation(scope){
+function openConversation(scope,kind){
   chatState.scope=scope;
+  chatState.kind=kind||'';
   chatState.items=[];
   chatState.hasMore=false;
   var wrap=$('chat-wrap');
@@ -918,7 +947,7 @@ function openConversation(scope){
     for(var i=0;i<rows.length;i++)rows[i].classList.toggle('active',rows[i].getAttribute('data-scope')===scope);
   }
   var title=$('thread-title');
-  if(title)title.textContent='会话 #'+scope;
+  if(title)title.textContent=scope==='system'?'系统消息':('会话 #'+scope);
   var meta=$('thread-meta');
   if(meta)meta.textContent='';
   return loadThread(scope,0);
@@ -928,6 +957,7 @@ function closeChatThread(){
   var wrap=$('chat-wrap');
   if(wrap)wrap.classList.remove('thread-open');
   chatState.scope='';
+  chatState.kind='';
   var list=$('conv-list');
   if(list){
     var rows=list.querySelectorAll('.conv');
@@ -936,9 +966,33 @@ function closeChatThread(){
 }
 
 function onConvClick(e){
+  var delBtn=e.target&&e.target.closest?e.target.closest('.conv-del'):null;
+  if(delBtn){
+    e.stopPropagation();
+    deleteConversation(delBtn.getAttribute('data-del'));
+    return;
+  }
   var row=e.target&&e.target.closest?e.target.closest('.conv'):null;
   if(!row)return;
-  openConversation(row.getAttribute('data-scope'));
+  openConversation(row.getAttribute('data-scope'),row.getAttribute('data-kind'));
+}
+
+/** 删除整个会话（该会话的全部记录），不是删单条 */
+function deleteConversation(scope){
+  if(!scope)return;
+  var isSys=scope==='system';
+  var label=isSys?'全部系统消息':('会话 #'+scope);
+  if(!confirm('确定删除'+label+'？该会话的全部聊天记录都会被删除，不可撤销。'))return;
+  api('POST','/api/conversations/delete',{scope:scope}).then(function(d){
+    toast('已删除 '+((d&&d.deleted)||0)+' 条记录','ok');
+    if(chatState.scope===scope){
+      chatState.items=[];
+      closeChatThread();
+      var body=$('thread-body');
+      if(body)body.innerHTML='<div class="thread-empty">选择一个会话，查看你和机器人的完整对话</div>';
+    }
+    loadConversations();
+  }).catch(function(err){toast(err.message,'bad');});
 }
 
 function showLogs(){
@@ -950,23 +1004,10 @@ function showLogs(){
   $('wrap').innerHTML=chatShell();
   $('chat-back').addEventListener('click',closeChatThread);
   $('chat-refresh').addEventListener('click',function(){loadConversations();});
-  $('chat-clear').addEventListener('click',clearLogs);
   $('conv-list').addEventListener('click',onConvClick);
   loadConversations();
 }
 
-function clearLogs(){
-  if(!confirm('确定清空所有聊天记录？此操作不可撤销。'))return;
-  api('POST','/api/logs/clear',{}).then(function(d){
-    toast('已清空 '+(d&&d.deleted!=null?d.deleted:0)+' 条记录','ok');
-    chatState.scope='';
-    chatState.items=[];
-    var body=$('thread-body');
-    if(body)body.innerHTML='<div class="thread-empty">选择一个会话，查看你和机器人的完整对话</div>';
-    closeChatThread();
-    loadConversations();
-  }).catch(function(e){toast(e.message,'bad');});
-}
 /* ============================== AI 对话 ============================== */
 var aiState=[];
 var aiSeq=0;
