@@ -36,6 +36,9 @@ const EMOJIS = [
   '😴', '🥹', '😎', '👍', '👏', '🙏', '💪', '🤝', '🎉', '✨',
   '🔥', '💯', '🌟', '☕', '🌙', '🐟', '🍚',
 ];
+// 发图后配的一句话（AI 没写配图文案时兜底；像正常人那样图后还说一句）
+const IMAGE_CAPTIONS = ['画好啦，看看喜不喜欢～', '喏，画好了 ✨', '画出来啦，还满意吗？', '给你画好了，慢慢看～'];
+const MEME_CAPTIONS = ['（递上梗图）', '看图你就懂了', '这张太应景了', '来，接梗～'];
 
 function stripMentions(text) {
   return String(text ?? '').replace(MENTION_RE, '').trim();
@@ -1101,7 +1104,9 @@ export class QQBotDO {
       const genMatch = reply.match(/\[GEN_IMAGE\]\s*([\s\S]+)/);
       if (genMatch) {
         history.push({ role: 'assistant', content: '（已按要求生成并发送图片）' });
-        await this.handleImageGen({ isC2C, scopeId, msgId, prompt: genMatch[1].trim() });
+        // 标记前面如果写了话，就当作配图文案（图发完再发这句）
+        const caption = reply.slice(0, reply.indexOf('[GEN_IMAGE]')).trim();
+        await this.handleImageGen({ isC2C, scopeId, msgId, prompt: genMatch[1].trim(), caption });
         return;
       }
       // 兜底：AI 声称「生成好了」却漏了标记，用用户描述 + 回复内容补画
@@ -1192,7 +1197,7 @@ export class QQBotDO {
     const basePrompt = this.config.systemPrompt ||
       '你是一个友好、靠谱、乐于助人的QQ机器人助手。回答保持简洁、自然、口语化，用中文交流。';
     const genHint = this.config.imageGenModel
-      ? '\n\n【生图能力】你支持生成图片。当用户要求你画图、绘制或生成图片时，你必须只输出一行：[GEN_IMAGE] <具体的图片描述>，不要输出任何其他文字（不要说「生成好了」「马上画」之类）。系统会自动调用生图模型把图片发给用户。用户只是聊天、没有要求画图时正常回答。'
+      ? '\n\n【生图能力】你支持生成图片。当用户要求你画图、绘制或生成图片时，你必须只输出一行：[GEN_IMAGE] <具体的图片描述>。如果想配一句话（比如「画好啦」），写在标记**前面**，图片发完后会跟着发出去；不要写「生成好了」「马上画」这类空话。系统会自动调用生图模型把图片发给用户。用户只是聊天、没有要求画图时正常回答。'
       : '\n\n【注意】你没有生图能力，也没有图片生成工具。当用户要求画图时，如实说明「需要先在后台配置生图模型才能画」，绝对不要假装已经生成图片或说「生成好了」。';
     const toolHint =
       this.config.toolCalling !== '0'
@@ -1205,7 +1210,7 @@ export class QQBotDO {
           '\n- group_info：{} —— 查本群资料（仅群聊）' +
           '\n- group_state：{} —— 查机器人在本群的状态（仅群聊）' +
           '\n- mute_state：{} —— 查本群禁言状态（仅群聊）' +
-          '\n规则：一次只调用一个工具；**需要调用工具时，整条回复只能有这一行工具调用**，不要输出任何寒暄、确认或解释（系统会用工具结果自动回复用户）；能直接回答的问题不要调用工具；不要编造工具的执行结果；用户没有明确要求时不要调用工具。'
+          '\n规则：一次只调用一个工具；调用工具时不要写寒暄、确认或解释（系统会用工具结果自动回复用户）；**image / meme 这两个工具可以在工具行后面再写一句话**（作为配图文案，会跟在图片后面发出去），其它工具不要附加文字；能直接回答的问题不要调用工具；不要编造工具的执行结果；用户没有明确要求时不要调用工具。'
         : '';
     const memes = this.memesCache || [];
     const memeHint = memes.length
@@ -1603,26 +1608,31 @@ export class QQBotDO {
     return list.find((m) => m.name.includes(q) || q.includes(m.name)) || null;
   }
 
-  /** 发一张内置梗图（base64 直传，走官方富媒体图片消息） */
-  async sendMeme({ isC2C, scopeId, msgId, name }) {
+  /** 发一张内置梗图（base64 直传，走官方富媒体图片消息）；发完再补一句配文 */
+  async sendMeme({ isC2C, scopeId, msgId, name, caption }) {
     const meme = await this.pickMeme(name);
     if (!meme) return null;
     this.logger.info(`Meme: ${meme.name}`);
     try {
-      return await this.sendImage({
+      const sent = await this.sendImage({
         isC2C,
         scopeId,
         imageUrl: `data:image/jpeg;base64,${meme.data}`,
         msgId,
       });
+      if (sent) {
+        const line = String(caption || '').trim() || MEME_CAPTIONS[Math.floor(Math.random() * MEME_CAPTIONS.length)];
+        await this.sendReply({ isC2C, scopeId, content: line, msgId });
+      }
+      return sent;
     } catch (e) {
       this.logger.warn(`Meme send failed: ${e.message}`);
       return null;
     }
   }
 
-  /** /画 指令：调用生图模型（OpenAI 兼容 /images/generations），把图发回会话 */
-  async handleImageGen({ isC2C, scopeId, msgId, prompt }) {
+  /** /画 指令：调用生图模型（OpenAI 兼容 /images/generations），把图发回会话，再补一句配文 */
+  async handleImageGen({ isC2C, scopeId, msgId, prompt, caption }) {
     const model = String(this.config.imageGenModel || '').trim();
     const provider = (this.config.aiProviders || []).find(
       (p) => p && p.enabled !== 0 && p.baseUrl && p.apiKey
@@ -1667,6 +1677,9 @@ export class QQBotDO {
       const sent = await this.sendImage({ isC2C, scopeId, imageUrl: url, msgId });
       if (!sent) throw new Error('图片发送失败');
       this.logger.info('Image gen: sent');
+      // 图发完补一句，像正常人那样说句话（AI 写了配文就用它的）
+      const line = String(caption || '').trim() || IMAGE_CAPTIONS[Math.floor(Math.random() * IMAGE_CAPTIONS.length)];
+      await this.sendReply({ isC2C, scopeId, content: line, msgId });
     } catch (e) {
       this.logger.warn(`Image gen failed: ${e.message}`);
       await this.sendReply({
@@ -1908,6 +1921,8 @@ export class QQBotDO {
         name: String(parsed.name || parsed.tool || '').trim(),
         args: parsed.args && typeof parsed.args === 'object' ? parsed.args : {},
         text: head,
+        // 工具行后面写的话：发图类工具会把它当作「配图文案」发出去
+        tail: tail.slice(end + 1).trim(),
       };
     } catch {
       return null;
@@ -1920,14 +1935,14 @@ export class QQBotDO {
       if (name === 'image') {
         const prompt = String(call.args.prompt || '').trim();
         if (!prompt) return this.sendReply({ isC2C, scopeId, content: '画什么？给我个画面描述吧～', msgId });
-        return this.handleImageGen({ isC2C, scopeId, msgId, prompt });
+        return this.handleImageGen({ isC2C, scopeId, msgId, prompt, caption: call.tail });
       }
       if (name === 'meme') {
         const meme = await this.pickMeme(call.args.name);
         if (!meme) {
           return this.sendReply({ isC2C, scopeId, content: '梗图库里没找到这张～ 要不换一张？', msgId });
         }
-        const sent = await this.sendMeme({ isC2C, scopeId, msgId, name: meme.name });
+        const sent = await this.sendMeme({ isC2C, scopeId, msgId, name: meme.name, caption: call.tail });
         if (!sent) {
           return this.sendReply({ isC2C, scopeId, content: `梗图「${meme.name}」发送失败了，稍后再试～`, msgId });
         }
