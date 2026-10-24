@@ -11,6 +11,7 @@ import {
 } from './db.js';
 import { parseReminder, nextDueFrom } from './utils/reminder.js';
 import { normalizeFaceTags } from './utils/qq-face.js';
+import { applyMp3Gain } from './utils/mp3-gain.js';
 import {
   APP_VERSION,
   QQ_BASE,
@@ -1553,7 +1554,16 @@ export class QQBotDO {
     const clean = String(text || '').trim().slice(0, 300);
     if (!clean) return null;
     try {
-      const bytes = await this.synthVoice(clean, this.config.voiceLang || 'zh');
+      let bytes = await this.synthVoice(clean, this.config.voiceLang || 'zh');
+      // 音量增益（后台可选关 / +6dB / +9dB）：只改 MP3 global_gain，不重编码
+      const gainDb = Math.max(0, Math.min(12, Number(this.config.voiceGain || '6') || 0));
+      if (gainDb > 0) {
+        try {
+          bytes = applyMp3Gain(bytes, gainDb);
+        } catch (e) {
+          this.logger.warn(`MP3 gain skipped: ${e.message}`);
+        }
+      }
       const dataUri = `data:audio/mpeg;base64,${toBase64(bytes)}`;
       const sent = await this.sendMedia({ isC2C, scopeId, msgId, fileType: 3, source: dataUri, fileExt: 'mp3' });
       if (sent) {

@@ -19,6 +19,7 @@ export const CONFIG_FIELDS = {
   imageGenApiKey: { type: 'string', max: 256, secret: true },
   toolCalling: { type: 'flag' },
   voiceLang: { type: 'string', max: 8 },
+  voiceGain: { type: 'string', max: 4 },
   doVersion: { type: 'string', max: 32 },
 };
 
