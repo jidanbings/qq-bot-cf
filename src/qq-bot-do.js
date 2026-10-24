@@ -904,10 +904,11 @@ export class QQBotDO {
       const whenText =
         reminderIntent.whenText ||
         new Date(reminderIntent.dueAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+      const warn = isC2C ? '' : await this.proactiveWarning(scopeId);
       await this.sendReply({
         isC2C,
         scopeId,
-        content: `⏰ 好的，${whenText}提醒你：${reminderIntent.text}${reminderIntent.repeatRule ? '（以后按这个时间重复提醒）' : ''}`,
+        content: `⏰ 好的，${whenText}提醒你：${reminderIntent.text}${reminderIntent.repeatRule ? '（以后按这个时间重复提醒）' : ''}${warn}`,
         msgId,
       });
       this.logSystem(`新增定时提醒：${reminderIntent.text.slice(0, 60)} @ ${reminderIntent.dueAt}`);
@@ -1070,8 +1071,8 @@ export class QQBotDO {
     if (this.config.toolCalling !== '0') {
       const toolCall = this.extractToolCall(reply);
       if (toolCall) {
+        // 模型偶尔会在调用前加一句「好的，我这就去…」：只保留工具结果，避免一次回两条重复消息
         const head = toolCall.text;
-        if (head) await this.sendReply({ isC2C, scopeId, content: head, msgId });
         await this.runTool(toolCall, { isC2C, scopeId, key, msgId });
         history.push({ role: 'assistant', content: head || '（已执行工具）' });
         session.lastUsed = Date.now();
@@ -1152,7 +1153,7 @@ export class QQBotDO {
           '\n- group_info：{} —— 查本群资料（仅群聊）' +
           '\n- group_state：{} —— 查机器人在本群的状态（仅群聊）' +
           '\n- mute_state：{} —— 查本群禁言状态（仅群聊）' +
-          '\n规则：一次只调用一个工具；能直接回答的问题不要调用工具；不要编造工具的执行结果；用户没有明确要求时不要调用工具。'
+          '\n规则：一次只调用一个工具；**需要调用工具时，整条回复只能有这一行工具调用**，不要输出任何寒暄、确认或解释（系统会用工具结果自动回复用户）；能直接回答的问题不要调用工具；不要编造工具的执行结果；用户没有明确要求时不要调用工具。'
         : '';
     return basePrompt + genHint + toolHint;
   }
@@ -1691,6 +1692,37 @@ export class QQBotDO {
 
   /* ------------------------------ 定时提醒（AI 自主任务） ------------------------------ */
 
+  /** 主动消息（不带 msg_id）：返回详细错误，后台能看到失败原因 */
+  async sendProactive({ isC2C, scopeId, content }) {
+    const token = await this.getToken();
+    const sendUrl = isC2C
+      ? `${this.apiBase()}/v2/users/${scopeId}/messages`
+      : `${this.apiBase()}/v2/groups/${scopeId}/messages`;
+    const res = await fetch(sendUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `QQBot ${token}` },
+      body: JSON.stringify({ msg_type: 0, content: String(content).slice(0, 1500) }),
+      signal: AbortSignal.timeout(10000),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const code = data.code != null ? `code=${data.code} ` : '';
+      return { ok: false, error: `HTTP ${res.status} ${code}${String(data.message || '').slice(0, 120)}`.trim() };
+    }
+    return { ok: true, id: data.id || null };
+  }
+
+  /** 群聊主动消息需要「允许主动推送」：没开就在创建提醒时提前警告 */
+  async proactiveWarning(scopeId) {
+    try {
+      const st = await this.qqBotState(scopeId);
+      if (st && st.allow_proactive_msg === false) {
+        return '（⚠️ 这个群还没开启「允许主动推送」，到点可能发不出来，需要在群机器人管理后台打开）';
+      }
+    } catch {}
+    return '';
+  }
+
   /** 到点的提醒：主动消息发送；重复任务顺延，普通任务标记完成 */
   async fireDueReminders() {
     if (!this.isAlive()) return;
@@ -1699,15 +1731,23 @@ export class QQBotDO {
       const claimed = await claimReminder(this.env, r.id);
       if (!claimed) continue;
       const isC2C = !!r.is_c2c;
-      const sent = await this.sendReply({
+      // 群聊先看有没有主动推送权限，没有就直接记清楚原因，不白发一次请求
+      if (!isC2C) {
+        const st = await this.qqBotState(r.scope_id).catch(() => null);
+        if (st && st.allow_proactive_msg === false) {
+          await finishReminder(this.env, r.id, false, '群未开启「允许主动推送」，去群机器人管理后台开启');
+          this.logSystem(`提醒发送失败：群未开启主动推送（${String(r.text).slice(0, 40)}）`);
+          continue;
+        }
+      }
+      const sent = await this.sendProactive({
         isC2C,
         scopeId: r.scope_id,
         content: `⏰ 提醒：${r.text}`,
-        msgId: '',
-      }).catch(() => null);
-      if (!sent) {
-        await finishReminder(this.env, r.id, false, '主动消息发送失败（可能配额不足或不在群）');
-        this.logSystem(`提醒发送失败：${String(r.text).slice(0, 60)}`);
+      }).catch((e) => ({ ok: false, error: e.message }));
+      if (!sent.ok) {
+        await finishReminder(this.env, r.id, false, sent.error || '发送失败');
+        this.logSystem(`提醒发送失败：${String(r.text).slice(0, 40)}（${String(sent.error || '').slice(0, 80)}）`);
         continue;
       }
       if (r.repeat_rule) {
@@ -1808,10 +1848,11 @@ export class QQBotDO {
           repeatRule: parsed.repeatRule,
         });
         this.logSystem(`新增定时提醒（AI 工具）：${parsed.text.slice(0, 60)} @ ${parsed.dueAt}`);
+        const warn = isC2C ? '' : await this.proactiveWarning(scopeId);
         return this.sendReply({
           isC2C,
           scopeId,
-          content: `⏰ 好的，${parsed.whenText}提醒你：${parsed.text}${parsed.repeatRule ? '（重复提醒）' : ''}`,
+          content: `⏰ 好的，${parsed.whenText}提醒你：${parsed.text}${parsed.repeatRule ? '（重复提醒）' : ''}${warn}`,
           msgId,
         });
       }

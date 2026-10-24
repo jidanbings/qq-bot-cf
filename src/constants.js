@@ -1,6 +1,6 @@
 export const COOKIE_NAME = 'bot_session';
 
-export const APP_VERSION = '3.6.0-beta';
+export const APP_VERSION = '3.6.0-beta.1';
 
 export const LOGIN_LIMIT = { limit: 5, windowMs: 15 * 60 * 1000 };
 export const API_LIMIT = { limit: 120, windowMs: 60 * 1000 };
@@ -27,19 +27,19 @@ export const QQ_OPCODE = {
 };
 
 export const WS_CLOSE_REASON = {
-  4001: '无效的 opcode',
-  4002: '无效的 payload',
-  4006: '无效的 session id，需重新 identify',
-  4007: 'seq 错误',
-  4008: '发送 payload 过快，被限流',
-  4009: '连接过期，需 resume 重连',
-  4010: '无效的 shard',
-  4011: '需处理的 guild 过多',
-  4012: '无效的 version',
-  4013: '无效的 intent',
-  4014: 'intent 无权限（该事件未申请/未开通）',
-  4914: '机器人已下架，只允许连接沙箱环境',
-  4915: '机器人已封禁',
+  4001: '鏃犳晥鐨?opcode',
+  4002: '鏃犳晥鐨?payload',
+  4006: '鏃犳晥鐨?session id锛岄渶閲嶆柊 identify',
+  4007: 'seq 閿欒',
+  4008: '鍙戦€?payload 杩囧揩锛岃闄愭祦',
+  4009: '杩炴帴杩囨湡锛岄渶 resume 閲嶈繛',
+  4010: '鏃犳晥鐨?shard',
+  4011: '闇€澶勭悊鐨?guild 杩囧',
+  4012: '鏃犳晥鐨?version',
+  4013: '鏃犳晥鐨?intent',
+  4014: 'intent 鏃犳潈闄愶紙璇ヤ簨浠舵湭鐢宠/鏈紑閫氾級',
+  4914: '鏈哄櫒浜哄凡涓嬫灦锛屽彧鍏佽杩炴帴娌欑鐜',
+  4915: '鏈哄櫒浜哄凡灏佺',
 };
 
 export const WS_FATAL_CLOSE = new Set([4001, 4002, 4010, 4011, 4012, 4013, 4014, 4914, 4915]);
