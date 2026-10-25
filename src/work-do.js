@@ -2,7 +2,7 @@
  * AI 工作区 Durable Object：一个会话一个实例（idFromName('group:<id>' / 'c2c:<id>')）。
  *
  * 同时负责「工具执行」（生图 / 梗图 / 语音 / 提醒 / 查群，由内部 ToolEngine 完成）
- * 和「工作区」（`/do <任务>` 的任务清单 / 笔记）。，AI 可以维护
+ * 和「工作区」（`/工作 <任务>` 的任务清单 / 笔记）。，AI 可以维护
  * 任务清单（task.add / task.done）和笔记（note），状态存在 DO 自己的存储里，
  * 同时往 D1 的 workspaces 表写一份索引，后台「AI 工作区」页据此管理。
  */

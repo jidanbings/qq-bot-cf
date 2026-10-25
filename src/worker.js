@@ -23,6 +23,8 @@ import {
   listReminders,
   listWorkspaces,
   deleteWorkspace,
+  listSandboxes,
+  deleteSandbox,
   normalizeUrl,
   purgeExpiredSessions,
   randomHex,
@@ -278,7 +280,8 @@ async function handleApi(request, env, url) {
     case '/api/status': {
       if (method === 'GET') {
         const data = await callBot(env, 'status');
-        return jsonResult({ ...(data || {}), workerVersion: APP_VERSION });
+        const dos = await doStatuses(env, data);
+        return jsonResult({ ...(data || {}), workerVersion: APP_VERSION, dos });
       }
       break;
     }
@@ -553,6 +556,51 @@ async function handleApi(request, env, url) {
       return jsonResult({ openid, memberOpenid, op });
     }
 
+    /* -------- AiDO 沙箱 -------- */
+
+    case '/api/sandboxes': {
+      if (method !== 'GET') throw new HttpError(405, 'method_not_allowed', '请使用 GET');
+      const rows = await listSandboxes(env);
+      const items = [];
+      for (const r of rows) {
+        items.push({
+          scope: r.scope,
+          scopeMasked: await maskId(r.scope),
+          kind: r.kind,
+          runs: r.runs,
+          files: r.files,
+          lastTask: r.last_task || '',
+          updatedAt: r.updated_at,
+        });
+      }
+      return jsonResult({ items });
+    }
+
+    case '/api/sandboxes/detail': {
+      if (method !== 'POST') throw new HttpError(405, 'method_not_allowed', '请使用 POST');
+      const body = await readJson(request);
+      const scope = String(body?.scope || '');
+      if (!scope) throw new HttpError(400, 'invalid_scope', '缺少 scope');
+      if (!env.AIDO) throw new HttpError(503, 'no_aido', 'AiDO 未绑定');
+      const stub = env.AIDO.get(env.AIDO.idFromName(scope));
+      const res = await stub.fetch('https://aido/state', { method: 'POST', body: '{}' });
+      const state = await res.json();
+      return jsonResult({ scopeMasked: await maskId(scope), ...state });
+    }
+
+    case '/api/sandboxes/clear': {
+      if (method !== 'POST') throw new HttpError(405, 'method_not_allowed', '请使用 POST');
+      const body = await readJson(request);
+      const scope = String(body?.scope || '');
+      if (!scope) throw new HttpError(400, 'invalid_scope', '缺少 scope');
+      if (env.AIDO) {
+        const stub = env.AIDO.get(env.AIDO.idFromName(scope));
+        await stub.fetch('https://aido/reset', { method: 'POST', body: '{}' });
+      }
+      await deleteSandbox(env, scope);
+      return jsonResult({ cleared: true });
+    }
+
     /* -------- AI 工作区 -------- */
 
     case '/api/workspaces': {
@@ -696,6 +744,31 @@ const ICON_ROUTES = {
   '/favicon-32.png': { type: 'image/png', body: () => base64Bytes(FAVICON_PNG_32) },
   '/apple-touch-icon.png': { type: 'image/png', body: () => base64Bytes(APPLE_TOUCH_PNG) },
 };
+
+/** 汇总各 Durable Object 的绑定与实例情况（给后台「连接详情」用） */
+async function doStatuses(env, data) {
+  const count = async (sql) => {
+    try {
+      const row = await env.DB.prepare(sql).first();
+      return row ? Number(row.n) : null;
+    } catch {
+      return null;
+    }
+  };
+  const workN = await count('SELECT COUNT(*) AS n FROM workspaces');
+  const sandboxN = await count('SELECT COUNT(*) AS n FROM sandboxes');
+  // chat_log 里出现过的会话数 ≈ ChatDO 实例数（按需创建，闲置会休眠）
+  const chatN = await count('SELECT COUNT(DISTINCT scope_id) AS n FROM chat_log');
+  const bound = (ns) => !!(ns && typeof ns.idFromName === 'function');
+  const running = !!(data && data.running);
+  return [
+    { name: 'QQ_BOT', cls: 'QQBotDO', unit: '每版本 1 个', instances: 1, state: running ? '运行中' : '已停止', ok: running, note: '网关连接 / 消息分发' },
+    { name: 'RATE_LIMITER', cls: 'RateLimiter', unit: '按 IP 创建', instances: null, state: bound(env.RATE_LIMITER) ? '已绑定' : '未绑定', ok: bound(env.RATE_LIMITER), note: '登录 / 接口限流' },
+    { name: 'CHAT', cls: 'ChatDO', unit: '每会话 1 个', instances: chatN, state: bound(env.CHAT) ? '已绑定' : '未绑定', ok: bound(env.CHAT), note: '对话历史 + 模型调用' },
+    { name: 'WORK', cls: 'WorkDO', unit: '每会话 1 个', instances: workN, state: bound(env.WORK) ? '已绑定' : '未绑定', ok: bound(env.WORK), note: '工具执行 + /工作 任务清单' },
+    { name: 'AIDO', cls: 'AiDO', unit: '每会话 1 个', instances: sandboxN, state: bound(env.AIDO) ? '已绑定' : '未绑定', ok: bound(env.AIDO), note: '/沙箱 隔离沙箱' },
+  ];
+}
 
 async function handle(request, env) {
   const url = new URL(request.url);

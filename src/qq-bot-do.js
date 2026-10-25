@@ -906,6 +906,14 @@ export class QQBotDO {
               '- /菜单 —— 弹出按钮面板',
               '- /撤回 —— 撤回我上一条消息',
               '- /帮助 —— 显示本帮助',
+              '',
+              '**🗂 工作区**',
+              '/工作 帮我整理这周的待办 —— AI 在工作区里执行任务（可维护清单 / 笔记）',
+              '/工作 列表 —— 查看任务与笔记；/工作 清空 —— 重置',
+              '',
+              '**🧪 沙箱**',
+              '/沙箱 帮我建个文件整理需求 —— AI 在隔离沙箱里干活（只能动它自己的虚拟文件）',
+              '/沙箱 文件 —— 查看沙箱文件；/沙箱 清空 —— 重置',
             ].join('\n')
           : [
               '🤖 指令帮助',
@@ -916,8 +924,8 @@ export class QQBotDO {
               '😄 表情：/梗图 随机梗图，/梗图 名字 指定，/表情 随机 emoji',
               '🔊 语音：/语音 你好呀 —— 内置 TTS 合成语音',
               '🧰 指令：/菜单 弹出按钮面板 · /撤回 撤回我上一条 · /帮助 看这条',
-              '🗂 工作区：/do 帮我整理待办 —— AI 在工作区里执行任务（可维护清单/笔记），/do 列表 查看',
-              '🧪 沙箱：/ai 帮我写个文件并整理 —— AI 在隔离沙箱里干活（只能动它自己的虚拟文件）',
+              '🗂 工作区：/工作 帮我整理待办 —— AI 在工作区里执行任务（可维护清单/笔记），/工作 列表 查看',
+              '🧪 沙箱：/沙箱 帮我写个文件并整理 —— AI 在隔离沙箱里干活（只能动它自己的虚拟文件）',
             ].join('\n'),
       });
       return;
@@ -1033,14 +1041,14 @@ export class QQBotDO {
       return;
     }
 
-    // /do <任务>：在独立的 AI 工作区 DO 里执行（任务清单 / 笔记 / 多步任务）
-    if (/^\/?(do|工作区)(\s|$)/i.test(content)) {
+    // /工作 <任务>：在独立的 AI 工作区 DO 里执行（任务清单 / 笔记 / 多步任务）
+    if (/^\/?(工作|工作区|do)(\s|$)/i.test(content)) {
       await this.handleWorkspaceCommand({ isC2C, scopeId, msgId, content, userId });
       return;
     }
 
-    // /ai <任务>：AiDO 沙箱（最高自由度，但只能在它自己的虚拟文件系统里活动）
-    if (/^\/?(ai|沙箱|sandbox)(\s|$)/i.test(content)) {
+    // /沙箱 <任务>：AiDO 沙箱（最高自由度，但只能在它自己的虚拟文件系统里活动）
+    if (/^\/?(沙箱|ai|sandbox)(\s|$)/i.test(content)) {
       await this.handleAiSandbox({ isC2C, scopeId, msgId, content, userId });
       return;
     }
@@ -1432,7 +1440,7 @@ export class QQBotDO {
     return { ok: !!(out && out.ok), note: (out && out.note) || '' };
   }
 
-  /** /ai <任务>：在 AiDO 沙箱里执行（最高自由度，但只能动沙箱自己的文件） */
+  /** /沙箱 <任务>：在 AiDO 沙箱里执行（最高自由度，但只能动沙箱自己的文件） */
   async handleAiSandbox({ isC2C, scopeId, msgId, content, userId }) {
     const ns = this.env && this.env.AIDO;
     if (!ns || typeof ns.idFromName !== 'function') {
@@ -1450,7 +1458,7 @@ export class QQBotDO {
       if (!res.ok) throw new Error(`AiDO HTTP ${res.status}`);
       return res.json();
     };
-    const arg = content.replace(/^\/?(ai|沙箱|sandbox)\s*/i, '').trim();
+    const arg = content.replace(/^\/?(沙箱|ai|sandbox)\s*/i, '').trim();
 
     if (!arg || /^(帮助|help|\?)$/i.test(arg)) {
       let st = null;
@@ -1459,9 +1467,9 @@ export class QQBotDO {
       } catch {}
       const lines = [
         '🧪 AiDO 沙箱',
-        '/ai <任务> —— 让 AI 在隔离沙箱里干活（可以自己建文件、写笔记、做多步任务）',
-        '/ai 文件 —— 看沙箱里的文件',
-        '/ai 清空 —— 清空沙箱',
+        '/沙箱 <任务> —— 让 AI 在隔离沙箱里干活（可以自己建文件、写笔记、做多步任务）',
+        '/沙箱 文件 —— 看沙箱里的文件',
+        '/沙箱 清空 —— 清空沙箱',
         '边界：只能读写它自己的虚拟文件，不能发消息、不能联网、不能碰其他 DO。',
       ];
       if (st && st.files && st.files.length) lines.push(`当前文件：${st.files.length} 个，已执行 ${st.runs || 0} 次`);
@@ -1486,12 +1494,14 @@ export class QQBotDO {
       (p) => p && p.enabled !== 0 && p.baseUrl && p.apiKey && p.model
     );
     if (!providers.length) {
-      await this.sendReply({ isC2C, scopeId, content: '还没配置 AI，去后台「AI 对话」加一个再 /ai。', msgId });
+      await this.sendReply({ isC2C, scopeId, content: '还没配置 AI，去后台「AI 对话」加一个再 /沙箱。', msgId });
       return;
     }
     if (isC2C && msgId) this.state.waitUntil(this.sendTyping({ scopeId, msgId }));
     const out = await callDo('/run', {
       task: arg,
+      scope: key,
+      kind: isC2C ? 'c2c' : 'group',
       systemPrompt: this.config.systemPrompt || '你是一个靠谱、务实的 QQ 机器人助手。',
       providers,
     });
@@ -1515,7 +1525,7 @@ export class QQBotDO {
     });
   }
 
-  /* ------------------------------ AI 工作区（/do） ------------------------------ */
+  /* ------------------------------ AI 工作区（/工作） ------------------------------ */
 
   async handleWorkspaceCommand({ isC2C, scopeId, msgId, content, userId }) {
     const ns = this.env && (this.env.WORK || this.env.WORKSPACE);
@@ -1539,7 +1549,7 @@ export class QQBotDO {
       if (!res.ok) throw new Error(`工作区 HTTP ${res.status}`);
       return res.json();
     };
-    const arg = content.replace(/^\/?(do|工作区)\s*/i, '').trim();
+    const arg = content.replace(/^\/?(工作|工作区|do)\s*/i, '').trim();
 
     if (!arg || /^(帮助|help|\?)$/i.test(arg)) {
       let st = null;
@@ -1548,9 +1558,9 @@ export class QQBotDO {
       } catch {}
       const lines = [
         '🗂 AI 工作区',
-        '/do <任务> —— 把任务交给工作区里的 AI 执行（它可以维护任务清单和笔记）',
-        '/do 列表 —— 看当前任务与笔记',
-        '/do 清空 —— 清空这个会话的工作区',
+        '/工作 <任务> —— 把任务交给工作区里的 AI 执行（它可以维护任务清单和笔记）',
+        '/工作 列表 —— 看当前任务与笔记',
+        '/工作 清空 —— 清空这个会话的工作区',
       ];
       if (st && st.tasks && st.tasks.length) {
         lines.push(`当前：${st.tasks.length} 条任务（已完成 ${st.tasks.filter((x) => x.done).length} 条）`);
@@ -1581,7 +1591,7 @@ export class QQBotDO {
       (p) => p && p.enabled !== 0 && p.baseUrl && p.apiKey && p.model
     );
     if (!providers.length) {
-      await this.sendReply({ isC2C, scopeId, content: '还没配置 AI，去后台「AI 对话」加一个再 /do。', msgId });
+      await this.sendReply({ isC2C, scopeId, content: '还没配置 AI，去后台「AI 对话」加一个再 /工作。', msgId });
       return;
     }
 
@@ -1810,6 +1820,12 @@ export class QQBotDO {
               buttons: [
                 button('↩️ 撤回上一条', { data: '/撤回' }),
                 button('📖 项目主页', { url: 'https://github.com/jidanbings/qq-bot-cf' }),
+              ],
+            },
+            {
+              buttons: [
+                button('🗂 我的任务', { data: '工作 列表' }),
+                button('🧪 沙箱文件', { data: '沙箱 文件' }),
               ],
             },
           ],

@@ -77,6 +77,14 @@ button{font-family:inherit}
 .side-links button#logout:hover{background:var(--red-soft);color:var(--red)}
 .side-links svg{width:14px;height:14px}
 
+.do-list{margin-top:12px;border-top:1px solid var(--border);padding-top:10px;display:flex;flex-direction:column;gap:6px}
+.do-title{font-size:12px;color:var(--muted);margin-bottom:2px}
+.do-row{display:flex;align-items:center;gap:8px;font-size:12px;flex-wrap:wrap}
+.do-row b{font-size:12px}
+.do-row .do-meta{color:var(--muted);font-size:11px}
+.do-row .do-state{margin-left:auto;font-size:11px;padding:1px 8px;border-radius:999px;background:var(--surface-2);color:var(--muted)}
+.do-row .do-state.ok{color:#0e7490}
+.do-row .do-state.warn{color:#b45309}
 .ws-row{display:flex;align-items:center;gap:.6rem;padding:.55rem .7rem;border:1px solid var(--border);border-radius:10px;margin-bottom:.5rem;background:var(--surface)}
 .ws-row .ws-main{flex:1;min-width:0}
 .ws-row b{font-size:.8rem}
@@ -564,6 +572,17 @@ button{font-family:inherit}
 }
 @keyframes modalInM{from{opacity:0;transform:translateY(22px)}to{opacity:1;transform:none}}
 
+@media (max-width:600px){
+  .card>.card-head{flex-wrap:wrap;gap:8px}
+  .card>.card-head h3{flex:1 1 auto}
+  .card>.card-head .hint{order:3;width:100%;margin-left:0;line-height:1.6}
+  .card>.card-head .btn{order:2;flex:0 0 auto}
+  .ws-row{flex-wrap:wrap;align-items:flex-start}
+  .ws-row .ws-main{flex:1 1 100%}
+  .ws-row .prov-tools{flex:1 1 100%;margin-left:0;justify-content:flex-end}
+  .ws-tags{gap:.3rem}
+}
+
 @media (prefers-reduced-motion:reduce){
   *{animation-duration:.01ms !important;animation-iteration-count:1 !important;transition-duration:.01ms !important}
 }
@@ -575,6 +594,7 @@ const SVG = (paths) =>
   '</svg>';
 
 export const ICONS_A = {
+  sandbox: SVG('<path d="M9 3h6v4l4 8a3 3 0 0 1-2.7 4.4H7.7A3 3 0 0 1 5 15l4-8z"/><line x1="9" y1="3" x2="9" y2="7"/><line x1="15" y1="3" x2="15" y2="7"/><line x1="8" y1="14" x2="16" y2="14"/>'),
   workspace: SVG('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M8 13h8"/><path d="M8 16h5"/>'),
   status: SVG('<path d="M3 12h4l3 8 4-16 3 8h4"/>'),
   config: SVG(
@@ -623,8 +643,8 @@ ${CSS_A}
     <div class="nav-label">群管理</div>
     <div class="tabs">
       <a href="#groups" data-tab="groups">${ICONS_A.groups}<span>群管理</span></a>
-      <a href="#reminders" data-tab="reminders">${ICONS_A.reminders}<span>定时任务</span></a>
-      <a href="#workspace" data-tab="workspace">${ICONS_A.workspace}<span>AI 工作区</span></a>
+      <a href="#workspace" data-tab="workspace">${ICONS_A.workspace}<span>任务与工作区</span></a>
+      <a href="#sandbox" data-tab="sandbox">${ICONS_A.sandbox}<span>沙箱（AiDO）</span></a>
     </div>
     <div class="nav-label">数据</div>
     <div class="tabs">

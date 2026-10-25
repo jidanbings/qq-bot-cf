@@ -175,7 +175,7 @@ export class AiDO {
     );
   }
 
-  async run({ task, systemPrompt, providers }) {
+  async run({ task, systemPrompt, providers, scope, kind }) {
     const sb = await this.load();
     const basePrompt = String(systemPrompt || '') + AIDO_ENV_RULES + renderFiles(sb);
     const messages = [
@@ -218,12 +218,30 @@ export class AiDO {
     sb.log.push({ task: String(task).slice(0, 120), reply: String(reply).slice(0, 160), at: Date.now(), steps: steps + 1 });
     if (sb.log.length > 20) sb.log.shift();
     await this.save(sb);
+    await this.syncIndex(scope, kind, sb, task);
     return {
       reply: reply || '（任务处理完了，但没有给出正文）',
       steps: steps + 1,
       files: Object.keys(sb.files).length,
       runs: sb.runs,
     };
+  }
+
+  async syncIndex(scope, kind, sb, lastTask) {
+    try {
+      if (!scope || !this.env || !this.env.DB) return;
+      const { upsertSandbox } = await import('./db.js');
+      await upsertSandbox(this.env, {
+        scope,
+        kind,
+        runs: sb.runs,
+        files: Object.keys(sb.files).length,
+        lastTask,
+        updatedAt: sb.updatedAt,
+      });
+    } catch (e) {
+      console.warn('[AIDO] index sync failed:', e && e.message);
+    }
   }
 
   async getState() {

@@ -130,7 +130,8 @@ var META={
   groups:{title:'群管理',crumb:'管理 / 群管理'},
   reminders:{title:'定时任务',crumb:'管理 / 定时任务'},
   logs:{title:'聊天记录',crumb:'数据 / 聊天记录'},
-  workspace:{title:'AI 工作区',crumb:'管理 / AI 工作区'}
+  workspace:{title:'任务与工作区',crumb:'管理 / 任务与工作区'},
+  sandbox:{title:'沙箱',crumb:'管理 / 沙箱（AiDO）'}
 };
 var currentTab='status';
 
@@ -331,6 +332,7 @@ function statusSkeleton(){
     +'<dl class="dl" id="details">'
     +skDetailRows(6)
     +'</dl>'
+    +'<div class="do-list" id="dos"></div>'
     +'<p class="tip"><b>会话配额统计的是登录网关的次数</b>，不是聊天条数：长连接在线、心跳、收发消息都不消耗；只有新建会话（IDENTIFY）才 +1，断线重连走 RESUME 不消耗。</p></div>';
 
   h+='<div class="card"><div class="card-head"><h3>运行日志</h3><span class="hint">最近 30 条 · 本地时间</span></div>'
@@ -406,11 +408,10 @@ function paintStatus(s){
     var wv=s.workerVersion||'';
     var dv=s.version||'';
     var sameVer=!!(wv&&dv&&wv===dv);
-    var verTxt='Worker '+(wv?'v'+wv:'未上报')+' · DO '+(dv?'v'+dv:'未上报');
+    var verTxt=(s.sandbox?'沙箱环境':'正式环境')+' · Worker '+(wv?'v'+wv:'未上报')+' / DO '+(dv?'v'+dv:'未上报');
     if(!sameVer&&wv&&dv)verTxt+='（点「立即切换版本」可马上生效）';
     var rows=[
-      ['版本',verTxt,sameVer?'ok':'warn'],
-      ['运行环境',s.sandbox?'沙箱环境':'正式环境',''],
+      ['运行环境与版本',verTxt,sameVer?'ok':'warn'],
       ['API 域名',s.apiBase||'—',''],
       ['会话 ID',s.sessionId||'尚未建立（还没成功登录过）',''],
       ['活跃模型',s.aiModel||'未选择',s.aiModel?'ok':'bad'],
@@ -425,6 +426,18 @@ function paintStatus(s){
       dh+='<dt>'+esc(rows[i][0])+'</dt><dd class="'+rows[i][2]+'">'+esc(rows[i][1])+'</dd>';
     }
     d.innerHTML=dh;
+    var dbox=$('dos');
+    if(dbox){
+      var ds=s.dos||[];
+      var dh2='<div class="do-title">耐用对象（Durable Objects）</div>';
+      for(var k=0;k<ds.length;k++){
+        var it=ds[k];
+        var inst=it.instances==null?'按需':(it.instances+' 个');
+        dh2+='<div class="do-row"><b>'+esc(it.name)+'</b><span class="do-meta">'+esc(it.cls)+' · '+esc(it.unit)+' · '+inst+' · '+esc(it.note||'')+'</span>'
+          +'<span class="do-state '+(it.ok?'ok':'warn')+'">'+esc(it.state)+'</span></div>';
+      }
+      dbox.innerHTML=ds.length?dh2:'';
+    }
   }
   var dHint=$('detail-hint');
   if(dHint)dHint.textContent='更新于 '+fmtClock(now);
@@ -1393,19 +1406,117 @@ function onPresetClick(e){
 
 /* ------------------------------ AI 工作区 ------------------------------ */
 
+/* ------------------------------ AiDO 沙箱管理 ------------------------------ */
+
+function showSandbox(){
+  stopStatusTimer();
+  rendered=false;
+  setActive('sandbox');
+  setTopActions('');
+  setPill('沙箱','');
+  $('wrap').innerHTML='<div class="card"><div class="card-head"><h3>沙箱（AiDO）</h3>'
+    +'<span class="hint">/沙箱 让 AI 在隔离沙箱里干活，这里看每个会话的沙箱文件</span>'
+    +'<button class="btn sm" id="b-sb-refresh" type="button">'+IX.refresh+'<span>刷新</span></button></div>'
+    +'<p class="muted">沙箱是独立 DO：AI 只能读写它自己的虚拟文件（最多 20 个 / 单文件 8KB），<b>不能发消息、不能联网、不能碰其他 DO</b>。</p>'
+    +'<div id="sb-list"><div class="sk-field"><span class="sk-bar sk-w60"></span></div></div></div>';
+  var btn=$('b-sb-refresh');
+  if(btn)btn.addEventListener('click',loadSandboxes);
+  loadSandboxes();
+}
+
+function loadSandboxes(){
+  var box=$('sb-list');
+  if(box)box.innerHTML='<div class="sk-field"><span class="sk-bar sk-w60"></span></div>';
+  api('GET','/api/sandboxes').then(function(d){
+    renderSandboxes((d&&d.items)||[]);
+  }).catch(function(e){
+    if(box)box.innerHTML='<p class="error-text">'+esc(e.message)+'</p>';
+  });
+}
+
+function renderSandboxes(items){
+  var box=$('sb-list');
+  if(!box)return;
+  if(!items.length){
+    box.innerHTML='<p class="muted">还没有沙箱。在群里 @机器人 发 <b>/沙箱 帮我建个文件…</b> 就会创建。</p>';
+    return;
+  }
+  var h='';
+  for(var i=0;i<items.length;i++){
+    var it=items[i];
+    h+='<div class="ws-row" data-scope="'+esc(it.scope)+'">'
+      +'<div class="ws-main"><b>'+esc(it.scopeMasked||'')+'</b>'
+      +'<small>'+esc(it.lastTask||'（还没执行过任务）')+'</small>'
+      +'<div class="ws-tags"><span class="ws-tag">'+(it.kind==='c2c'?'单聊':'群聊')+'</span>'
+      +'<span class="ws-tag">执行 '+esc(String(it.runs||0))+' 次</span>'
+      +'<span class="ws-tag">文件 '+esc(String(it.files||0))+' 个</span>'
+      +'<span class="ws-tag">'+esc(it.updatedAt?fullTime(it.updatedAt):'')+'</span></div></div>'
+      +'<div class="prov-tools"><button class="btn sm" type="button" data-sb="detail">查看</button>'
+      +'<button class="btn sm" type="button" data-sb="clear">清空</button></div></div>';
+  }
+  box.innerHTML=h;
+  if(!box.__sbBound){ box.__sbBound=true; box.addEventListener('click',onSandboxClick); }
+}
+
+function onSandboxClick(e){
+  var btn=e.target&&e.target.closest?e.target.closest('button[data-sb]'):null;
+  if(!btn)return;
+  var row=btn.closest('.ws-row');
+  if(!row)return;
+  var scope=row.getAttribute('data-scope')||'';
+  var act=btn.getAttribute('data-sb');
+  if(act==='clear'){
+    if(!confirm('清空这个沙箱里的文件？'))return;
+    api('POST','/api/sandboxes/clear',{scope:scope}).then(function(){
+      toast('已清空');
+      loadSandboxes();
+    }).catch(function(err){ toast(err.message,'bad'); });
+  } else if(act==='detail'){
+    api('POST','/api/sandboxes/detail',{scope:scope}).then(function(d){
+      openSandboxDetail(d);
+    }).catch(function(err){ toast(err.message,'bad'); });
+  }
+}
+
+function openSandboxDetail(d){
+  var files=(d.files||[]).length?d.files.map(function(f){return '<li>· '+esc(f.path)+'（'+esc(String(f.bytes))+'B）</li>';}).join(''):'<li class="muted">（空）</li>';
+  var m=document.getElementById('sb-modal-mask');
+  if(!m){
+    m=document.createElement('div');
+    m.className='modal-mask';
+    m.id='sb-modal-mask';
+    m.innerHTML='<div class="modal" role="dialog" aria-modal="true"><div class="modal-head"><h3>沙箱文件</h3>'
+      +'<button class="modal-x" type="button" id="sb-modal-x" aria-label="关闭">×</button></div>'
+      +'<div class="modal-body ws-detail" id="sb-detail-body"></div></div>';
+    document.body.appendChild(m);
+    m.addEventListener('click',function(ev){
+      if(ev.target===m||ev.target.id==='sb-modal-x')m.hidden=true;
+    });
+  }
+  $('sb-detail-body').innerHTML='<div class="muted">'+esc(d.scopeMasked||'')+'</div>'
+    +'<h4>文件</h4><ul>'+files+'</ul>'
+    +'<h4>执行次数</h4><div class="muted">'+esc(String(d.runs||0))+' 次</div>';
+  m.hidden=false;
+}
+
 function showWorkspace(){
   stopStatusTimer();
   rendered=false;
   setActive('workspace');
-  setTopActions('<button class="btn sm" id="b-ws-refresh" type="button">'+IX.refresh+'<span>刷新</span></button>');
-  setPill('AI 工作区','');
-  $('wrap').innerHTML='<div class="card"><div class="card-head"><h3>AI 工作区</h3>'
-    +'<span class="hint">/do 让 AI 在独立 DO 里干活，这里看每个会话的任务与笔记</span></div>'
-    +'<p class="muted">用法：群里 @机器人 发 <b>/do 帮我整理这周要做的事</b>；AI 会把任务记进工作区，之后可以 <b>/do 列表</b> 查看。</p>'
-    +'<div id="ws-list"><div class="sk-field"><span class="sk-bar sk-w60"></span></div></div></div>';
+  setTopActions('');
+  setPill('任务与工作区','');
+  $('wrap').innerHTML='<div class="card"><div class="card-head"><h3>任务与工作区</h3>'
+    +'<span class="hint">/工作 让 AI 在独立 DO 里干活；下方是定时任务</span>'
+    +'<button class="btn sm" id="b-ws-refresh" type="button">'+IX.refresh+'<span>刷新</span></button></div>'
+    +'<p class="muted">用法：群里 @机器人 发 <b>/工作 帮我整理这周要做的事</b>；AI 会把任务记进工作区，之后可以 <b>/工作 列表</b> 查看。</p>'
+    +'<div id="ws-list"><div class="sk-field"><span class="sk-bar sk-w60"></span></div></div>'
+    +'<div class="card-head" style="margin-top:1.1rem"><h3>定时任务</h3><span class="hint" id="rem-count"></span></div>'
+    +'<p class="muted">群里说「明天 8 点提醒我开会」「10 分钟后提醒我喝水」就会出现在这里；到点由每分钟巡检主动发消息，重复任务自动顺延。</p>'
+    +'<div class="prov-list" id="rem-list"><p class="muted">加载中…</p></div></div>';
   var btn=$('b-ws-refresh');
-  if(btn)btn.addEventListener('click',loadWorkspaces);
+  if(btn)btn.addEventListener('click',function(){loadWorkspaces();loadReminders();});
   loadWorkspaces();
+  loadReminders();
 }
 
 function loadWorkspaces(){
@@ -1422,7 +1533,7 @@ function renderWorkspaces(items){
   var box=$('ws-list');
   if(!box)return;
   if(!items.length){
-    box.innerHTML='<p class="muted">还没有工作区。在群里 @机器人 发 <b>/do 帮我整理一下…</b> 就会创建。</p>';
+    box.innerHTML='<p class="muted">还没有工作区。在群里 @机器人 发 <b>/工作 帮我整理一下…</b> 就会创建。</p>';
     return;
   }
   var h='';
@@ -2230,6 +2341,8 @@ function route(){
   else if(tab==='ai')showAi();
   else if(tab==='imagegen')showImageGen();
   else if(tab==='workspace')showWorkspace();
+  else if(tab==='sandbox')showSandbox();
+  else if(tab==='reminders')showWorkspace();
   else if(tab==='groups')showGroups();
   else if(tab==='reminders')showReminders();
   else if(tab==='logs')showLogs(1);

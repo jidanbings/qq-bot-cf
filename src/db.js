@@ -95,6 +95,14 @@ const SCHEMA_STATEMENTS = [
     last_task  TEXT,
     updated_at TEXT NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS sandboxes (
+    scope      TEXT PRIMARY KEY,
+    kind       TEXT NOT NULL DEFAULT 'group',
+    runs       INTEGER NOT NULL DEFAULT 0,
+    files      INTEGER NOT NULL DEFAULT 0,
+    last_task  TEXT,
+    updated_at TEXT NOT NULL
+  )`,
   `CREATE TABLE IF NOT EXISTS memes (
     name        TEXT PRIMARY KEY,
     description TEXT NOT NULL DEFAULT '',
@@ -106,7 +114,7 @@ const SCHEMA_STATEMENTS = [
 async function hasSchema(env) {
   try {
     const { results } = await env.DB.prepare(
-      `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('config', 'sessions', 'chat_log', 'groups', 'reminders', 'memes', 'workspaces')`
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('config', 'sessions', 'chat_log', 'groups', 'reminders', 'memes', 'workspaces', 'sandboxes')`
     ).all();
     const names = new Set((results || []).map((r) => r.name));
     return (
@@ -116,7 +124,8 @@ async function hasSchema(env) {
       names.has('groups') &&
       names.has('reminders') &&
       names.has('memes') &&
-      names.has('workspaces')
+      names.has('workspaces') &&
+      names.has('sandboxes')
     );
   } catch {
     return false;
@@ -915,6 +924,41 @@ export async function listWorkspaces(env) {
 export async function deleteWorkspace(env, scope) {
   try {
     await env.DB.prepare('DELETE FROM workspaces WHERE scope = ?1').bind(scope).run();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/* ------------------------------ AiDO 沙箱索引 ------------------------------ */
+
+export async function upsertSandbox(env, { scope, kind, runs, files, lastTask, updatedAt }) {
+  const now = new Date(updatedAt || Date.now()).toISOString();
+  await env.DB.prepare(
+    `INSERT INTO sandboxes (scope, kind, runs, files, last_task, updated_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+     ON CONFLICT(scope) DO UPDATE SET
+       kind = excluded.kind, runs = excluded.runs, files = excluded.files,
+       last_task = excluded.last_task, updated_at = excluded.updated_at`
+  )
+    .bind(String(scope).slice(0, 120), String(kind || 'group'), Number(runs) || 0, Number(files) || 0, String(lastTask || '').slice(0, 120), now)
+    .run();
+}
+
+export async function listSandboxes(env) {
+  try {
+    const { results } = await env.DB.prepare(
+      'SELECT scope, kind, runs, files, last_task, updated_at FROM sandboxes ORDER BY updated_at DESC LIMIT 200'
+    ).all();
+    return results || [];
+  } catch {
+    return [];
+  }
+}
+
+export async function deleteSandbox(env, scope) {
+  try {
+    await env.DB.prepare('DELETE FROM sandboxes WHERE scope = ?1').bind(scope).run();
     return true;
   } catch {
     return false;
