@@ -69,7 +69,7 @@ export class ToolEngine {
     const dataUri = /^data:([^;]+);base64,(.+)$/i.exec(source || '');
     if (dataUri) {
       const ext = fileExt || (dataUri[1].includes('jpeg') ? 'jpg' : dataUri[1].split('/')[1] || 'bin');
-      body = { file_type: fileType, file_name: `${prefix}.${ext}`, file_data: dataUri[2], srv_send_msg: false };
+      body = { file_type: fileType, file_name: fileName || `${prefix}.${ext}`, file_data: dataUri[2], srv_send_msg: false };
     } else {
       body = { file_type: fileType, url: source, srv_send_msg: false };
     }
@@ -88,8 +88,8 @@ export class ToolEngine {
     return data.file_info;
   }
 
-  async sendMedia(ctx, { fileType, source, fileExt }) {
-    const fileInfo = await this.upload(ctx, { fileType, source, fileExt });
+  async sendMedia(ctx, { fileType, source, fileExt, fileName }) {
+    const fileInfo = await this.upload(ctx, { fileType, source, fileExt, fileName });
     this.seq += 1;
     const res = await fetch(this.msgUrl(ctx), {
       method: 'POST',
@@ -190,6 +190,23 @@ export class ToolEngine {
     return { note: `已发送语音（${text.slice(0, 30)}）` };
   }
 
+  async toolFile(ctx, args) {
+    const name = String(args.name || (args.path || '').split('/').pop() || 'file.txt').slice(0, 80);
+    const content = String(args.content == null ? '' : args.content);
+    if (!name) throw new Error('缺少文件名');
+    const bytes = new TextEncoder().encode(content);
+    if (bytes.length > 512 * 1024) throw new Error('文件超过 512KB');
+    const ext = name.indexOf('.') >= 0 ? name.split('.').pop().slice(0, 8) : 'txt';
+    await this.sendMedia(ctx, {
+      fileType: 4,
+      source: `data:text/plain;base64,${toBase64(bytes)}`,
+      fileName: name,
+      fileExt: ext,
+    });
+    if (args.caption) await this.sendText(ctx, args.caption);
+    return { note: `已发送文件 ${name}` };
+  }
+
   async toolRemind(ctx, args) {
     const when = String(args.when || '').trim();
     const text = String(args.text || '').trim();
@@ -262,6 +279,7 @@ export class ToolEngine {
       if (tool === 'image') out = await this.toolImage(ctx, a, cfg || {});
       else if (tool === 'meme') out = await this.toolMeme(ctx, a, cfg || {});
       else if (tool === 'voice') out = await this.toolVoice(ctx, a, cfg || {});
+      else if (tool === 'file') out = await this.toolFile(ctx, a);
       else if (tool === 'remind') out = await this.toolRemind(ctx, a);
       else if (tool === 'group_info' || tool === 'group_state' || tool === 'mute_state') {
         if (ctx.isC2C) throw new Error('这个只能在群里查');

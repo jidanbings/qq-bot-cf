@@ -77,6 +77,8 @@ button{font-family:inherit}
 .side-links button#logout:hover{background:var(--red-soft);color:var(--red)}
 .side-links svg{width:14px;height:14px}
 
+.file-pre{white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,Consolas,monospace;font-size:11px;line-height:1.6;background:var(--surface-2);padding:8px;border-radius:8px;max-height:240px;overflow:auto;margin-top:4px}
+.ws-detail summary{cursor:pointer;font-size:.75rem;color:var(--text-2)}
 .do-list{margin-top:12px;border-top:1px solid var(--border);padding-top:10px;display:flex;flex-direction:column;gap:6px}
 .do-title{font-size:12px;color:var(--muted);margin-bottom:2px}
 .do-row{display:flex;align-items:center;gap:8px;font-size:12px;flex-wrap:wrap}

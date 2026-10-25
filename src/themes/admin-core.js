@@ -1415,7 +1415,7 @@ function showSandbox(){
   setTopActions('');
   setPill('沙箱','');
   $('wrap').innerHTML='<div class="card"><div class="card-head"><h3>沙箱（AiDO）</h3>'
-    +'<span class="hint">/沙箱 让 AI 在隔离沙箱里干活，这里看每个会话的沙箱文件</span>'
+    +'<span class="hint">/沙箱 让 AI 在隔离沙箱里干活（按用户隔离），这里看每个人的沙箱文件</span>'
     +'<button class="btn sm" id="b-sb-refresh" type="button">'+IX.refresh+'<span>刷新</span></button></div>'
     +'<p class="muted">沙箱是独立 DO：AI 只能读写它自己的虚拟文件（最多 20 个 / 单文件 8KB），<b>不能发消息、不能联网、不能碰其他 DO</b>。</p>'
     +'<div id="sb-list"><div class="sk-field"><span class="sk-bar sk-w60"></span></div></div></div>';
@@ -1479,7 +1479,7 @@ function onSandboxClick(e){
 }
 
 function openSandboxDetail(d){
-  var files=(d.files||[]).length?d.files.map(function(f){return '<li>· '+esc(f.path)+'（'+esc(String(f.bytes))+'B）</li>';}).join(''):'<li class="muted">（空）</li>';
+  var files=(d.files||[]).length?d.files.map(function(f){return '<li><details><summary>· '+esc(f.path)+'（'+esc(String(f.bytes))+'B）</summary><pre class="file-pre">'+esc(String(f.content||'（无内容）'))+'</pre></details></li>';}).join(''):'<li class="muted">（空）</li>';
   var m=document.getElementById('sb-modal-mask');
   if(!m){
     m=document.createElement('div');
@@ -1506,7 +1506,7 @@ function showWorkspace(){
   setTopActions('');
   setPill('任务与工作区','');
   $('wrap').innerHTML='<div class="card"><div class="card-head"><h3>任务与工作区</h3>'
-    +'<span class="hint">/工作 让 AI 在独立 DO 里干活；下方是定时任务</span>'
+    +'<span class="hint">/工作 让 AI 在独立 DO 里干活（按用户隔离）；下方是定时任务</span>'
     +'<button class="btn sm" id="b-ws-refresh" type="button">'+IX.refresh+'<span>刷新</span></button></div>'
     +'<p class="muted">用法：群里 @机器人 发 <b>/工作 帮我整理这周要做的事</b>；AI 会把任务记进工作区，之后可以 <b>/工作 列表</b> 查看。</p>'
     +'<div id="ws-list"><div class="sk-field"><span class="sk-bar sk-w60"></span></div></div>'

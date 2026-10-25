@@ -247,10 +247,22 @@ export class AiDO {
   async getState() {
     const sb = await this.load();
     return {
-      files: Object.keys(sb.files).map((p) => ({ path: p, bytes: Buffer.byteLength(sb.files[p], 'utf8') })),
+      files: Object.keys(sb.files).map((p) => ({
+        path: p,
+        bytes: Buffer.byteLength(sb.files[p], 'utf8'),
+        // 给后台预览用（单文件最多 4KB，避免把整页撑爆）
+        content: sb.files[p].slice(0, 4000),
+      })),
       runs: sb.runs,
       updatedAt: sb.updatedAt,
     };
+  }
+
+  async readFile(path) {
+    const sb = await this.load();
+    const p = safePath(path);
+    if (!p || !(p in sb.files)) return { error: '文件不存在' };
+    return { path: p, content: sb.files[p], bytes: Buffer.byteLength(sb.files[p], 'utf8') };
   }
 
   async reset() {
@@ -265,6 +277,7 @@ export class AiDO {
       const body = await request.json().catch(() => ({}));
       if (url.pathname === '/run') return Response.json(await this.run(body));
       if (url.pathname === '/state') return Response.json(await this.getState());
+      if (url.pathname === '/file') return Response.json(await this.readFile(body.path));
       if (url.pathname === '/reset') return Response.json(await this.reset());
       return new Response('not found', { status: 404 });
     } catch (e) {

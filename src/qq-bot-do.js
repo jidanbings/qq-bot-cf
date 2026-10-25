@@ -885,47 +885,46 @@ export class QQBotDO {
               '## 🤖 指令帮助',
               '',
               '**💬 聊天**',
-              '直接 @我 说点什么就行；发图片给我可以看图说话',
+              '直接 @我 说话；发图片给我可以看图回答',
               '',
-              '**🎨 AI 生图**',
-              '/画 一只橘猫，水彩风格',
-              '也可以直接说「画一张…」「生成一张…」',
+              '**🎨 生图 / 表情 / 语音**',
+              '- /画 一只橘猫，水彩风格（也可以说「画一张…」）',
+              '- /梗图 随机一张，/梗图 名字 指定；/表情 随机 emoji',
+              '- /语音 你好呀 —— 内置 TTS 合成语音',
               '',
-              '**⏰ 定时提醒**',
+              '**⏰ 提醒**',
               '直接说「10 分钟后提醒我喝水」「明天 8 点提醒我开会」「每天 8:00 提醒我背单词」',
-              '到点我会主动发消息；重复提醒会自动顺延',
-              '',
-              '**😄 表情与梗图**',
-              '/梗图 —— 随机来一张内置梗图；/梗图 名字 指定一张',
-              '/表情 —— 随机一个 emoji',
-              '',
-              '**🔊 语音**',
-              '/语音 你好呀 —— 用内置 TTS 合成语音发给你（不需要额外 Key）',
-              '',
-              '**🧰 指令**',
-              '- /菜单 —— 弹出按钮面板',
-              '- /撤回 —— 撤回我上一条消息',
-              '- /帮助 —— 显示本帮助',
+              '到点主动发消息，重复提醒会自动顺延',
               '',
               '**🗂 工作区**',
-              '/工作 帮我整理这周的待办 —— AI 在工作区里执行任务（可维护清单 / 笔记）',
-              '/工作 列表 —— 查看任务与笔记；/工作 清空 —— 重置',
+              '- /工作 帮我整理这周的待办 —— 交给工作区 AI 执行（任务和笔记只属于你，别人看不到）',
+              '- /工作 列表 —— 查看任务与笔记',
+              '- /工作 清空 —— 重置本会话工作区',
               '',
               '**🧪 沙箱**',
-              '/沙箱 帮我建个文件整理需求 —— AI 在隔离沙箱里干活（只能动它自己的虚拟文件）',
-              '/沙箱 文件 —— 查看沙箱文件；/沙箱 清空 —— 重置',
+              '- /沙箱 帮我建个文件整理需求 —— 在隔离沙箱里干活（只能动它自己的文件）',
+              '- /沙箱 文件 —— 看有哪些文件（只属于你，别人看不到）',
+              '- /沙箱 查看 路径 —— 在聊天里看文件内容',
+              '- /沙箱 发送 路径 —— 把文件作为附件发给你',
+              '- /沙箱 清空 —— 重置沙箱',
+              '',
+              '**🧰 其它**',
+              '- /菜单 —— 按钮面板',
+              '- /撤回 —— 撤回我上一条',
+              '- /帮助 —— 显示本帮助',
             ].join('\n')
           : [
               '🤖 指令帮助',
               '',
-              '💬 聊天：直接 @我 说点什么，发图片给我可以看图说话',
-              '🎨 生图：/画 一只橘猫，水彩风格（说「画一张…」也行）',
-              '⏰ 提醒：「10 分钟后提醒我喝水」「明天 8 点提醒我开会」「每天 8:00 提醒我背单词」',
-              '😄 表情：/梗图 随机梗图，/梗图 名字 指定，/表情 随机 emoji',
-              '🔊 语音：/语音 你好呀 —— 内置 TTS 合成语音',
-              '🧰 指令：/菜单 弹出按钮面板 · /撤回 撤回我上一条 · /帮助 看这条',
-              '🗂 工作区：/工作 帮我整理待办 —— AI 在工作区里执行任务（可维护清单/笔记），/工作 列表 查看',
-              '🧪 沙箱：/沙箱 帮我写个文件并整理 —— AI 在隔离沙箱里干活（只能动它自己的虚拟文件）',
+              '💬 聊天：@我 说话；发图可以看图',
+              '🎨 生图：/画 一只橘猫（或「画一张…」）',
+              '😄 表情：/梗图 [名字] · /表情',
+              '🔊 语音：/语音 你好呀',
+              '⏰ 提醒：10 分钟后提醒我喝水 / 明天 8 点提醒我开会',
+              '',
+              '🗂 工作：/工作 任务 · /工作 列表 · /工作 清空',
+              '🧪 沙箱：/沙箱 任务 · /沙箱 文件 · /沙箱 查看 路径 · /沙箱 发送 路径',
+              '🧰 其它：/菜单 · /撤回 · /帮助',
             ].join('\n'),
       });
       return;
@@ -1368,6 +1367,7 @@ export class QQBotDO {
           '\n- image：{"prompt":"画面描述"} —— 画图 / 生成图片' +
           '\n- meme：{"name":"梗图名"} —— 发一张内置梗图（名字只能从下面的梗图清单里选）' +
           '\n- voice：{"text":"要说的话"} —— 用语音说出来（内置 TTS，用户明确要语音或简单问候时用）' +
+          '\n- file：{"path":"index.html"} —— 把沙箱里的文件作为附件发给用户（文件必须已在 /沙箱 里）' +
           '\n- remind：{"when":"明天 8:30 / 10分钟后 / 每天 8:00 / 每周一 9:00","text":"提醒内容"} —— 定时提醒' +
           '\n- group_info：{} —— 查本群资料（仅群聊）' +
           '\n- group_state：{} —— 查机器人在本群的状态（仅群聊）' +
@@ -1401,11 +1401,21 @@ export class QQBotDO {
 
   /* ------------------------------ 独立工具 DO ------------------------------ */
 
+  /**
+   * 私密数据的归属键：工作区 / 沙箱都按「人」存，不再按群共享。
+   * - 单聊：c2c:<user>
+   * - 群聊：group:<群>:u:<user>（同一个人在同群里的任务/文件只有他自己能看到）
+   */
+  ownerKey({ isC2C, scopeId, userId }) {
+    return isC2C ? `c2c:${userId || scopeId}` : `group:${scopeId}:u:${userId || 'unknown'}`;
+  }
+
+
   /** 调 ToolDO 执行工具；没有绑定时返回 null，走本地实现 */
   async execToolDo(tool, args, { isC2C, scopeId, msgId, caption, userId }) {
     const ns = this.env && this.env.TOOL;
     if (!ns || typeof ns.idFromName !== 'function') return null;
-    const key = isC2C ? `c2c:${scopeId}` : `group:${scopeId}`;
+    const key = this.ownerKey({ isC2C, scopeId, userId });
     const stub = ns.get(ns.idFromName(key));
     const token = await this.getToken();
     const provider = (this.config.aiProviders || []).find((p) => p && p.enabled !== 0 && p.baseUrl && p.apiKey);
@@ -1447,7 +1457,7 @@ export class QQBotDO {
       await this.sendReply({ isC2C, scopeId, content: 'AiDO 还没启用（缺 AIDO 绑定），等新版部署后再试。', msgId });
       return;
     }
-    const key = isC2C ? `c2c:${scopeId}` : `group:${scopeId}`;
+    const key = this.ownerKey({ isC2C, scopeId, userId });
     const stub = ns.get(ns.idFromName(key));
     const callDo = async (path, body) => {
       const res = await stub.fetch(`https://aido${path}`, {
@@ -1468,7 +1478,9 @@ export class QQBotDO {
       const lines = [
         '🧪 AiDO 沙箱',
         '/沙箱 <任务> —— 让 AI 在隔离沙箱里干活（可以自己建文件、写笔记、做多步任务）',
-        '/沙箱 文件 —— 看沙箱里的文件',
+        '/沙箱 文件 —— 看沙箱里的文件（只有你能看到）',
+        '/沙箱 查看 <路径> —— 在聊天里看文件内容',
+        '/沙箱 发送 <路径> —— 把文件作为附件发给你',
         '/沙箱 清空 —— 清空沙箱',
         '边界：只能读写它自己的虚拟文件，不能发消息、不能联网、不能碰其他 DO。',
       ];
@@ -1484,6 +1496,34 @@ export class QQBotDO {
       await this.sendReply({ isC2C, scopeId, content: `🧪 沙箱文件\n${files}`, msgId });
       return;
     }
+    if (/^(查看|读取|read)\s+/i.test(arg)) {
+      const path = arg.replace(/^(查看|读取|read)\s+/i, '').trim();
+      const out = await callDo('/file', { path }).catch((e) => ({ error: e.message }));
+      if (!out || out.error) {
+        await this.sendReply({ isC2C, scopeId, content: `没找到文件「${path}」～ /沙箱 文件 看看有哪些`, msgId });
+        return;
+      }
+      const body = String(out.content || '');
+      const shown = body.length > 1200 ? body.slice(0, 1200) + '\n…（已截断，完整内容可在后台「沙箱」页查看）' : body;
+      await this.sendReply({ isC2C, scopeId, content: `📄 ${out.path}（${out.bytes}B）\n\n${shown}`, msgId });
+      return;
+    }
+
+    if (/^(发送|发文件|send)\s+/i.test(arg)) {
+      const path = arg.replace(/^(发送|发文件|send)\s+/i, '').trim();
+      const out = await callDo('/file', { path }).catch((e) => ({ error: e.message }));
+      if (!out || out.error) {
+        await this.sendReply({ isC2C, scopeId, content: `没找到文件「${path}」～ /沙箱 文件 看看有哪些`, msgId });
+        return;
+      }
+      const name = out.path.split('/').pop();
+      const sent = await this.execToolDo('file', { path: out.path, content: out.content, name }, { isC2C, scopeId, msgId, userId });
+      if (!sent || !sent.ok) {
+        await this.sendReply({ isC2C, scopeId, content: '文件发送失败了，稍后再试～', msgId });
+      }
+      return;
+    }
+
     if (/^(清空|重置)$/i.test(arg)) {
       await callDo('/reset');
       await this.sendReply({ isC2C, scopeId, content: '沙箱已清空。', msgId });
@@ -1538,7 +1578,7 @@ export class QQBotDO {
       });
       return;
     }
-    const key = isC2C ? `c2c:${scopeId}` : `group:${scopeId}`;
+    const key = this.ownerKey({ isC2C, scopeId, userId });
     const stub = ns.get(ns.idFromName(key));
     const callWs = async (path, body) => {
       const res = await stub.fetch(`https://ws${path}`, {
@@ -1559,7 +1599,7 @@ export class QQBotDO {
       const lines = [
         '🗂 AI 工作区',
         '/工作 <任务> —— 把任务交给工作区里的 AI 执行（它可以维护任务清单和笔记）',
-        '/工作 列表 —— 看当前任务与笔记',
+        '/工作 列表 —— 看当前任务与笔记（只有你能看到）',
         '/工作 清空 —— 清空这个会话的工作区',
       ];
       if (st && st.tasks && st.tasks.length) {
@@ -1805,27 +1845,27 @@ export class QQBotDO {
       msg_type: 2,
       markdown: {
         content:
-          '**🤖 机器人菜单**\n点按钮直达：指令按钮会把内容自动填进输入框（已带 @我），再点发送即可。',
+          '**🤖 机器人菜单**\n点按钮会把指令填进输入框，再点发送即可。群里只接收 @我 的消息，按钮发出后如果没反应，@我 再发一次就好。',
       },
       keyboard: {
         content: {
           rows: [
             {
               buttons: [
-                button('🧭 使用帮助', { data: '帮助', style: 1 }),
-                button('🎨 来画一张', { data: '画 ' }),
+                button('🧭 使用帮助', { data: '/帮助', style: 1 }),
+                button('🎨 画一张', { data: '/画 ' }),
+              ],
+            },
+            {
+              buttons: [
+                button('🗂 我的任务', { data: '/工作 列表' }),
+                button('🧪 沙箱文件', { data: '/沙箱 文件' }),
               ],
             },
             {
               buttons: [
                 button('↩️ 撤回上一条', { data: '/撤回' }),
                 button('📖 项目主页', { url: 'https://github.com/jidanbings/qq-bot-cf' }),
-              ],
-            },
-            {
-              buttons: [
-                button('🗂 我的任务', { data: '工作 列表' }),
-                button('🧪 沙箱文件', { data: '沙箱 文件' }),
               ],
             },
           ],
@@ -2541,6 +2581,37 @@ export class QQBotDO {
 
   async runTool(call, { isC2C, scopeId, key, msgId, userId, userContent }) {
     const name = call.name;
+    // file 工具：从 AiDO 沙箱读文件，再交给 ToolEngine 当附件发出去
+    if (name === 'file') {
+      const ns = this.env && this.env.AIDO;
+      if (!ns || typeof ns.idFromName !== 'function') {
+        return this.sendReply({ isC2C, scopeId, content: '沙箱没启用，暂时发不了文件。', msgId });
+      }
+      const wantPath = String(call.args.path || '').trim();
+      if (!wantPath) return this.sendReply({ isC2C, scopeId, content: '要发哪个文件？把路径告诉我。', msgId });
+      try {
+        const stub = ns.get(ns.idFromName(this.ownerKey({ isC2C, scopeId, userId })));
+        const res = await stub.fetch('https://aido/file', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: wantPath }),
+        });
+        const data = await res.json();
+        if (!data || data.error) {
+          return this.sendReply({ isC2C, scopeId, content: `沙箱里没有「${wantPath}」这个文件～`, msgId });
+        }
+        const out = await this.execToolDo('file', { path: data.path, content: data.content, name: data.path.split('/').pop() }, {
+          isC2C,
+          scopeId,
+          msgId,
+          userId,
+        });
+        return out;
+      } catch (e) {
+        this.logger.warn(`file tool failed: ${e.message}`);
+        return this.sendReply({ isC2C, scopeId, content: `文件发送失败：${e.message.slice(0, 60)}`, msgId });
+      }
+    }
     // 工具真正在独立的 ToolDO 里执行（QQBotDO 只管收发）
     const toolNs = this.env && this.env.TOOL;
     if (toolNs && typeof toolNs.idFromName === 'function') {
