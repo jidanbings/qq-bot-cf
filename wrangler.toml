@@ -56,7 +56,8 @@ crons = ["* * * * *"]
 [durable_objects]
 bindings = [
   { name = "QQ_BOT", class_name = "QQBotDO" },
-  { name = "RATE_LIMITER", class_name = "RateLimiter" }
+  { name = "RATE_LIMITER", class_name = "RateLimiter" },
+  { name = "AI_WORKER", class_name = "AIDOWorker" }
 ]
 
 # Workers AI 绑定：内置 TTS（MeloTTS）用它合成语音，不需要额外 API Key。
@@ -72,3 +73,7 @@ new_sqlite_classes = ["QQBotDO"]
 [[migrations]]
 tag = "v2"
 new_sqlite_classes = ["RateLimiter"]
+
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["AIDOWorker"]

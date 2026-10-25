@@ -111,7 +111,7 @@ const FEATURES = [
   {
     icon: CUBE_ICON,
     title: '多个 AI 轮着用',
-    desc: '后台「AI 对话」里可以加多套 Base URL / Key / 模型，按顺序排优先级。前一个超时或报错就自动切下一个，全都挂了才回兜底话术。',
+    desc: '后台「AI 对话」里可以加多套 Base URL / Key / 模型，按顺序排优先级，前一个超时或报错就自动切下一个。调用跑在独立的 AI DO 里，慢请求（带图最长 180 秒）不会卡住 QQ 网关。',
     tags: ['多套配置', '自动切换', '/chat/completions'],
   },
   {
@@ -152,7 +152,7 @@ const FEATURES = [
   {
     icon: DB_ICON,
     title: '记得住，也忘得掉',
-    desc: '每个会话的上下文存在 Durable Object 的 SQLite 里，重启、换版本都不丢；历史太长时自动把旧消息压成摘要继续带着，不会把上下文越滚越贵。',
+    desc: '每个会话一个独立的 AI DO，上下文存在它自己的 SQLite 里，重启、换版本都不丢；历史太长时自动把旧消息压成摘要继续带着，不会把上下文越滚越贵。',
     tags: ['DO SQLite', '重启不丢', '摘要压缩'],
   },
   {
@@ -356,7 +356,7 @@ ${HOME_CSS}
           <div class="fitem"><span class="fnum">01</span><div><h4>鉴权与建连</h4><p>取 AppAccessToken，向网关换取 WebSocket 地址，HELLO 后 IDENTIFY 建立会话；已有会话则走 RESUME 续上，不重复消耗配额。</p></div></div>
           <div class="fitem"><span class="fnum">02</span><div><h4>事件过滤</h4><p>按 <b>msg_id + msg_seq</b> 去重（平台会重复推送）、剥掉 @ 标记、命中群黑名单或敏感词直接丢弃。</p></div></div>
           <div class="fitem"><span class="fnum">03</span><div><h4>排队与会话隔离</h4><p>同一会话串行、不同会话并行。上下文存在 Durable Object 的 SQLite 里，重启、换版本都不丢；历史太长会自动压成摘要继续带。</p></div></div>
-          <div class="fitem"><span class="fnum">04</span><div><h4>调用 AI</h4><p>带上该会话的历史记录请求兼容接口，90 秒超时（带图 180 秒）；网络抖动、5xx 与 429 先重试一次，仍失败就换列表里的下一个 AI。图片以 image_url 传入。</p></div></div>
+          <div class="fitem"><span class="fnum">04</span><div><h4>调用 AI</h4><p>把会话历史交给独立的 <b>AI DO</b>，由它请求兼容接口：90 秒超时（带图 180 秒），网络抖动、5xx 与 429 先重试一次，仍失败就换下一个 AI；图片只发给标记了「支持识图」的模型。</p></div></div>
           <div class="fitem"><span class="fnum">05</span><div><h4>工具调用与富媒体</h4><p>AI 要「做事」时输出 <b>[TOOL]</b>（画图 / 梗图 / 语音 / 提醒 / 查群），一次只调一个：生图与梗图先上传成 QQ 媒体，语音用 Workers AI 的 MeloTTS 合成再上传，图发完还会补一句话；提醒类工具直接落 D1。</p></div></div>
           <div class="fitem"><span class="fnum">06</span><div><h4>被动回复</h4><p>带 msg_id 回复原消息，超长自动截断，群聊可选择是否 @ 对方；凭证过期会重新获取并补发一次。</p></div></div>
           <div class="fitem"><span class="fnum">07</span><div><h4>落库</h4><p>文本回复、图片、梗图、语音都会写一条记录（发图前先出图、再补一句话）；失败会给一条兜底文案，不会让群里的人等到沉默。</p></div></div>

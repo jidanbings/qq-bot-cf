@@ -1051,6 +1051,7 @@ function aiModalHtml(){
     +'<div class="grid">'
     +'<div class="field"><label>Temperature</label><input id="ai-m-temp" type="number" inputmode="decimal" step="0.1" placeholder="0.8"></div>'
     +'<div class="field"><label>启用</label><label class="prov-check"><input type="checkbox" id="ai-m-on" checked>参与回复</label></div>'
+    +'<div class="field"><label>识图能力</label><select id="ai-m-vision"><option value="auto">自动判断（按模型名）</option><option value="1">支持识图</option><option value="0">不支持（纯文本）</option></select></div>'
     +'</div>'
     +'<div class="test-result" id="ai-test-result" hidden></div>'
     +'</div>'
@@ -1074,7 +1075,9 @@ function provRowHtml(p,i){
   var h='<div class="prov-row'+(p.enabled?'':' is-off')+'" data-id="'+esc(p.id)+'" title="点击编辑">';
   h+='<span class="prov-no">'+(i+1)+'</span>';
   h+='<div class="prov-info"><b>'+esc(p.name||'未命名')+'</b><small>'+esc(p.model||'未选模型')+(host?' · '+esc(host):'')+'</small></div>';
-  h+='<div class="prov-meta">'+keyFlag
+  var vv=p.vision||'auto';
+  var vBadge=vv==='1'?'<span class="prov-vision ok">识图</span>':vv==='0'?'<span class="prov-vision off">仅文本</span>':'<span class="prov-vision">识图·自动</span>';
+  h+='<div class="prov-meta">'+vBadge+keyFlag
     +'<label class="prov-switch" title="点一下启用/停用"><input type="checkbox" class="prov-sw"'+(p.enabled?' checked':'')+'><i></i></label>'
     +'</div>';
   h+='<div class="prov-tools">'
@@ -1094,7 +1097,7 @@ function openAiModal(idx,preset){
     p={id:'new-'+(++aiSeq)+'-'+Date.now(),
       name:(preset&&preset.name)||('AI '+(aiState.length+1)),
       baseUrl:(preset&&preset.url)||'',apiKey:'',
-      model:(preset&&preset.model)||'',temperature:'0.8',enabled:1,hasKey:false,models:[]};
+      model:(preset&&preset.model)||'',temperature:'0.8',enabled:1,vision:'auto',hasKey:false,models:[]};
   }
   aiModal={idx:idx,isNew:idx<0,p:p,models:(idx>=0?(p.models||[]):[])};
   $('ai-m-title').textContent=idx>=0?('编辑 · '+(p.name||'AI')):'添加 AI';
@@ -1105,6 +1108,7 @@ function openAiModal(idx,preset){
   $('ai-m-model').innerHTML=modelOptions({model:p.model,models:aiModal.models});
   $('ai-m-temp').value=p.temperature||'0.8';
   $('ai-m-on').checked=!!p.enabled;
+  $('ai-m-vision').value=p.vision||'auto';
   setAiTestResult('','');
   $('ai-modal-mask').hidden=false;
 }
@@ -1176,6 +1180,7 @@ function saveAiModal(){
   p.model=$('ai-m-model').value;
   p.temperature=$('ai-m-temp').value.trim()||'0.8';
   p.enabled=$('ai-m-on').checked?1:0;
+  p.vision=$('ai-m-vision').value||'auto';
   p.models=aiModal.models;
   if(!p.name){toast('请填写名称','bad');return;}
   if(!p.baseUrl){toast('请填写 Base URL','bad');return;}
@@ -1266,7 +1271,7 @@ function collectProviders(){
   for(var i=0;i<aiState.length;i++){
     var p=aiState[i];
     out.push({id:p.id,name:p.name,baseUrl:p.baseUrl,apiKey:p.apiKey,model:p.model,
-      temperature:p.temperature,enabled:p.enabled});
+      temperature:p.temperature,enabled:p.enabled,vision:p.vision||'auto'});
   }
   return out;
 }
@@ -1303,7 +1308,7 @@ function showAi(){
     if(!d)return;
     aiState=(d.providers||[]).map(function(p){
       return {id:p.id,name:p.name,baseUrl:p.baseUrl,apiKey:'',model:p.model,
-        temperature:p.temperature,enabled:p.enabled?1:0,hasKey:!!p.hasKey,models:[]};
+        temperature:p.temperature,enabled:p.enabled?1:0,vision:p.vision||'auto',hasKey:!!p.hasKey,models:[]};
     });
     renderAiPage();
   }).catch(function(e){
@@ -1350,6 +1355,8 @@ function renderAiPage(){
 
 /* 内置 AI 服务商（OpenAI 兼容端点，地址已按官方文档核实），点预设打开弹窗自动填名称/地址/模型 */
 var AI_PRESETS=[
+  {label:'Qwen 中转',name:'Qwen 中转（jdb.us.ci）',url:'https://api.jdb.us.ci/v1',model:'qwen3.7-plus'},
+  {label:'Qwen 识图',name:'Qwen 识图（jdb.us.ci）',url:'https://api.jdb.us.ci/v1',model:'qwen3-vl-plus'},
   {label:'OpenAI',name:'OpenAI',url:'https://api.openai.com/v1',model:'gpt-5-mini'},
   {label:'Google Gemini',name:'Google Gemini',url:'https://generativelanguage.googleapis.com/v1beta/openai/',model:'gemini-2.5-flash'},
   {label:'xAI Grok',name:'xAI Grok',url:'https://api.x.ai/v1',model:'grok-4'},
@@ -1441,6 +1448,7 @@ function igenModalHtml(){
     +'<button class="pw-toggle" type="button" id="igen-key-toggle">显示</button></div></div>'
     +'<div class="field"><label for="igen-model">模型</label>'
     +'<input id="igen-model" placeholder="qwen-image-3.0-pro" maxlength="64" value="'+esc(imageGenState.model)+'"></div>'
+    +'<div class="field"><span class="hint">qwen-image-3.0-pro 单张通常 1~2 分钟（2048×2048，约 9MB）；机器人会先回一句「在画了」再发图。</span></div>'
     +'<div class="chip-label">主流生图模型，点一下直接填入：</div>'
     +'<div class="chip-row" id="igen-modal-chips">'+igenModelChips()+'</div>'
     +'<div class="test-result" id="igen-test-result" hidden></div>'

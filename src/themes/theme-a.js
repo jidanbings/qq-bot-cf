@@ -276,6 +276,9 @@ button{font-family:inherit}
 .prov-flag{font-size:10.5px;font-weight:700;border-radius:6px;padding:2px 8px;white-space:nowrap}
 .prov-flag.on{background:var(--green-soft);color:var(--green)}
 .prov-flag.off{background:var(--surface-2);color:var(--muted)}
+.prov-vision{font-size:10.5px;border-radius:6px;padding:2px 7px;background:var(--surface-2);color:var(--muted);white-space:nowrap}
+.prov-vision.ok{color:#0e7490}
+.prov-vision.off{color:var(--muted);opacity:.75}
 .prov-keyok,.prov-keynew,.prov-keyno{font-size:10.5px;border-radius:6px;padding:2px 8px;background:var(--surface-2);color:var(--muted);white-space:nowrap}
 .prov-keynew{background:var(--amber-soft);color:var(--amber)}
 .prov-keyno{background:var(--red-soft);color:var(--red)}

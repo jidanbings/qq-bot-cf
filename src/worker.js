@@ -1,4 +1,5 @@
 import { adminPage, homePage, loginPage, setupPage, keyRecoveryPage, recoverGatePage } from './html.js';
+import { AIDOWorker } from './ai-do.js';
 import { FAVICON_SVG, FAVICON_PNG_32, FAVICON_ICO, APPLE_TOUCH_PNG } from './assets/icons.js';
 import {
   clearChatLogs,
@@ -748,3 +749,5 @@ export default {
     ctx.waitUntil(ensureBot(env));
   },
 };
+
+export { AIDOWorker };

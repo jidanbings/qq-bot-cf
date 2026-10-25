@@ -205,6 +205,8 @@ function normalizeProvider(raw, index) {
     model: String(p.model || '').trim().slice(0, 128),
     temperature: Number.isFinite(Number(t)) ? String(Number(t)) : '0.8',
     enabled: p.enabled === 0 || p.enabled === '0' ? 0 : 1,
+    // 识图能力：auto=按模型名自动判断，1=支持，0=不支持（不要把「没识图」写死）
+    vision: p.vision === '1' || p.vision === 1 ? '1' : p.vision === '0' || p.vision === 0 ? '0' : 'auto',
   };
 }
 
@@ -241,6 +243,7 @@ export async function listAiProviders(env) {
     model: p.model,
     temperature: p.temperature,
     enabled: p.enabled,
+    vision: p.vision,
     hasKey: !!p.apiKey,
   }));
 }

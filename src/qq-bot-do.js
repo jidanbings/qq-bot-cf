@@ -12,6 +12,7 @@ import {
 import { parseReminder, nextDueFrom } from './utils/reminder.js';
 import { normalizeFaceTags } from './utils/qq-face.js';
 import { applyMp3Gain } from './utils/mp3-gain.js';
+import { providerSupportsVision } from './utils/vision.js';
 import {
   APP_VERSION,
   QQ_BASE,
@@ -39,10 +40,31 @@ const EMOJIS = [
 ];
 // 发图后配的一句话（AI 没写配图文案时兜底；像正常人那样图后还说一句）
 const IMAGE_CAPTIONS = ['画好啦，看看喜不喜欢～', '喏，画好了 ✨', '画出来啦，还满意吗？', '给你画好了，慢慢看～'];
+// 生图通常要 1~2 分钟，先回一句免得用户以为没反应
+const IMAGE_WAIT_LINES = ['好，我画一下，大概要一分多钟，等我～', '收到，开始画了，稍等一下下～', '在画了在画了，这个模型有点慢，等我一会儿～'];
 const MEME_CAPTIONS = ['（递上梗图）', '看图你就懂了', '这张太应景了', '来，接梗～'];
 
 function stripMentions(text) {
   return String(text ?? '').replace(MENTION_RE, '').trim();
+}
+
+/**
+ * 剥掉模型复述出来的「系统记录」占位（历史里给模型看的内部记录，不该发给用户）。
+ * 只匹配整行都是括号记录的情况，不误伤正文。
+ */
+function stripToolRecords(text) {
+  return String(text ?? '')
+    .split('\n')
+    .filter((line) => {
+      const t = line.trim();
+      if (!t) return true;
+      if (/^[（(]\s*系统记录[:：]/.test(t)) return false;
+      if (/^[（(]\s*已执行工具\s*[）)]$/.test(t)) return false;
+      if (/^[（(]\s*已按要求生成并发送图片\s*[）)]$/.test(t)) return false;
+      return true;
+    })
+    .join('\n')
+    .trim();
 }
 
 /** 字节数组 → base64，分块处理避免大数组爆栈（块大小必须是 3 的倍数，否则拼接处会出现非法 padding） */
@@ -1016,7 +1038,7 @@ export class QQBotDO {
     // 单聊：AI 思考期间给「正在输入」反馈（官方 msg_type=6），失败静默
     if (isC2C && msgId) this.state.waitUntil(this.sendTyping({ scopeId, msgId }));
 
-    const providers = (this.config.aiProviders || []).filter(
+    let providers = (this.config.aiProviders || []).filter(
       (p) => p && p.enabled !== 0 && p.baseUrl && p.apiKey && p.model
     );
     if (!providers.length) {
@@ -1025,6 +1047,7 @@ export class QQBotDO {
     }
 
     const historyLimit = Number(this.config.historyLimit) || 20;
+    const useAiDo = !!(this.env && this.env.AI_WORKER);
     let session = await this.loadSession(key);
     if (!session) {
       this.pruneSessions();
@@ -1045,17 +1068,72 @@ export class QQBotDO {
       session.sysKey = sysKey;
       this.logger.info(`System prompt refreshed for session ${key.slice(0, 24)}...`);
     }
-
     const history = session.history;
-    history.push({ role: 'user', content });
-    while (history.length > historyLimit + 1) history.splice(1, 1);
 
-    const msgs = history.slice();
-    // 早前对话的压缩摘要（历史被裁剪后，长期记忆靠它保留）
-    if (session.summary) msgs.splice(1, 0, { role: 'system', content: `【早前对话摘要】${session.summary}` });
     let aiImage = null;
     if (imageUrl) {
       aiImage = await this.downloadImageAsBase64(imageUrl);
+      if (!aiImage) this.logger.warn('Image download failed, sending text-only to AI');
+    }
+
+    // 带图消息只发给声明支持识图的模型（后台每个 AI 可单独设置；auto 按模型名判断）
+    if (aiImage) {
+      const visionProviders = providers.filter((p) => providerSupportsVision(p));
+      if (!visionProviders.length) {
+        await this.sendReply({
+          isC2C,
+          scopeId,
+          content: '我这边还没接能看图的模型～ 到后台「AI 对话」里，给支持识图的模型把「识图能力」选成「支持识图」，或者换一个多模态模型再发一次。',
+          msgId,
+        });
+        this.logger.warn(`Image message dropped: ${providers.length} provider(s) but none supports vision`);
+        return;
+      }
+      providers = visionProviders;
+    }
+
+    let reply = null;
+    let aiErr = null;
+    let used = null;
+
+    if (useAiDo) {
+      // 会话历史与模型调用都交给独立的 AI DO（长请求不阻塞 QQ 网关）
+      try {
+        const out = await this.askAiDo({
+          key,
+          providers,
+          systemPrompt: this.buildSystemPrompt(),
+          historyLimit,
+          content,
+          image: aiImage,
+        });
+        if (out && out.error === 'no_vision') {
+          await this.sendReply({
+            isC2C,
+            scopeId,
+            content: '我这边还没接能看图的模型～ 到后台「AI 对话」里，给支持识图的模型把「识图能力」选成「支持识图」。',
+            msgId,
+          });
+          return;
+        }
+        if (!out || out.error) throw new Error((out && out.error) || 'AI DO 无响应');
+        const text = stripMentions(out.text);
+        const clean = /^@\S+\s+/.test(text) ? text.replace(/^@\S+\s+/, '') : text;
+        const stripped = stripToolRecords(clean);
+        if (!stripped) throw new Error('AI 只返回了内部记录');
+        reply = stripped;
+        used = out.provider;
+      } catch (e) {
+        aiErr = e;
+        this.logger.warn(`AI DO 调用失败: ${e.message}`);
+        this.logSystem(`AI DO 调用失败（${e.message.slice(0, 120)}）`);
+      }
+    } else {
+      history.push({ role: 'user', content });
+      while (history.length > historyLimit + 1) history.splice(1, 1);
+      const msgs = history.slice();
+      // 早前对话的压缩摘要（历史被裁剪后，长期记忆靠它保留）
+      if (session.summary) msgs.splice(1, 0, { role: 'system', content: `【早前对话摘要】${session.summary}` });
       if (aiImage) {
         msgs[msgs.length - 1] = {
           role: 'user',
@@ -1064,59 +1142,55 @@ export class QQBotDO {
             { type: 'image_url', image_url: { url: aiImage } },
           ],
         };
-      } else {
-        this.logger.warn('Image download failed, sending text-only to AI');
       }
-    }
-
-    let reply = null;
-    let aiErr = null;
-    let used = null;
-
-    for (const provider of providers) {
-      try {
-        const aiResp = await withRetry(async () => {
-          const res = await fetch(`${provider.baseUrl}/chat/completions`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${provider.apiKey}` },
-            body: JSON.stringify({
-              model: provider.model,
-              messages: msgs,
-              temperature: provider.temperature === '' || provider.temperature == null
-                ? 0.8
-                : Number(provider.temperature),
-            }),
-            // 带图请求 vision 模型处理更慢，超时 180 秒；纯文本 90 秒（长回答不再答到一半被超时切断、切下一个模型重答）
-            signal: AbortSignal.timeout(imageUrl ? 180000 : 90000),
+      for (const provider of providers) {
+        try {
+          const aiResp = await withRetry(async () => {
+            const res = await fetch(`${provider.baseUrl}/chat/completions`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${provider.apiKey}` },
+              body: JSON.stringify({
+                model: provider.model,
+                messages: msgs,
+                temperature: provider.temperature === '' || provider.temperature == null
+                  ? 0.8
+                  : Number(provider.temperature),
+              }),
+              // 带图请求 vision 模型处理更慢，超时 180 秒；纯文本 90 秒（长回答不再答到一半被超时切断、切下一个模型重答）
+              signal: AbortSignal.timeout(imageUrl ? 180000 : 90000),
+            });
+            if (!res.ok) {
+              const text = await res.text().catch(() => '');
+              const err = new Error(`AI API error: HTTP ${res.status}${text ? ' ' + text.slice(0, 120) : ''}`);
+              err.status = res.status;
+              throw err;
+            }
+            return res;
+          }, {
+            maxAttempts: 2,
+            delay: 800,
+            // 超时不重试（重试只会再等一轮），直接换下一个 AI
+            shouldRetry: (e) =>
+              !(e?.name === 'TimeoutError' || e?.name === 'AbortError') &&
+              (e.status === undefined || e.status === 429 || e.status >= 500),
+            onRetry: (err, attempt) => this.logger.warn(`AI retry ${attempt}: ${err.message}`),
           });
-          if (!res.ok) {
-            const text = await res.text().catch(() => '');
-            const err = new Error(`AI API error: HTTP ${res.status}${text ? ' ' + text.slice(0, 120) : ''}`);
-            err.status = res.status;
-            throw err;
-          }
-          return res;
-        }, {
-          maxAttempts: 2,
-          delay: 800,
-          // 超时不重试（重试只会再等一轮），直接换下一个 AI
-          shouldRetry: (e) =>
-            !(e?.name === 'TimeoutError' || e?.name === 'AbortError') &&
-            (e.status === undefined || e.status === 429 || e.status >= 500),
-          onRetry: (err, attempt) => this.logger.warn(`AI retry ${attempt}: ${err.message}`),
-        });
 
-        const aiData = await aiResp.json();
-        const text = stripMentions(aiData.choices?.[0]?.message?.content);
-        const clean = /^@\S+\s+/.test(text) ? text.replace(/^@\S+\s+/, '') : text;
-        if (!clean) throw new Error('AI 返回空内容');
-        reply = clean;
-        used = provider;
-        break;
-      } catch (e) {
-        aiErr = e;
-        this.logger.warn(`AI ${provider.name || provider.model} 不可用: ${e.message}`);
-        this.logSystem(`AI「${provider.name || provider.model}」调用失败（${e.message.slice(0, 120)}），自动尝试下一个备用`);
+          const aiData = await aiResp.json();
+          const text = stripMentions(aiData.choices?.[0]?.message?.content);
+          const clean = /^@\S+\s+/.test(text) ? text.replace(/^@\S+\s+/, '') : text;
+          if (!clean) throw new Error('AI 返回空内容');
+          // 模型可能把历史里的内部记录（「（系统记录：…）」）复述出来，发出去前剥掉
+          const stripped = stripToolRecords(clean);
+          if (!stripped) throw new Error('AI 只返回了内部记录');
+          reply = stripped;
+          used = provider;
+          break;
+        } catch (e) {
+          aiErr = e;
+          this.logger.warn(`AI ${provider.name || provider.model} 不可用: ${e.message}`);
+          this.logSystem(`AI「${provider.name || provider.model}」调用失败（${e.message.slice(0, 120)}），自动尝试下一个备用`);
+        }
       }
     }
 
@@ -1147,7 +1221,7 @@ export class QQBotDO {
     if (this.config.imageGenModel) {
       const genMatch = reply.match(/\[GEN_IMAGE\]\s*([\s\S]+)/);
       if (genMatch) {
-        history.push({ role: 'assistant', content: '（已按要求生成并发送图片）' });
+        await this.rememberAssistant({ key, session, history, text: '（系统记录：已生成图片并发送给用户）', useAiDo, historyLimit });
         // 标记前面如果写了话，就当作配图文案（图发完再发这句）
         const caption = reply.slice(0, reply.indexOf('[GEN_IMAGE]')).trim();
         await this.handleImageGen({ isC2C, scopeId, msgId, prompt: genMatch[1].trim(), caption, userId, userContent: content });
@@ -1155,12 +1229,11 @@ export class QQBotDO {
       }
       // 兜底：AI 声称「生成好了」却漏了标记，用用户描述 + 回复内容补画
       if (/生成好|画好|已生成|出图|做好了|马上画|正在画/.test(reply)) {
-        const lastUser = [...history].reverse().find((m) => m.role === 'user' && typeof m.content === 'string');
-        const prompt = `${lastUser ? lastUser.content : ''}\n${reply.replace(/\[GEN_IMAGE\]/g, '')}`
+        const prompt = `${content}\n${reply.replace(/\[GEN_IMAGE\]/g, '')}`
           .trim()
           .slice(0, 400);
         if (prompt) {
-          history.push({ role: 'assistant', content: '（已按要求生成并发送图片）' });
+          await this.rememberAssistant({ key, session, history, text: '（系统记录：已生成图片并发送给用户）', useAiDo, historyLimit });
           await this.handleImageGen({ isC2C, scopeId, msgId, prompt, userId, userContent: content });
           return;
         }
@@ -1172,9 +1245,8 @@ export class QQBotDO {
       const toolCall = this.extractToolCall(reply);
       if (toolCall) {
         // 模型偶尔会在调用前加一句「好的，我这就去…」：只保留工具结果，避免一次回两条重复消息
-        const head = toolCall.text;
         await this.runTool(toolCall, { isC2C, scopeId, key, msgId, userId, userContent: content });
-        history.push({ role: 'assistant', content: head || '（已执行工具）' });
+        await this.rememberAssistant({ key, session, history, text: this.toolRecordNote(toolCall), useAiDo, historyLimit });
         session.lastUsed = Date.now();
         await this.saveSession(key, session);
         return;
@@ -1211,12 +1283,12 @@ export class QQBotDO {
     if (!sentId) return;
 
     if (session && msgId) session.lastBotMsg = { msgId: sentId, at: Date.now() };
-    history.push({ role: 'assistant', content: normalizeFaceTags(reply) });
+    await this.rememberAssistant({ key, session, history, text: normalizeFaceTags(reply), useAiDo, historyLimit });
     if (session) {
       session.lastUsed = Date.now();
       await this.saveSession(key, session);
-      // 历史太长时后台压缩旧消息（不阻塞回复）
-      if (used && this.state && typeof this.state.waitUntil === 'function') {
+      // 本地模式的摘要压缩；AI DO 模式下它自己管历史与摘要
+      if (!useAiDo && used && this.state && typeof this.state.waitUntil === 'function') {
         this.state.waitUntil(this.maybeSummarize(key, session, used));
       }
     }
@@ -1265,7 +1337,64 @@ export class QQBotDO {
         memes.map((m) => `- ${m.name}：${String(m.description || '').slice(0, 40)}`).join('\n') +
         '\n规则：聊天气氛合适时偶尔发一张，不要每条都发；用户明确想要梗图/表情包时优先发一张。'
       : '';
-    return basePrompt + genHint + toolHint + memeHint;
+    return (
+      basePrompt +
+      '\n\n对话历史里以「（系统记录：…）」开头的句子是系统内部记录，只用来让你知道刚才做过什么，不要复述给用户。' +
+      genHint +
+      toolHint +
+      memeHint
+    );
+  }
+
+  /** 工具执行后写回历史的一行内部记录（不发给用户，模型也不该复述） */
+  toolRecordNote(call) {
+    const args = (call && call.args) || {};
+    const brief = args.text || args.prompt || args.name || args.when || '';
+    const label = (call && call.name) || '工具';
+    const detail = brief ? `「${String(brief).slice(0, 40)}」` : '';
+    return `（系统记录：已执行 ${label}${detail}，结果已发送给用户）`;
+  }
+
+  /* -------------------- 独立的 AI DO（会话历史 + 模型调用） -------------------- */
+
+  /** 调 AI DO 完成一轮对话；没有绑定时返回 null，走本地逻辑 */
+  async askAiDo({ key, providers, systemPrompt, historyLimit, content, image }) {
+    const ns = this.env && this.env.AI_WORKER;
+    if (!ns || typeof ns.idFromName !== 'function') return null;
+    const stub = ns.get(ns.idFromName(key));
+    const res = await stub.fetch('https://ai-do/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key, providers, systemPrompt, historyLimit, content, image }),
+    });
+    if (!res.ok) throw new Error(`AI DO HTTP ${res.status}`);
+    return res.json();
+  }
+
+  /** 把助手这一轮说的话记进 AI DO 的会话历史 */
+  async recordAiDo({ key, assistant, historyLimit }) {
+    const ns = this.env && this.env.AI_WORKER;
+    if (!ns || typeof ns.idFromName !== 'function') return;
+    const stub = ns.get(ns.idFromName(key));
+    const res = await stub.fetch('https://ai-do/record', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key, assistant, historyLimit }),
+    });
+    if (!res.ok) throw new Error(`AI DO record HTTP ${res.status}`);
+  }
+
+  /** 记录助手这轮内容：走 AI DO 就写进 AI DO，否则写本地会话 */
+  async rememberAssistant({ key, session, history, text, useAiDo, historyLimit }) {
+    if (useAiDo) {
+      try {
+        await this.recordAiDo({ key, assistant: text, historyLimit });
+      } catch (e) {
+        this.logger.warn(`AI DO record failed: ${e.message}`);
+      }
+      return;
+    }
+    history.push({ role: 'assistant', content: text });
   }
 
   /** 系统提示词指纹：人设 / 生图模型 / 工具开关变了就要重建 session 里的 system 消息 */
@@ -1510,7 +1639,8 @@ export class QQBotDO {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `QQBot ${token}` },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(30000),
+      // 公网 URL 要等平台把图拉下来（生图常见 2048px / 9MB），30 秒可能不够
+      signal: AbortSignal.timeout(body.url ? 60000 : 30000),
     });
     if (!res.ok) {
       const text = await res.text().catch(() => '');
@@ -1784,17 +1914,44 @@ export class QQBotDO {
       return;
     }
     this.logger.info(`Image gen: model=${model} prompt=${prompt.slice(0, 40)}...`);
-    try {
-      const res = await fetch(`${baseUrl}/images/generations`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-        body: JSON.stringify({ model, prompt, n: 1 }),
-        signal: AbortSignal.timeout(120000),
-      });
-      if (!res.ok) {
-        const text = await res.text().catch(() => '');
-        throw new Error(`HTTP ${res.status}${text ? ' ' + text.slice(0, 120) : ''}`);
+    // 先给个反馈：生图模型普遍要 1~2 分钟，别让用户以为没反应
+    if (msgId) {
+      try {
+        await this.sendReply({
+          isC2C,
+          scopeId,
+          content: IMAGE_WAIT_LINES[Math.floor(Math.random() * IMAGE_WAIT_LINES.length)],
+          msgId,
+        });
+      } catch (e) {
+        this.logger.warn(`Image wait notice failed: ${e.message}`);
       }
+    }
+    try {
+      const res = await withRetry(
+        async () => {
+          const r = await fetch(`${baseUrl}/images/generations`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+            body: JSON.stringify({ model, prompt, n: 1 }),
+            signal: AbortSignal.timeout(150000),
+          });
+          if (!r.ok) {
+            const text = await r.text().catch(() => '');
+            const err = new Error(`HTTP ${r.status}${text ? ' ' + text.slice(0, 120) : ''}`);
+            err.status = r.status;
+            throw err;
+          }
+          return r;
+        },
+        {
+          maxAttempts: 2,
+          delay: 1500,
+          // 4xx（模型不存在/参数错）不重试，只重试超时、网络、429、5xx
+          shouldRetry: (e) => e.status === undefined || e.status === 429 || e.status >= 500,
+          onRetry: (err, attempt) => this.logger.warn(`Image gen retry ${attempt}: ${err.message}`),
+        }
+      );
       const data = await res.json();
       const item = data.data?.[0] || {};
       // 有的生图接口只回 b64_json：转成 data URI，上传时走 file_data 二进制直传
