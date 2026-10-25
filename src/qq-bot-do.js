@@ -902,12 +902,10 @@ export class QQBotDO {
               '- /工作 列表 —— 查看任务与笔记',
               '- /工作 清空 —— 重置本会话工作区',
               '',
-              '**🧪 沙箱**',
-              '- /沙箱 帮我建个文件整理需求 —— 在隔离沙箱里干活（只能动它自己的文件）',
-              '- /沙箱 文件 —— 看有哪些文件（只属于你，别人看不到）',
-              '- /沙箱 查看 路径 —— 在聊天里看文件内容',
-              '- /沙箱 发送 路径 —— 把文件作为附件发给你',
-              '- /沙箱 清空 —— 重置沙箱',
+              '**📂 文件与长文（自动）**',
+              '直接说：「写一篇 3000 字关于秋天的文章，保存成 article.md 发我」',
+              '我会在**你的私有工作区**里写文件，完成后自动作为附件发给你；别人看不到你的文件',
+              '也可以说「我有哪些文件」「把 index.html 发我」「清空我的文件」',
               '',
               '**🧰 其它**',
               '- /菜单 —— 按钮面板',
@@ -924,7 +922,7 @@ export class QQBotDO {
               '⏰ 提醒：10 分钟后提醒我喝水 / 明天 8 点提醒我开会',
               '',
               '🗂 工作：/工作 任务 · /工作 列表 · /工作 清空',
-              '🧪 沙箱：/沙箱 任务 · /沙箱 文件 · /沙箱 查看 路径 · /沙箱 发送 路径',
+              '📂 文件/长文：直接说「写一篇 3000 字文章存成 article.md 发我」——在私有工作区完成并自动发附件',
               '🧰 其它：/菜单 · /撤回 · /帮助',
             ].join('\n'),
       });
@@ -1368,7 +1366,8 @@ export class QQBotDO {
           '\n- image：{"prompt":"画面描述"} —— 画图 / 生成图片' +
           '\n- meme：{"name":"梗图名"} —— 发一张内置梗图（名字只能从下面的梗图清单里选）' +
           '\n- voice：{"text":"要说的话"} —— 用语音说出来（内置 TTS，用户明确要语音或简单问候时用）' +
-          '\n- file：{"path":"index.html"} —— 把沙箱里的文件作为附件发给用户（文件必须已在 /沙箱 里）' +
+          '\n- file：{"path":"index.html"} —— 把沙箱里的文件作为附件发给用户（文件必须已在你的工作区里）' +
+          '\n- sandbox：{"task":"要完成的完整任务"} —— 在用户的私有工作区里干活：写长文、生成文件、多步整理；任务完成后文件会自动发给用户' +
           '\n- remind：{"when":"明天 8:30 / 10分钟后 / 每天 8:00 / 每周一 9:00","text":"提醒内容"} —— 定时提醒' +
           '\n- group_info：{} —— 查本群资料（仅群聊）' +
           '\n- group_state：{} —— 查机器人在本群的状态（仅群聊）' +
@@ -1596,7 +1595,7 @@ export class QQBotDO {
               await this.sendReply({
                 isC2C,
                 scopeId,
-                content: `（文件 ${f.path.split('/').pop()} 发送失败，以上是内容节选；完整文件请私聊我发「/沙箱 发送 ${f.path.split('/').pop()}」）`,
+                content: `（文件 ${f.path.split('/').pop()} 发送失败，以上是内容节选；完整文件请私聊我说「把 ${f.path.split('/').pop()}」）`,
                 msgId: passiveOk ? msgId : '',
               });
             }
@@ -1607,7 +1606,7 @@ export class QQBotDO {
       }
     }
     const sentNote = sentFiles.length
-      ? `\n（已发送文件：${sentFiles.join('、')}）${isC2C ? '' : '　群里看不到文件卡片的话，私聊我发「/沙箱 发送 <文件名>」'}`
+      ? `\n（已发送文件：${sentFiles.join('、')}）${isC2C ? '' : '　群里看不到文件卡片的话，私聊我发「把 <文件名> 发我」'}`
       : '';
     if (sentFiles.length) {
       this.logger.info(`sandbox files sent: ${sentFiles.join(',')}（任务耗时 ${Math.round(waitMs / 1000)}s, passive=${passiveOk}）`);
@@ -1941,7 +1940,7 @@ export class QQBotDO {
             {
               buttons: [
                 button('🗂 我的任务', { data: '/工作 列表' }),
-                button('🧪 沙箱文件', { data: '/沙箱 文件' }),
+                button('📂 我的文件', { data: '帮我列一下我的文件' }),
               ],
             },
             {
@@ -2663,6 +2662,13 @@ export class QQBotDO {
 
   async runTool(call, { isC2C, scopeId, key, msgId, userId, userContent }) {
     const name = call.name;
+    // sandbox 工具：把「写长文 / 做文件 / 多步任务」交给私有工作区执行
+    if (name === 'sandbox') {
+      const task = String(call.args.task || '').trim();
+      if (!task) return this.sendReply({ isC2C, scopeId, content: '要做什么？给我一句任务描述吧～', msgId });
+      return this.handleAiSandbox({ isC2C, scopeId, msgId, content: '沙箱 ' + task, userId });
+    }
+
     // file 工具：从 AiDO 沙箱读文件，再交给 ToolEngine 当附件发出去
     if (name === 'file') {
       const ns = this.env && this.env.AIDO;

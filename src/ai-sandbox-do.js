@@ -10,10 +10,12 @@
  */
 import { withRetry } from './utils/retry.js';
 
-const KEY = 'sandbox';
-const MAX_FILES = 20;
-const MAX_FILE_BYTES = 32 * 1024;
-const MAX_TOTAL_BYTES = 64 * 1024;
+const META = 'meta';
+const FILE_PREFIX = 'file:';
+const LEGACY_KEY = 'sandbox';
+const MAX_FILES = 200;
+const MAX_FILE_BYTES = 1.5 * 1024 * 1024;
+const MAX_TOTAL_BYTES = 20 * 1024 * 1024;
 const MAX_STEPS = 8;
 const MAX_OPS_PER_STEP = 4;
 
@@ -21,7 +23,7 @@ export const AIDO_ENV_RULES = `
 
 【运行环境（必须遵守）】
 - 你运行在一个隔离的沙箱 Durable Object（AiDO）里，实例只属于当前这个会话。
-- 你唯一能操作的是这个沙箱里的虚拟文件系统：最多 ${MAX_FILES} 个文件，单文件不超过 ${MAX_FILE_BYTES / 1024}KB，总量不超过 ${MAX_TOTAL_BYTES / 1024}KB。
+- 你唯一能操作的是这个沙箱里的虚拟文件系统：最多 ${MAX_FILES} 个文件，单文件不超过 ${Math.round(MAX_FILE_BYTES / 1024)}KB，总量不超过 ${Math.round(MAX_TOTAL_BYTES / 1024 / 1024)}MB。
 - 文件路径用相对路径（例如 article.md），不要用绝对路径或 .. 跳出沙箱；系统会自动把它归档到你的用户目录 users/<你的编号>/ 下。
 - 你**不能**发 QQ 消息、不能访问网络、不能调用其他 DO、不能执行任意代码或系统命令；这些操作会被直接拒绝。
 - 需要操作文件时，在回复最后单独输出：
@@ -37,7 +39,7 @@ export const AIDO_ENV_RULES = `
   [/ENV]
   [ENV]{"op":"file.send","path":"index.html"}
 - 写**长文本**（超过约 300 字）必须用上面的 [ENV:WRITE]…[/ENV] 块语法：正文原样写在里面，不要放进 JSON 字符串，否则换行和引号会把内容弄坏。
-- 内容很长时可以分多次（WRITE 一次 + APPEND 若干次），单文件上限 32KB。
+- 内容很长时可以分多次（WRITE 一次 + APPEND 若干次），单文件上限 1.5MB。
 - 如果用户要的文件在沙箱里不存在，直接如实告诉他「没有这个文件」，**绝对不要新建一个只包含说明文字的文件来冒充**。
 - 只有用户明确要求创建/写入文件时，才使用 file.write / file.append。
 - [ENV]{"op":"file.send","path":"..."} 表示「把文件作为附件发给用户」（一次最多 3 个）。用户说「发给我 / 生成后发我 / 给我文件」时，创建完文件必须用 file.send 发出去，不要只回「已保存」。
@@ -202,20 +204,58 @@ export class AiDO {
   }
 
   async load() {
-    const saved = await this.state.storage.get(KEY);
-    const sb = saved && typeof saved === 'object' ? saved : {};
+    const meta = (await this.state.storage.get(META)) || {};
+    const files = {};
+    try {
+      const list = await this.state.storage.list({ prefix: FILE_PREFIX });
+      for (const [k, v] of list) files[k.slice(FILE_PREFIX.length)] = String(v);
+    } catch {
+      /* 测试环境 / 旧实例不支持 list 时留空 */
+    }
+    // 兼容旧版：整包存在 'sandbox' 里的数据迁移过来
+    if (!Object.keys(files).length) {
+      try {
+        const legacy = await this.state.storage.get(LEGACY_KEY);
+        if (legacy && typeof legacy === 'object' && legacy.files) {
+          for (const [p, v] of Object.entries(legacy.files)) files[p] = String(v);
+          await this.state.storage.put(META, {
+            owner: legacy.owner || '',
+            runs: legacy.runs || 0,
+            updatedAt: legacy.updatedAt || Date.now(),
+            log: legacy.log || [],
+          });
+          await this.state.storage.delete(LEGACY_KEY);
+        }
+      } catch {
+        /* ignore */
+      }
+    }
     return {
-      files: sb.files && typeof sb.files === 'object' ? sb.files : {},
-      owner: typeof sb.owner === 'string' ? sb.owner : '',
-      runs: Number(sb.runs) || 0,
-      updatedAt: Number(sb.updatedAt) || 0,
-      log: Array.isArray(sb.log) ? sb.log : [],
+      files,
+      owner: typeof meta.owner === 'string' ? meta.owner : '',
+      runs: Number(meta.runs) || 0,
+      updatedAt: Number(meta.updatedAt) || 0,
+      log: Array.isArray(meta.log) ? meta.log : [],
     };
   }
 
-  async save(sb) {
+  /** 只写有变化的文件 + 元信息（before 是操作前的文件快照） */
+  async save(sb, before) {
     sb.updatedAt = Date.now();
-    await this.state.storage.put(KEY, sb);
+    const prev = before || {};
+    const puts = {};
+    for (const [p, v] of Object.entries(sb.files)) {
+      if (prev[p] !== v) puts[FILE_PREFIX + p] = v;
+    }
+    const dels = Object.keys(prev).filter((p) => !(p in sb.files)).map((p) => FILE_PREFIX + p);
+    if (Object.keys(puts).length) await this.state.storage.put(puts);
+    if (dels.length) await this.state.storage.delete(dels);
+    await this.state.storage.put(META, {
+      owner: sb.owner || '',
+      runs: sb.runs,
+      updatedAt: sb.updatedAt,
+      log: sb.log,
+    });
   }
 
   async callProvider(provider, messages) {
@@ -281,6 +321,7 @@ export class AiDO {
 
       const sendOps = ops.filter((o) => o.op === 'file.send');
       const otherOps = ops.filter((o) => o.op !== 'file.send');
+      const before = { ...sb.files };
       const results = applyEnvOps(sb, otherOps);
       for (const op of sendOps) {
         const p = resolveIn(sb, op.path);
@@ -293,7 +334,7 @@ export class AiDO {
           results.push(`已加入发送队列：${p}（系统会把它作为附件发出）`);
         }
       }
-      await this.save(sb);
+      await this.save(sb, before);
       messages.push({ role: 'assistant', content: raw });
       messages.push({
         role: 'user',
@@ -307,7 +348,7 @@ export class AiDO {
     sb.runs += 1;
     sb.log.push({ task: String(task).slice(0, 120), reply: String(reply).slice(0, 160), at: Date.now(), steps: steps + 1 });
     if (sb.log.length > 20) sb.log.shift();
-    await this.save(sb);
+    await this.save(sb, {});
     await this.syncIndex(scope, kind, sb, task);
     return {
       reply: reply || '（任务处理完了，但没有给出正文）',
@@ -341,7 +382,7 @@ export class AiDO {
       files: Object.keys(sb.files).map((p) => ({
         path: p,
         bytes: Buffer.byteLength(sb.files[p], 'utf8'),
-        // 给后台预览用（单文件最多 4KB，避免把整页撑爆）
+        // 后台预览：单文件最多 4KB
         content: sb.files[p].slice(0, 4000),
       })),
       runs: sb.runs,
@@ -350,16 +391,31 @@ export class AiDO {
   }
 
   async readFile(path) {
-    const sb = await this.load();
-    const resolved = resolveIn(sb, path);
+    const meta = (await this.state.storage.get(META)) || {};
+    const resolved = resolveIn({ owner: meta.owner || '' }, path);
     const raw = safePath(path);
-    const p = resolved && resolved in sb.files ? resolved : raw && raw in sb.files ? raw : null;
-    if (!p) return { error: '文件不存在' };
-    return { path: p, content: sb.files[p], bytes: Buffer.byteLength(sb.files[p], 'utf8') };
+    for (const p of [resolved, raw]) {
+      if (!p) continue;
+      try {
+        const v = await this.state.storage.get(FILE_PREFIX + p);
+        if (typeof v === 'string') return { path: p, content: v, bytes: Buffer.byteLength(v, 'utf8') };
+      } catch {
+        /* ignore */
+      }
+    }
+    return { error: '文件不存在' };
   }
 
   async reset() {
-    await this.state.storage.delete(KEY);
+    try {
+      const list = await this.state.storage.list({ prefix: FILE_PREFIX });
+      const keys = [...list.keys()];
+      if (keys.length) await this.state.storage.delete(keys);
+    } catch {
+      /* ignore */
+    }
+    await this.state.storage.delete(META);
+    await this.state.storage.delete(LEGACY_KEY).catch?.(() => {});
     return { ok: true };
   }
 

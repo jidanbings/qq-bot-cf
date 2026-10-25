@@ -1415,7 +1415,7 @@ function showSandbox(){
   setTopActions('');
   setPill('沙箱','');
   $('wrap').innerHTML='<div class="card"><div class="card-head"><h3>沙箱（AiDO）</h3>'
-    +'<span class="hint">/沙箱 让 AI 在隔离沙箱里干活（按用户隔离），这里看每个人的沙箱文件</span>'
+    +'<span class="hint">AI 会在需要时自动使用私有沙箱写文件，这里看每个人的文件（按用户隔离）</span>'
     +'<button class="btn sm" id="b-sb-refresh" type="button">'+IX.refresh+'<span>刷新</span></button></div>'
     +'<p class="muted">沙箱是独立 DO：AI 只能读写它自己的虚拟文件（最多 20 个 / 单文件 8KB），<b>不能发消息、不能联网、不能碰其他 DO</b>。</p>'
     +'<div id="sb-list"><div class="sk-field"><span class="sk-bar sk-w60"></span></div></div></div>';
@@ -1438,7 +1438,7 @@ function renderSandboxes(items){
   var box=$('sb-list');
   if(!box)return;
   if(!items.length){
-    box.innerHTML='<p class="muted">还没有沙箱。在群里 @机器人 发 <b>/沙箱 帮我建个文件…</b> 就会创建。</p>';
+    box.innerHTML='<p class="muted">还没有沙箱。直接对机器人说「写一篇…保存成 a.md 发我」就会创建。</p>';
     return;
   }
   var h='';
