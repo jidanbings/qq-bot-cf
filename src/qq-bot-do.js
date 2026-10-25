@@ -1549,7 +1549,8 @@ export class QQBotDO {
     }
     if (isC2C && msgId) this.state.waitUntil(this.sendTyping({ scopeId, msgId }));
     // 长任务（写文章/多步）可能要几分钟，先给个反馈
-    if (msgId) {
+    // 单聊被动回复只有 4 条额度：不发「开始处理」，把额度留给文件和结果
+    if (msgId && !isC2C) {
       try {
         await this.sendReply({
           isC2C,
@@ -1576,6 +1577,7 @@ export class QQBotDO {
     }
     // AI 在沙箱里要求发送的文件（file.send）：这里真正上传并发送
     const sentFiles = [];
+    const failedFiles = [];
     const passiveOk = !!msgId && Date.now() - startedAt < 240000;
     const waitMs = Date.now() - startedAt;
     if (Array.isArray(out.send) && out.send.length) {
@@ -1591,7 +1593,10 @@ export class QQBotDO {
             );
             if (r && r.ok) {
               sentFiles.push(f.path);
-            } else if (!isC2C) {
+            } else {
+              failedFiles.push(`${f.path.split('/').pop()}（${(r && r.note) || '发送失败'}）`);
+            }
+            if (r && !r.ok && !isC2C) {
               // 群聊发文件失败：把内容分段当文本发出来，并提示私聊拿完整文件
               const text = String(f.content || '');
               const chunks = [];
@@ -1608,10 +1613,14 @@ export class QQBotDO {
             }
           }
         } catch (e) {
+          failedFiles.push(`${p.split('/').pop()}（${e.message.slice(0, 40)}）`);
           this.logger.warn(`sandbox send failed: ${e.message}`);
         }
+        // 连续上传容易撞限流，间隔一下
+        await new Promise((res) => setTimeout(res, 600));
       }
     }
+    const failNote = failedFiles.length ? `\n（未发送成功：${failedFiles.join('、')}）` : '';
     const sentNote = sentFiles.length
       ? `\n（已发送文件：${sentFiles.join('、')}）${isC2C ? '' : '　群里看不到文件卡片的话，私聊我发「把 <文件名> 发我」'}`
       : '';

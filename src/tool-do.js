@@ -11,6 +11,7 @@ import { addReminder, listMemes } from './db.js';
 import { applyMp3Gain } from './utils/mp3-gain.js';
 import { parseReminder } from './utils/reminder.js';
 import { normalizeFaceTags } from './utils/qq-face.js';
+import { withRetry } from './utils/retry.js';
 
 const IMAGE_CAPTIONS = ['画好啦，看看喜不喜欢～', '喏，画好了 ✨', '画出来啦，还满意吗？', '给你画好了，慢慢看～'];
 const MEME_CAPTIONS = ['（递上梗图）', '看图你就懂了', '这张太应景了', '来，接梗～'];
@@ -73,12 +74,27 @@ export class ToolEngine {
     } else {
       body = { file_type: fileType, url: source, srv_send_msg: false };
     }
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `QQBot ${ctx.token}` },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(body.url ? 60000 : 30000),
-    });
+    const res = await withRetry(
+      async () => {
+        const r = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `QQBot ${ctx.token}` },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(body.url ? 60000 : 30000),
+        });
+        if (!r.ok) {
+          const err = new Error(`upload HTTP ${r.status}`);
+          err.status = r.status;
+          throw err;
+        }
+        return r;
+      },
+      {
+        maxAttempts: 2,
+        delay: 700,
+        shouldRetry: (e) => e.status === undefined || e.status === 429 || e.status >= 500,
+      }
+    );
     if (!res.ok) {
       const t = await res.text().catch(() => '');
       throw new Error(`上传失败 HTTP ${res.status}${t ? ' ' + t.slice(0, 100) : ''}`);
@@ -91,20 +107,32 @@ export class ToolEngine {
   async sendMedia(ctx, { fileType, source, fileExt, fileName }) {
     const fileInfo = await this.upload(ctx, { fileType, source, fileExt, fileName });
     this.seq += 1;
-    const res = await fetch(this.msgUrl(ctx), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `QQBot ${ctx.token}` },
-      body: JSON.stringify({
-        msg_type: 7,
-        media: { file_info: fileInfo },
-        ...(ctx.msgId ? { msg_id: ctx.msgId, msg_seq: ctx.seqBase + this.seq } : {}),
-      }),
-      signal: AbortSignal.timeout(15000),
-    });
-    if (!res.ok) {
-      const t = await res.text().catch(() => '');
-      throw new Error(`发送媒体失败 HTTP ${res.status}${t ? ' ' + t.slice(0, 100) : ''}`);
-    }
+    const res = await withRetry(
+      async () => {
+        const r = await fetch(this.msgUrl(ctx), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `QQBot ${ctx.token}` },
+          body: JSON.stringify({
+            msg_type: 7,
+            media: { file_info: fileInfo },
+            ...(ctx.msgId ? { msg_id: ctx.msgId, msg_seq: ctx.seqBase + this.seq } : {}),
+          }),
+          signal: AbortSignal.timeout(15000),
+        });
+        if (!r.ok) {
+          const t = await r.text().catch(() => '');
+          const err = new Error(`发送媒体失败 HTTP ${r.status}${t ? ' ' + t.slice(0, 100) : ''}`);
+          err.status = r.status;
+          throw err;
+        }
+        return r;
+      },
+      {
+        maxAttempts: 2,
+        delay: 700,
+        shouldRetry: (e) => e.status === undefined || e.status === 429 || e.status >= 500,
+      }
+    );
     const data = await res.json().catch(() => ({}));
     return data.id || null;
   }
