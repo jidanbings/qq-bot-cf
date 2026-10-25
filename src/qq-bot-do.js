@@ -809,13 +809,34 @@ export class QQBotDO {
     let content = normalizeFaceTags(stripMentions(data.content));
     if (/^@\S+\s+/.test(content)) content = content.replace(/^@\S+\s+/, '');
     const attachments = Array.isArray(data.attachments) ? data.attachments : [];
-    const imageUrl = attachments[0]?.url || null;
+    // 群聊/单聊的附件结构不一定一样：优先挑 content_type 是图片（或 URL 长得像图片）的那一项
+    let imageUrl = null;
+    for (const a of attachments) {
+      if (!a) continue;
+      const url = String(a.url || a.src || a.file_url || '').trim();
+      if (!url) continue;
+      const ct = String(a.content_type || a.contentType || '').toLowerCase();
+      if (!ct || ct.startsWith('image/') || /\.(png|jpe?g|gif|webp)(\?|$)/i.test(url)) {
+        imageUrl = url;
+        break;
+      }
+    }
+    if (!imageUrl) {
+      // 少数情况下图片以 <img src="..."> 形式内联在 content 里
+      const inline = content.match(/<img[^>]+src=["']([^"']+)["']/i);
+      if (inline) imageUrl = inline[1];
+    }
     if (attachments.length) {
       this.logger.info(
-        `Inbound attachments: n=${attachments.length} first=${JSON.stringify(attachments[0]).slice(0, 160)}`
+        `Inbound attachments: n=${attachments.length} types=${attachments.map((a) => (a && (a.content_type || a.contentType)) || '?').join(',')} urls=${attachments.map((a) => (a && a.url ? 'y' : 'n')).join(',')} | first=${JSON.stringify(attachments[0]).slice(0, 200)}`
       );
-    } else if (imageUrl) {
-      this.logger.info(`Inbound image url=${imageUrl.slice(0, 80)}...`);
+    }
+    if (imageUrl) {
+      this.logger.info(`Inbound image url=${imageUrl.slice(0, 90)}...`);
+    } else if (attachments.length) {
+      this.logger.warn('Inbound attachments present but no image url picked');
+    } else if (!isC2C && /\\[图片\\]|\\[image\\]|图片/.test(content)) {
+      this.logger.warn('Group message looks like an image but no attachment url (确认是否 @ 了机器人)');
     }
     if (!content && !imageUrl) return;
     if (!content) content = '请描述这张图片';
@@ -1717,15 +1738,20 @@ export class QQBotDO {
   /** 下载图片并转成 base64 data URI（供不支持外链抓取的 AI 服务商识别） */
   async downloadImageAsBase64(imageUrl) {
     if (!imageUrl) return null;
+    const fetchImage = async (withReferer) => {
+      const headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+        Accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+      };
+      if (withReferer) headers.Referer = 'https://q.qq.com/';
+      return fetch(imageUrl, { headers, signal: AbortSignal.timeout(30000) });
+    };
     try {
-      const res = await fetch(imageUrl, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
-          'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
-          Referer: 'https://q.qq.com/',
-        },
-        signal: AbortSignal.timeout(10000),
-      });
+      let res = await fetchImage(true);
+      if (!res.ok) {
+        this.logger.warn(`Image fetch failed: HTTP ${res.status}（去掉 Referer 重试一次）`);
+        res = await fetchImage(false);
+      }
       if (!res.ok) {
         this.logger.warn(`Image fetch failed: HTTP ${res.status}`);
         return null;
@@ -1733,7 +1759,8 @@ export class QQBotDO {
       const contentType = res.headers.get('content-type') || '';
       const buf = new Uint8Array(await res.arrayBuffer());
       const size = buf.byteLength;
-      if (size < 16 || size > 6 * 1024 * 1024) {
+      // 群里的手机原图可能很大；base64 会再涨 1/3，10MB 以内都收
+      if (size < 16 || size > 10 * 1024 * 1024) {
         this.logger.warn(`Image size invalid (${size} bytes), skipping`);
         return null;
       }
