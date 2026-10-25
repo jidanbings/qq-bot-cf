@@ -25,6 +25,7 @@ import {
 } from './constants.js';
 import { Logger } from './utils/logger.js';
 import { withRetry, createExponentialBackoff } from './utils/retry.js';
+import { maskId } from './utils/crypto.js';
 
 const reconnectDelay = createExponentialBackoff();
 const MENTION_RE = /<@[!&]?[^>\s]{0,64}>/g;
@@ -1541,10 +1542,24 @@ export class QQBotDO {
       return;
     }
     if (isC2C && msgId) this.state.waitUntil(this.sendTyping({ scopeId, msgId }));
+    // 长任务（写文章/多步）可能要几分钟，先给个反馈
+    if (msgId) {
+      try {
+        await this.sendReply({
+          isC2C,
+          scopeId,
+          content: '收到，开始处理了～长任务可能要几分钟，完成后把结果（和文件）发你。',
+          msgId,
+        });
+      } catch (e) {
+        this.logger.warn(`sandbox wait notice failed: ${e.message}`);
+      }
+    }
     const out = await callDo('/run', {
       task: arg,
       scope: key,
       kind: isC2C ? 'c2c' : 'group',
+      owner: await maskId(userId || scopeId),
       systemPrompt: this.config.systemPrompt || '你是一个靠谱、务实的 QQ 机器人助手。',
       providers,
     });
@@ -1572,12 +1587,12 @@ export class QQBotDO {
       }
     }
     const sentNote = sentFiles.length ? `\n（已发送文件：${sentFiles.join('、')}）` : '';
-    await this.sendReply({
-      isC2C,
-      scopeId,
-      content: `${out.reply}${sentNote}\n\n（沙箱：${out.steps} 步 · ${out.files} 个文件）`,
-      msgId,
-    });
+    const finalText = `${out.reply}${sentNote}\n\n（沙箱：${out.steps} 步 · ${out.files} 个文件）`;
+    const sent = await this.sendReply({ isC2C, scopeId, content: finalText, msgId });
+    if (!sent && msgId) {
+      // 被动回复窗口（5 分钟）可能已经过了，改发主动消息兜底
+      await this.sendReply({ isC2C, scopeId, content: finalText });
+    }
     this.logExchange({
       isC2C,
       scopeId,

@@ -12,9 +12,9 @@ import { withRetry } from './utils/retry.js';
 
 const KEY = 'sandbox';
 const MAX_FILES = 20;
-const MAX_FILE_BYTES = 8 * 1024;
-const MAX_TOTAL_BYTES = 40 * 1024;
-const MAX_STEPS = 6;
+const MAX_FILE_BYTES = 32 * 1024;
+const MAX_TOTAL_BYTES = 64 * 1024;
+const MAX_STEPS = 8;
 const MAX_OPS_PER_STEP = 4;
 
 export const AIDO_ENV_RULES = `
@@ -22,14 +22,22 @@ export const AIDO_ENV_RULES = `
 【运行环境（必须遵守）】
 - 你运行在一个隔离的沙箱 Durable Object（AiDO）里，实例只属于当前这个会话。
 - 你唯一能操作的是这个沙箱里的虚拟文件系统：最多 ${MAX_FILES} 个文件，单文件不超过 ${MAX_FILE_BYTES / 1024}KB，总量不超过 ${MAX_TOTAL_BYTES / 1024}KB。
-- 文件路径用相对路径（例如 notes/todo.md），不要用绝对路径或 .. 跳出沙箱。
+- 文件路径用相对路径（例如 article.md），不要用绝对路径或 .. 跳出沙箱；系统会自动把它归档到你的用户目录 users/<你的编号>/ 下。
 - 你**不能**发 QQ 消息、不能访问网络、不能调用其他 DO、不能执行任意代码或系统命令；这些操作会被直接拒绝。
 - 需要操作文件时，在回复最后单独输出：
   [ENV]{"op":"file.write","path":"notes/todo.md","content":"..."}
   [ENV]{"op":"file.read","path":"notes/todo.md"}
   [ENV]{"op":"file.list"}
   [ENV]{"op":"file.delete","path":"notes/todo.md"}
+  [ENV:WRITE path="article.md"]
+  ……这里直接写正文，可以多行，不需要 JSON 转义……
+  [/ENV]
+  [ENV:APPEND path="article.md"]
+  ……续写内容……
+  [/ENV]
   [ENV]{"op":"file.send","path":"index.html"}
+- 写**长文本**（超过约 300 字）必须用上面的 [ENV:WRITE]…[/ENV] 块语法：正文原样写在里面，不要放进 JSON 字符串，否则换行和引号会把内容弄坏。
+- 内容很长时可以分多次（WRITE 一次 + APPEND 若干次），单文件上限 32KB。
 - [ENV]{"op":"file.send","path":"..."} 表示「把文件作为附件发给用户」（一次最多 3 个）。用户说「发给我 / 生成后发我 / 给我文件」时，创建完文件必须用 file.send 发出去，不要只回「已保存」。
 - 每次最多 ${MAX_OPS_PER_STEP} 个操作；系统执行后会把结果回给你，然后你再继续，任务完成就只给最终答复、不要再输出操作。
 - [ENV] 行不会展示给用户，也不要放进代码块。`;
@@ -38,6 +46,19 @@ function safePath(p) {
   const s = String(p || '').replace(/\\/g, '/').trim();
   if (!s || s.startsWith('/') || s.includes('..') || s.length > 120) return null;
   return s;
+}
+
+/** 每个用户的文件根目录：users/<masked-openid>/ */
+function userBase(sb) {
+  return sb && sb.owner ? `users/${sb.owner}/` : '';
+}
+
+/** 把用户/AI 给的相对路径解析成真实存储路径（已带 users/ 前缀的保持不变） */
+function resolveIn(sb, p) {
+  const s = safePath(p);
+  if (!s) return null;
+  if (s.startsWith('users/')) return s;
+  return userBase(sb) + s;
 }
 
 function renderFiles(sb) {
@@ -49,19 +70,49 @@ function renderFiles(sb) {
 export function parseEnvOps(text) {
   const ops = [];
   const kept = [];
-  for (const line of String(text || '').split('\n')) {
-    const t = line.trim();
-    if (t.startsWith('[ENV]')) {
+  const lines = String(text || '').split('\n');
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    // 块语法：[ENV:WRITE path="a.md"] … [/ENV]
+    const block = /^\[ENV:(WRITE|APPEND)\s+path="([^"]+)"\s*\]$/i.exec(trimmed);
+    if (block) {
+      const path = block[2];
+      const content = [];
+      let j = i + 1;
+      for (; j < lines.length; j++) {
+        if (lines[j].trim() === '[/ENV]') break;
+        content.push(lines[j]);
+      }
+      if (j >= lines.length) {
+        // 没有结束标记：当作普通文本，避免吞掉后续内容
+        kept.push(line);
+        continue;
+      }
+      ops.push({
+        op: block[1].toUpperCase() === 'WRITE' ? 'file.write' : 'file.append',
+        path,
+        content: content.join('\n'),
+      });
+      i = j;
+      continue;
+    }
+
+    if (trimmed.startsWith('[ENV]')) {
       try {
-        const op = JSON.parse(t.slice(5).trim());
+        const op = JSON.parse(trimmed.slice(5).trim());
         if (op && typeof op.op === 'string') ops.push(op);
       } catch {
         /* 解析失败丢弃该行 */
       }
       continue;
     }
+
     kept.push(line);
   }
+
   return { reply: kept.join('\n').trim(), ops: ops.slice(0, MAX_OPS_PER_STEP) };
 }
 
@@ -77,7 +128,7 @@ export function applyEnvOps(sb, ops) {
         const paths = Object.keys(sb.files);
         results.push(paths.length ? '文件列表：\n' + paths.map((p) => `- ${p}`).join('\n') : '文件列表：（空）');
       } else if (op.op === 'file.write') {
-        const p = safePath(op.path);
+        const p = resolveIn(sb, op.path);
         if (!p) {
           results.push(`写入失败：非法路径 ${op.path}`);
           continue;
@@ -98,15 +149,34 @@ export function applyEnvOps(sb, ops) {
         }
         sb.files = next;
         results.push(`已写入 ${p}（${Buffer.byteLength(content, 'utf8')}B）`);
+      } else if (op.op === 'file.append') {
+        const p = resolveIn(sb, op.path);
+        if (!p) {
+          results.push(`追加失败：非法路径 ${op.path}`);
+          continue;
+        }
+        const add = String(op.content == null ? '' : op.content);
+        const merged = (sb.files[p] || '') + (sb.files[p] ? '\n' : '') + add;
+        if (Buffer.byteLength(merged, 'utf8') > MAX_FILE_BYTES) {
+          results.push(`追加失败：${p} 超过 ${MAX_FILE_BYTES / 1024}KB`);
+          continue;
+        }
+        const nextAppend = { ...sb.files, [p]: merged };
+        if (totalBytes(nextAppend) > MAX_TOTAL_BYTES) {
+          results.push(`追加失败：沙箱总量超过 ${MAX_TOTAL_BYTES / 1024}KB`);
+          continue;
+        }
+        sb.files = nextAppend;
+        results.push(`已追加 ${p}（现在 ${Buffer.byteLength(merged, 'utf8')}B）`);
       } else if (op.op === 'file.read') {
-        const p = safePath(op.path);
+        const p = resolveIn(sb, op.path);
         if (!p || !(p in sb.files)) {
           results.push(`读取失败：${op.path} 不存在`);
           continue;
         }
         results.push(`${p} 的内容：\n${sb.files[p]}`);
       } else if (op.op === 'file.delete') {
-        const p = safePath(op.path);
+        const p = resolveIn(sb, op.path);
         if (!p || !(p in sb.files)) {
           results.push(`删除失败：${op.path} 不存在`);
           continue;
@@ -134,6 +204,7 @@ export class AiDO {
     const sb = saved && typeof saved === 'object' ? saved : {};
     return {
       files: sb.files && typeof sb.files === 'object' ? sb.files : {},
+      owner: typeof sb.owner === 'string' ? sb.owner : '',
       runs: Number(sb.runs) || 0,
       updatedAt: Number(sb.updatedAt) || 0,
       log: Array.isArray(sb.log) ? sb.log : [],
@@ -156,7 +227,7 @@ export class AiDO {
             messages,
             temperature: provider.temperature === '' || provider.temperature == null ? 0.6 : Number(provider.temperature),
           }),
-          signal: AbortSignal.timeout(120000),
+          signal: AbortSignal.timeout(180000),
         });
         if (!res.ok) {
           const text = await res.text().catch(() => '');
@@ -177,8 +248,9 @@ export class AiDO {
     );
   }
 
-  async run({ task, systemPrompt, providers, scope, kind }) {
+  async run({ task, systemPrompt, providers, scope, kind, owner }) {
     const sb = await this.load();
+    if (owner) sb.owner = String(owner).slice(0, 32);
     const basePrompt = String(systemPrompt || '') + AIDO_ENV_RULES + renderFiles(sb);
     const messages = [
       { role: 'system', content: basePrompt },
@@ -209,7 +281,7 @@ export class AiDO {
       const otherOps = ops.filter((o) => o.op !== 'file.send');
       const results = applyEnvOps(sb, otherOps);
       for (const op of sendOps) {
-        const p = safePath(op.path);
+        const p = resolveIn(sb, op.path);
         if (!p || !(p in sb.files)) {
           results.push(`发送失败：${op.path} 不存在`);
         } else if (sendQueue.length >= 3) {
@@ -277,8 +349,10 @@ export class AiDO {
 
   async readFile(path) {
     const sb = await this.load();
-    const p = safePath(path);
-    if (!p || !(p in sb.files)) return { error: '文件不存在' };
+    const resolved = resolveIn(sb, path);
+    const raw = safePath(path);
+    const p = resolved && resolved in sb.files ? resolved : raw && raw in sb.files ? raw : null;
+    if (!p) return { error: '文件不存在' };
     return { path: p, content: sb.files[p], bytes: Buffer.byteLength(sb.files[p], 'utf8') };
   }
 
