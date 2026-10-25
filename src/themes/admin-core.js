@@ -129,7 +129,8 @@ var META={
   imagegen:{title:'生图模型',crumb:'设置 / 生图模型'},
   groups:{title:'群管理',crumb:'管理 / 群管理'},
   reminders:{title:'定时任务',crumb:'管理 / 定时任务'},
-  logs:{title:'聊天记录',crumb:'数据 / 聊天记录'}
+  logs:{title:'聊天记录',crumb:'数据 / 聊天记录'},
+  workspace:{title:'AI 工作区',crumb:'管理 / AI 工作区'}
 };
 var currentTab='status';
 
@@ -1390,6 +1391,102 @@ function onPresetClick(e){
   openAiModal(-1,{name:p.name,url:p.url,model:p.model});
 }
 
+/* ------------------------------ AI 工作区 ------------------------------ */
+
+function showWorkspace(){
+  stopStatusTimer();
+  rendered=false;
+  setActive('workspace');
+  setTopActions('<button class="btn sm" id="b-ws-refresh" type="button">'+IX.refresh+'<span>刷新</span></button>');
+  setPill('AI 工作区','');
+  $('wrap').innerHTML='<div class="card"><div class="card-head"><h3>AI 工作区</h3>'
+    +'<span class="hint">/do 让 AI 在独立 DO 里干活，这里看每个会话的任务与笔记</span></div>'
+    +'<p class="muted">用法：群里 @机器人 发 <b>/do 帮我整理这周要做的事</b>；AI 会把任务记进工作区，之后可以 <b>/do 列表</b> 查看。</p>'
+    +'<div id="ws-list"><div class="sk-field"><span class="sk-bar sk-w60"></span></div></div></div>';
+  var btn=$('b-ws-refresh');
+  if(btn)btn.addEventListener('click',loadWorkspaces);
+  loadWorkspaces();
+}
+
+function loadWorkspaces(){
+  var box=$('ws-list');
+  if(box)box.innerHTML='<div class="sk-field"><span class="sk-bar sk-w60"></span></div>';
+  api('GET','/api/workspaces').then(function(d){
+    renderWorkspaces((d&&d.items)||[]);
+  }).catch(function(e){
+    if(box)box.innerHTML='<p class="error-text">'+esc(e.message)+'</p>';
+  });
+}
+
+function renderWorkspaces(items){
+  var box=$('ws-list');
+  if(!box)return;
+  if(!items.length){
+    box.innerHTML='<p class="muted">还没有工作区。在群里 @机器人 发 <b>/do 帮我整理一下…</b> 就会创建。</p>';
+    return;
+  }
+  var h='';
+  for(var i=0;i<items.length;i++){
+    var it=items[i];
+    h+='<div class="ws-row" data-scope="'+esc(it.scope)+'">'
+      +'<div class="ws-main"><b>'+esc(it.scopeMasked||'')+'</b>'
+      +'<small>'+esc(it.lastTask||'（还没执行过任务）')+'</small>'
+      +'<div class="ws-tags"><span class="ws-tag">'+(it.kind==='c2c'?'单聊':'群聊')+'</span>'
+      +'<span class="ws-tag">执行 '+esc(String(it.runs||0))+' 次</span>'
+      +'<span class="ws-tag">任务 '+esc(String(it.tasks||0))+'</span>'
+      +'<span class="ws-tag">笔记 '+esc(String(it.notes||0))+'</span>'
+      +'<span class="ws-tag">'+esc(it.updatedAt?fullTime(it.updatedAt):'')+'</span></div></div>'
+      +'<div class="prov-tools"><button class="btn sm" type="button" data-ws="detail">查看</button>'
+      +'<button class="btn sm" type="button" data-ws="clear">清空</button></div></div>';
+  }
+  box.innerHTML=h;
+  if(!box.__wsBound){ box.__wsBound=true; box.addEventListener('click',onWorkspaceClick); }
+}
+
+function onWorkspaceClick(e){
+  var btn=e.target&&e.target.closest?e.target.closest('button[data-ws]'):null;
+  if(!btn)return;
+  var row=btn.closest('.ws-row');
+  if(!row)return;
+  var scope=row.getAttribute('data-scope')||'';
+  var act=btn.getAttribute('data-ws');
+  if(act==='clear'){
+    if(!confirm('清空这个工作区的任务和笔记？'))return;
+    api('POST','/api/workspaces/clear',{scope:scope}).then(function(){
+      toast('已清空');
+      loadWorkspaces();
+    }).catch(function(err){ toast(err.message,'bad'); });
+  } else if(act==='detail'){
+    api('POST','/api/workspaces/detail',{scope:scope}).then(function(d){
+      openWorkspaceDetail(d);
+    }).catch(function(err){ toast(err.message,'bad'); });
+  }
+}
+
+function openWorkspaceDetail(d){
+  var tasks=(d.tasks||[]).length?d.tasks.map(function(x){return '<li>'+(x.done?'✅':'⬜')+' #'+x.id+' '+esc(x.text)+'</li>';}).join(''):'<li class="muted">（空）</li>';
+  var notes=(d.notes||[]).length?d.notes.slice(-10).map(function(n){return '<li>· '+esc(n.text)+'</li>';}).join(''):'<li class="muted">（空）</li>';
+  var log=(d.log||[]).length?d.log.slice(-8).reverse().map(function(x){return '<li>'+esc(x.at?fullTime(x.at):'')+' · '+esc(x.task)+'</li>';}).join(''):'<li class="muted">（空）</li>';
+  var m=document.getElementById('ws-modal-mask');
+  if(!m){
+    m=document.createElement('div');
+    m.className='modal-mask';
+    m.id='ws-modal-mask';
+    m.innerHTML='<div class="modal" role="dialog" aria-modal="true"><div class="modal-head"><h3>工作区详情</h3>'
+      +'<button class="modal-x" type="button" id="ws-modal-x" aria-label="关闭">×</button></div>'
+      +'<div class="modal-body ws-detail" id="ws-detail-body"></div></div>';
+    document.body.appendChild(m);
+    m.addEventListener('click',function(ev){
+      if(ev.target===m||ev.target.id==='ws-modal-x')m.hidden=true;
+    });
+  }
+  $('ws-detail-body').innerHTML='<div class="muted">'+esc(d.scopeMasked||'')+'</div>'
+    +'<h4>任务清单</h4><ul>'+tasks+'</ul>'
+    +'<h4>笔记</h4><ul>'+notes+'</ul>'
+    +'<h4>最近执行</h4><ul>'+log+'</ul>';
+  m.hidden=false;
+}
+
 function showImageGen(){
   stopStatusTimer();
   rendered=false;
@@ -2132,6 +2229,7 @@ function route(){
   if(tab==='config')showConfig();
   else if(tab==='ai')showAi();
   else if(tab==='imagegen')showImageGen();
+  else if(tab==='workspace')showWorkspace();
   else if(tab==='groups')showGroups();
   else if(tab==='reminders')showReminders();
   else if(tab==='logs')showLogs(1);

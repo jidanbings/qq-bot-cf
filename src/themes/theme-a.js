@@ -77,6 +77,15 @@ button{font-family:inherit}
 .side-links button#logout:hover{background:var(--red-soft);color:var(--red)}
 .side-links svg{width:14px;height:14px}
 
+.ws-row{display:flex;align-items:center;gap:.6rem;padding:.55rem .7rem;border:1px solid var(--border);border-radius:10px;margin-bottom:.5rem;background:var(--surface)}
+.ws-row .ws-main{flex:1;min-width:0}
+.ws-row b{font-size:.8rem}
+.ws-row small{display:block;color:var(--muted);font-size:.7rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ws-tags{display:flex;gap:.35rem;flex-wrap:wrap;font-size:.68rem;color:var(--muted);margin-top:.25rem}
+.ws-tag{background:var(--surface-2);border-radius:6px;padding:1px 6px;white-space:nowrap}
+.ws-detail h4{font-size:.78rem;margin:.8rem 0 .3rem}
+.ws-detail ul{list-style:none;display:flex;flex-direction:column;gap:.25rem}
+.ws-detail li{font-size:.75rem;color:var(--text-2);line-height:1.6}
 /* ============================ 主区（照抄 user.html .main-area） ============================ */
 .scroll{margin-left:240px;height:100vh;height:100dvh;flex:1;display:flex;flex-direction:column;min-width:0;overflow-y:auto;-webkit-overflow-scrolling:touch}
 .topbar{flex:0 0 auto;height:60px;display:flex;align-items:center;gap:14px;padding:0 28px;
@@ -566,6 +575,7 @@ const SVG = (paths) =>
   '</svg>';
 
 export const ICONS_A = {
+  workspace: SVG('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M8 13h8"/><path d="M8 16h5"/>'),
   status: SVG('<path d="M3 12h4l3 8 4-16 3 8h4"/>'),
   config: SVG(
     '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>'
@@ -614,6 +624,7 @@ ${CSS_A}
     <div class="tabs">
       <a href="#groups" data-tab="groups">${ICONS_A.groups}<span>群管理</span></a>
       <a href="#reminders" data-tab="reminders">${ICONS_A.reminders}<span>定时任务</span></a>
+      <a href="#workspace" data-tab="workspace">${ICONS_A.workspace}<span>AI 工作区</span></a>
     </div>
     <div class="nav-label">数据</div>
     <div class="tabs">

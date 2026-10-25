@@ -28,9 +28,9 @@ import { withRetry, createExponentialBackoff } from './utils/retry.js';
 
 const reconnectDelay = createExponentialBackoff();
 const MENTION_RE = /<@[!&]?[^>\s]{0,64}>/g;
-const MAX_SESSIONS = 100;
+const MAX_SESSIONS = 300;
 const SESSION_IDLE_MS = 60 * 60 * 1000;
-const MAX_PENDING_MESSAGES = 100;
+const MAX_PENDING_MESSAGES = 200;
 // 「原生表情」在群聊/单聊官方 API 里发不了（表情表态仅频道支持），
 // 这里用 Unicode emoji 代替：QQ 客户端会按表情样式渲染。
 const EMOJIS = [
@@ -785,7 +785,7 @@ export class QQBotDO {
 
   async handleMessage(type, data) {
     if (this.pendingMessages >= MAX_PENDING_MESSAGES) {
-      this.logger.warn('Message backlog full, dropping event');
+      this.logger.warn("Message backlog full (" + this.pendingMessages + "), dropping event");
       return;
     }
 
@@ -916,6 +916,8 @@ export class QQBotDO {
               '😄 表情：/梗图 随机梗图，/梗图 名字 指定，/表情 随机 emoji',
               '🔊 语音：/语音 你好呀 —— 内置 TTS 合成语音',
               '🧰 指令：/菜单 弹出按钮面板 · /撤回 撤回我上一条 · /帮助 看这条',
+              '🗂 工作区：/do 帮我整理待办 —— AI 在工作区里执行任务（可维护清单/笔记），/do 列表 查看',
+              '🧪 沙箱：/ai 帮我写个文件并整理 —— AI 在隔离沙箱里干活（只能动它自己的虚拟文件）',
             ].join('\n'),
       });
       return;
@@ -1031,6 +1033,18 @@ export class QQBotDO {
       return;
     }
 
+    // /do <任务>：在独立的 AI 工作区 DO 里执行（任务清单 / 笔记 / 多步任务）
+    if (/^\/?(do|工作区)(\s|$)/i.test(content)) {
+      await this.handleWorkspaceCommand({ isC2C, scopeId, msgId, content, userId });
+      return;
+    }
+
+    // /ai <任务>：AiDO 沙箱（最高自由度，但只能在它自己的虚拟文件系统里活动）
+    if (/^\/?(ai|沙箱|sandbox)(\s|$)/i.test(content)) {
+      await this.handleAiSandbox({ isC2C, scopeId, msgId, content, userId });
+      return;
+    }
+
     // 定时提醒：识别「X 点提醒我…」直接落库，不绕 AI（AI 未配置也能用）
     const reminderIntent = parseReminder(content);
     if (reminderIntent) {
@@ -1068,7 +1082,8 @@ export class QQBotDO {
     }
 
     const historyLimit = Number(this.config.historyLimit) || 20;
-    const useAiDo = !!(this.env && this.env.AI_WORKER);
+    const chatDoNs = this.env && (this.env.CHAT || this.env.AI_WORKER);
+    const useAiDo = !!chatDoNs;
     let session = await this.loadSession(key);
     if (!session) {
       this.pruneSessions();
@@ -1118,7 +1133,7 @@ export class QQBotDO {
     let used = null;
 
     if (useAiDo) {
-      // 会话历史与模型调用都交给独立的 AI DO（长请求不阻塞 QQ 网关）
+      // 会话历史与模型调用都交给独立的 ChatDO（长请求不阻塞 QQ 网关）
       try {
         const out = await this.askAiDo({
           key,
@@ -1137,7 +1152,7 @@ export class QQBotDO {
           });
           return;
         }
-        if (!out || out.error) throw new Error((out && out.error) || 'AI DO 无响应');
+        if (!out || out.error) throw new Error((out && out.error) || 'ChatDO 无响应');
         const text = stripMentions(out.text);
         const clean = /^@\S+\s+/.test(text) ? text.replace(/^@\S+\s+/, '') : text;
         const stripped = stripToolRecords(clean);
@@ -1146,8 +1161,8 @@ export class QQBotDO {
         used = out.provider;
       } catch (e) {
         aiErr = e;
-        this.logger.warn(`AI DO 调用失败: ${e.message}`);
-        this.logSystem(`AI DO 调用失败（${e.message.slice(0, 120)}）`);
+        this.logger.warn(`ChatDO 调用失败: ${e.message}`);
+        this.logSystem(`ChatDO 调用失败（${e.message.slice(0, 120)}）`);
       }
     } else {
       history.push({ role: 'user', content });
@@ -1308,7 +1323,7 @@ export class QQBotDO {
     if (session) {
       session.lastUsed = Date.now();
       await this.saveSession(key, session);
-      // 本地模式的摘要压缩；AI DO 模式下它自己管历史与摘要
+      // 本地模式的摘要压缩；ChatDO 模式下它自己管历史与摘要
       if (!useAiDo && used && this.state && typeof this.state.waitUntil === 'function') {
         this.state.waitUntil(this.maybeSummarize(key, session, used));
       }
@@ -1376,25 +1391,255 @@ export class QQBotDO {
     return `（系统记录：已执行 ${label}${detail}，结果已发送给用户）`;
   }
 
-  /* -------------------- 独立的 AI DO（会话历史 + 模型调用） -------------------- */
+  /* ------------------------------ 独立工具 DO ------------------------------ */
 
-  /** 调 AI DO 完成一轮对话；没有绑定时返回 null，走本地逻辑 */
-  async askAiDo({ key, providers, systemPrompt, historyLimit, content, image }) {
-    const ns = this.env && this.env.AI_WORKER;
+  /** 调 ToolDO 执行工具；没有绑定时返回 null，走本地实现 */
+  async execToolDo(tool, args, { isC2C, scopeId, msgId, caption, userId }) {
+    const ns = this.env && this.env.TOOL;
     if (!ns || typeof ns.idFromName !== 'function') return null;
+    const key = isC2C ? `c2c:${scopeId}` : `group:${scopeId}`;
     const stub = ns.get(ns.idFromName(key));
-    const res = await stub.fetch('https://ai-do/chat', {
+    const token = await this.getToken();
+    const provider = (this.config.aiProviders || []).find((p) => p && p.enabled !== 0 && p.baseUrl && p.apiKey);
+    const seqBase = (msgId && this.msgSeqMap.get(msgId)) || 0;
+    const res = await stub.fetch('https://tool/exec', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ key, providers, systemPrompt, historyLimit, content, image }),
+      body: JSON.stringify({
+        tool,
+        args: { ...(args || {}), ...(caption ? { caption } : {}) },
+        ctx: {
+          isC2C: !!isC2C,
+          scopeId,
+          msgId: msgId || '',
+          userId: userId || '',
+          base: this.apiBase(),
+          token,
+          seqBase,
+        },
+        cfg: {
+          imageGenModel: this.config.imageGenModel || '',
+          imageBase: String(this.config.imageGenBaseUrl || '').trim() || (provider ? provider.baseUrl : ''),
+          imageKey: String(this.config.imageGenApiKey || '').trim() || (provider ? provider.apiKey : ''),
+          voiceLang: this.config.voiceLang || 'zh',
+          voiceGain: this.config.voiceGain || '6',
+        },
+      }),
     });
-    if (!res.ok) throw new Error(`AI DO HTTP ${res.status}`);
-    return res.json();
+    if (!res.ok) throw new Error(`ToolDO HTTP ${res.status}`);
+    const out = await res.json();
+    if (msgId && out && out.used) this.msgSeqMap.set(msgId, seqBase + out.used);
+    return { ok: !!(out && out.ok), note: (out && out.note) || '' };
   }
 
-  /** 把助手这一轮说的话记进 AI DO 的会话历史 */
+  /** /ai <任务>：在 AiDO 沙箱里执行（最高自由度，但只能动沙箱自己的文件） */
+  async handleAiSandbox({ isC2C, scopeId, msgId, content, userId }) {
+    const ns = this.env && this.env.AIDO;
+    if (!ns || typeof ns.idFromName !== 'function') {
+      await this.sendReply({ isC2C, scopeId, content: 'AiDO 还没启用（缺 AIDO 绑定），等新版部署后再试。', msgId });
+      return;
+    }
+    const key = isC2C ? `c2c:${scopeId}` : `group:${scopeId}`;
+    const stub = ns.get(ns.idFromName(key));
+    const callDo = async (path, body) => {
+      const res = await stub.fetch(`https://aido${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body || {}),
+      });
+      if (!res.ok) throw new Error(`AiDO HTTP ${res.status}`);
+      return res.json();
+    };
+    const arg = content.replace(/^\/?(ai|沙箱|sandbox)\s*/i, '').trim();
+
+    if (!arg || /^(帮助|help|\?)$/i.test(arg)) {
+      let st = null;
+      try {
+        st = await callDo('/state');
+      } catch {}
+      const lines = [
+        '🧪 AiDO 沙箱',
+        '/ai <任务> —— 让 AI 在隔离沙箱里干活（可以自己建文件、写笔记、做多步任务）',
+        '/ai 文件 —— 看沙箱里的文件',
+        '/ai 清空 —— 清空沙箱',
+        '边界：只能读写它自己的虚拟文件，不能发消息、不能联网、不能碰其他 DO。',
+      ];
+      if (st && st.files && st.files.length) lines.push(`当前文件：${st.files.length} 个，已执行 ${st.runs || 0} 次`);
+      await this.sendReply({ isC2C, scopeId, content: lines.join('\n'), msgId });
+      return;
+    }
+    if (/^(文件|列表|状态)$/i.test(arg)) {
+      const st = await callDo('/state');
+      const files = st.files && st.files.length
+        ? st.files.map((f) => `· ${f.path}（${f.bytes}B）`).join('\n')
+        : '（沙箱里还没有文件）';
+      await this.sendReply({ isC2C, scopeId, content: `🧪 沙箱文件\n${files}`, msgId });
+      return;
+    }
+    if (/^(清空|重置)$/i.test(arg)) {
+      await callDo('/reset');
+      await this.sendReply({ isC2C, scopeId, content: '沙箱已清空。', msgId });
+      return;
+    }
+
+    const providers = (this.config.aiProviders || []).filter(
+      (p) => p && p.enabled !== 0 && p.baseUrl && p.apiKey && p.model
+    );
+    if (!providers.length) {
+      await this.sendReply({ isC2C, scopeId, content: '还没配置 AI，去后台「AI 对话」加一个再 /ai。', msgId });
+      return;
+    }
+    if (isC2C && msgId) this.state.waitUntil(this.sendTyping({ scopeId, msgId }));
+    const out = await callDo('/run', {
+      task: arg,
+      systemPrompt: this.config.systemPrompt || '你是一个靠谱、务实的 QQ 机器人助手。',
+      providers,
+    });
+    if (!out || out.error) {
+      await this.sendReply({ isC2C, scopeId, content: `沙箱执行失败：${(out && out.error) || '未知错误'}`, msgId });
+      return;
+    }
+    await this.sendReply({
+      isC2C,
+      scopeId,
+      content: `${out.reply}\n\n（沙箱：${out.steps} 步 · ${out.files} 个文件）`,
+      msgId,
+    });
+    this.logExchange({
+      isC2C,
+      scopeId,
+      userId,
+      userContent: content,
+      aiReply: `[沙箱] ${String(out.reply).slice(0, 300)}`,
+      model: 'AiDO',
+    });
+  }
+
+  /* ------------------------------ AI 工作区（/do） ------------------------------ */
+
+  async handleWorkspaceCommand({ isC2C, scopeId, msgId, content, userId }) {
+    const ns = this.env && this.env.WORKSPACE;
+    if (!ns || typeof ns.idFromName !== 'function') {
+      await this.sendReply({
+        isC2C,
+        scopeId,
+        content: '工作区还没启用（缺 WORKSPACE 绑定），等新版部署后再试。',
+        msgId,
+      });
+      return;
+    }
+    const key = isC2C ? `c2c:${scopeId}` : `group:${scopeId}`;
+    const stub = ns.get(ns.idFromName(key));
+    const callWs = async (path, body) => {
+      const res = await stub.fetch(`https://ws${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body || {}),
+      });
+      if (!res.ok) throw new Error(`工作区 HTTP ${res.status}`);
+      return res.json();
+    };
+    const arg = content.replace(/^\/?(do|工作区)\s*/i, '').trim();
+
+    if (!arg || /^(帮助|help|\?)$/i.test(arg)) {
+      let st = null;
+      try {
+        st = await callWs('/state');
+      } catch {}
+      const lines = [
+        '🗂 AI 工作区',
+        '/do <任务> —— 把任务交给工作区里的 AI 执行（它可以维护任务清单和笔记）',
+        '/do 列表 —— 看当前任务与笔记',
+        '/do 清空 —— 清空这个会话的工作区',
+      ];
+      if (st && st.tasks && st.tasks.length) {
+        lines.push(`当前：${st.tasks.length} 条任务（已完成 ${st.tasks.filter((x) => x.done).length} 条）`);
+      }
+      await this.sendReply({ isC2C, scopeId, content: lines.join('\n'), msgId });
+      return;
+    }
+
+    if (/^(列表|查看|状态)$/i.test(arg)) {
+      const st = await callWs('/state');
+      const tasks = st.tasks && st.tasks.length
+        ? st.tasks.map((x) => `${x.id}. ${x.done ? '✅' : '⬜'} ${x.text}`).join('\n')
+        : '（还没有任务）';
+      const notes = st.notes && st.notes.length
+        ? '\n\n📝 最近笔记\n' + st.notes.slice(-5).map((n) => `· ${n.text}`).join('\n')
+        : '';
+      await this.sendReply({ isC2C, scopeId, content: `📋 任务清单\n${tasks}${notes}`, msgId });
+      return;
+    }
+
+    if (/^(清空|重置)$/i.test(arg)) {
+      await callWs('/reset');
+      await this.sendReply({ isC2C, scopeId, content: '工作区已清空（任务和笔记都删掉了）。', msgId });
+      return;
+    }
+
+    const providers = (this.config.aiProviders || []).filter(
+      (p) => p && p.enabled !== 0 && p.baseUrl && p.apiKey && p.model
+    );
+    if (!providers.length) {
+      await this.sendReply({ isC2C, scopeId, content: '还没配置 AI，去后台「AI 对话」加一个再 /do。', msgId });
+      return;
+    }
+
+    if (isC2C && msgId) this.state.waitUntil(this.sendTyping({ scopeId, msgId }));
+    const out = await callWs('/run', {
+      scope: key,
+      kind: isC2C ? 'c2c' : 'group',
+      task: arg,
+      systemPrompt: this.config.systemPrompt || '你是一个靠谱、务实的 QQ 机器人助手，回答简洁、可执行。',
+      providers,
+    });
+    if (!out || out.error) {
+      await this.sendReply({ isC2C, scopeId, content: `工作区执行失败：${(out && out.error) || '未知错误'}`, msgId });
+      return;
+    }
+    const applied = Array.isArray(out.applied) && out.applied.length ? `\n\n（工作区：${out.applied.join('、')}）` : '';
+    await this.sendReply({ isC2C, scopeId, content: `${out.reply}${applied}`, msgId });
+    this.logExchange({
+      isC2C,
+      scopeId,
+      userId,
+      userContent: content,
+      aiReply: `[工作区] ${String(out.reply).slice(0, 300)}`,
+      model: '工作区',
+    });
+  }
+
+  /* -------------------- 独立的 ChatDO（会话历史 + 模型调用） -------------------- */
+
+  /** 调 ChatDO 完成一轮对话；没有绑定时返回 null，走本地逻辑 */
+  async askAiDo({ key, providers, systemPrompt, historyLimit, content, image }) {
+    const ns = this.env && (this.env.CHAT || this.env.AI_WORKER);
+    if (!ns || typeof ns.idFromName !== 'function') return null;
+    const stub = ns.get(ns.idFromName(key));
+    const payload = JSON.stringify({ key, providers, systemPrompt, historyLimit, content, image });
+    let lastErr = null;
+    // 网络抖动 / DO 冷启动时重试一次，别让一条消息直接掉进兜底话术
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const res = await stub.fetch('https://ai-do/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: payload,
+        });
+        if (!res.ok) throw new Error(`ChatDO HTTP ${res.status}`);
+        return await res.json();
+      } catch (e) {
+        lastErr = e;
+        this.logger.warn(`ChatDO attempt ${attempt} failed: ${e.message}`);
+        if (attempt === 1) await new Promise((r) => setTimeout(r, 400));
+      }
+    }
+    throw lastErr;
+  }
+
+  /** 把助手这一轮说的话记进 ChatDO 的会话历史 */
   async recordAiDo({ key, assistant, historyLimit }) {
-    const ns = this.env && this.env.AI_WORKER;
+    const ns = this.env && (this.env.CHAT || this.env.AI_WORKER);
     if (!ns || typeof ns.idFromName !== 'function') return;
     const stub = ns.get(ns.idFromName(key));
     const res = await stub.fetch('https://ai-do/record', {
@@ -1402,16 +1647,16 @@ export class QQBotDO {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ key, assistant, historyLimit }),
     });
-    if (!res.ok) throw new Error(`AI DO record HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`ChatDO record HTTP ${res.status}`);
   }
 
-  /** 记录助手这轮内容：走 AI DO 就写进 AI DO，否则写本地会话 */
+  /** 记录助手这轮内容：走 ChatDO 就写进 ChatDO，否则写本地会话 */
   async rememberAssistant({ key, session, history, text, useAiDo, historyLimit }) {
     if (useAiDo) {
       try {
         await this.recordAiDo({ key, assistant: text, historyLimit });
       } catch (e) {
-        this.logger.warn(`AI DO record failed: ${e.message}`);
+        this.logger.warn(`ChatDO record failed: ${e.message}`);
       }
       return;
     }
@@ -1940,6 +2185,37 @@ export class QQBotDO {
       });
       return;
     }
+    // 生图也在独立的 ToolDO 里执行（没有绑定时走下面的本地实现）
+    const toolNs = this.env && this.env.TOOL;
+    if (toolNs && typeof toolNs.idFromName === 'function') {
+      if (msgId) {
+        try {
+          await this.sendReply({
+            isC2C,
+            scopeId,
+            content: IMAGE_WAIT_LINES[Math.floor(Math.random() * IMAGE_WAIT_LINES.length)],
+            msgId,
+          });
+        } catch (e) {
+          this.logger.warn(`Image wait notice failed: ${e.message}`);
+        }
+      }
+      const out = await this.execToolDo('image', { prompt, caption }, { isC2C, scopeId, msgId, userId });
+      if (out) {
+        if (out.ok) {
+          this.logExchange({
+            isC2C,
+            scopeId,
+            userId,
+            userContent: String(userContent || '').trim() || '（生图）',
+            aiReply: `[图片] ${String(caption || '（已生成）').slice(0, 200)}`,
+            model: `生图 · ${model}`,
+          });
+        }
+        return out;
+      }
+    }
+
     this.logger.info(`Image gen: model=${model} prompt=${prompt.slice(0, 40)}...`);
     // 先给个反馈：生图模型普遍要 1~2 分钟，别让用户以为没反应
     if (msgId) {
@@ -2249,6 +2525,22 @@ export class QQBotDO {
 
   async runTool(call, { isC2C, scopeId, key, msgId, userId, userContent }) {
     const name = call.name;
+    // 工具真正在独立的 ToolDO 里执行（QQBotDO 只管收发）
+    const toolNs = this.env && this.env.TOOL;
+    if (toolNs && typeof toolNs.idFromName === 'function') {
+      try {
+        const out = await this.execToolDo(name, call.args || {}, {
+          isC2C,
+          scopeId,
+          msgId,
+          caption: call.tail,
+          userId,
+        });
+        if (out) return out;
+      } catch (e) {
+        this.logger.warn(`ToolDO ${name} failed: ${e.message}`);
+      }
+    }
     try {
       if (name === 'image') {
         const prompt = String(call.args.prompt || '').trim();

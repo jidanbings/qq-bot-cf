@@ -1,5 +1,5 @@
 /**
- * AI 专用 Durable Object：把「会话历史 + 模型调用」从机器人 DO 里拆出来。
+ * 聊天 Durable Object（ChatDO）：把「会话历史 + 模型调用」从机器人 DO 里拆出来。
  *
  * - 机器人 DO（QQBotDO）只负责 QQ 网关收发、工具执行；
  * - 这里负责每个会话的上下文、摘要压缩、按优先级调用 AI（含识图能力过滤、重试、故障转移）。
@@ -15,7 +15,7 @@ const MAX_KEYS = 500;
 const SUMMARY_PROMPT =
   '把这段聊天记录压缩成不超过 120 字的中文摘要，只保留重要事实、用户偏好和未完成的事，不要客套话。';
 
-export class AIDOWorker {
+export class ChatDO {
   constructor(state, env) {
     this.state = state;
     this.env = env;

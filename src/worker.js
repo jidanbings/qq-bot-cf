@@ -1,5 +1,8 @@
 import { adminPage, homePage, loginPage, setupPage, keyRecoveryPage, recoverGatePage } from './html.js';
-import { AIDOWorker } from './ai-do.js';
+import { ChatDO } from './chat-do.js';
+import { WorkspaceDO } from './work-do.js';
+import { ToolDO } from './tool-do.js';
+import { AiDO } from './ai-sandbox-do.js';
 import { FAVICON_SVG, FAVICON_PNG_32, FAVICON_ICO, APPLE_TOUCH_PNG } from './assets/icons.js';
 import {
   clearChatLogs,
@@ -19,6 +22,8 @@ import {
   listConversations,
   listGroups,
   listReminders,
+  listWorkspaces,
+  deleteWorkspace,
   normalizeUrl,
   purgeExpiredSessions,
   randomHex,
@@ -549,6 +554,52 @@ async function handleApi(request, env, url) {
       return jsonResult({ openid, memberOpenid, op });
     }
 
+    /* -------- AI 工作区 -------- */
+
+    case '/api/workspaces': {
+      if (method !== 'GET') throw new HttpError(405, 'method_not_allowed', '请使用 GET');
+      const rows = await listWorkspaces(env);
+      const items = [];
+      for (const r of rows) {
+        items.push({
+          scope: r.scope,
+          scopeMasked: await maskId(r.scope),
+          kind: r.kind,
+          runs: r.runs,
+          tasks: r.tasks,
+          notes: r.notes,
+          lastTask: r.last_task || '',
+          updatedAt: r.updated_at,
+        });
+      }
+      return jsonResult({ items });
+    }
+
+    case '/api/workspaces/detail': {
+      if (method !== 'POST') throw new HttpError(405, 'method_not_allowed', '请使用 POST');
+      const body = await readJson(request);
+      const scope = String(body?.scope || '');
+      if (!scope) throw new HttpError(400, 'invalid_scope', '缺少 scope');
+      if (!env.WORKSPACE) throw new HttpError(503, 'no_workspace', '工作区未绑定（需要 WORKSPACE 绑定）');
+      const stub = env.WORKSPACE.get(env.WORKSPACE.idFromName(scope));
+      const res = await stub.fetch('https://ws/state', { method: 'POST', body: '{}' });
+      const state = await res.json();
+      return jsonResult({ scopeMasked: await maskId(scope), ...state });
+    }
+
+    case '/api/workspaces/clear': {
+      if (method !== 'POST') throw new HttpError(405, 'method_not_allowed', '请使用 POST');
+      const body = await readJson(request);
+      const scope = String(body?.scope || '');
+      if (!scope) throw new HttpError(400, 'invalid_scope', '缺少 scope');
+      if (env.WORKSPACE) {
+        const stub = env.WORKSPACE.get(env.WORKSPACE.idFromName(scope));
+        await stub.fetch('https://ws/reset', { method: 'POST', body: '{}' });
+      }
+      await deleteWorkspace(env, scope);
+      return jsonResult({ cleared: true });
+    }
+
     /* -------- 定时提醒 -------- */
 
     case '/api/reminders':
@@ -750,4 +801,4 @@ export default {
   },
 };
 
-export { AIDOWorker };
+export { ChatDO, WorkspaceDO, ToolDO, AiDO };

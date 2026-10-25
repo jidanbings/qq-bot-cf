@@ -86,6 +86,15 @@ const SCHEMA_STATEMENTS = [
     last_error  TEXT
   )`,
   `CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders (status, due_at)`,
+  `CREATE TABLE IF NOT EXISTS workspaces (
+    scope      TEXT PRIMARY KEY,
+    kind       TEXT NOT NULL DEFAULT 'group',
+    runs       INTEGER NOT NULL DEFAULT 0,
+    tasks      INTEGER NOT NULL DEFAULT 0,
+    notes      INTEGER NOT NULL DEFAULT 0,
+    last_task  TEXT,
+    updated_at TEXT NOT NULL
+  )`,
   `CREATE TABLE IF NOT EXISTS memes (
     name        TEXT PRIMARY KEY,
     description TEXT NOT NULL DEFAULT '',
@@ -97,7 +106,7 @@ const SCHEMA_STATEMENTS = [
 async function hasSchema(env) {
   try {
     const { results } = await env.DB.prepare(
-      `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('config', 'sessions', 'chat_log', 'groups', 'reminders', 'memes')`
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('config', 'sessions', 'chat_log', 'groups', 'reminders', 'memes', 'workspaces')`
     ).all();
     const names = new Set((results || []).map((r) => r.name));
     return (
@@ -106,7 +115,8 @@ async function hasSchema(env) {
       names.has('chat_log') &&
       names.has('groups') &&
       names.has('reminders') &&
-      names.has('memes')
+      names.has('memes') &&
+      names.has('workspaces')
     );
   } catch {
     return false;
@@ -873,5 +883,40 @@ export async function listMemes(env) {
     return results || [];
   } catch {
     return [];
+  }
+}
+/* ------------------------------ AI 工作区索引 ------------------------------ */
+
+/** 工作区状态以 DO 为准，这张表只是索引：后台据此列出「有哪些工作区」 */
+export async function upsertWorkspace(env, { scope, kind, runs, tasks, notes, lastTask, updatedAt }) {
+  const now = new Date(updatedAt || Date.now()).toISOString();
+  await env.DB.prepare(
+    `INSERT INTO workspaces (scope, kind, runs, tasks, notes, last_task, updated_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+     ON CONFLICT(scope) DO UPDATE SET
+       kind = excluded.kind, runs = excluded.runs, tasks = excluded.tasks,
+       notes = excluded.notes, last_task = excluded.last_task, updated_at = excluded.updated_at`
+  )
+    .bind(String(scope).slice(0, 120), String(kind || 'group'), Number(runs) || 0, Number(tasks) || 0, Number(notes) || 0, String(lastTask || '').slice(0, 120), now)
+    .run();
+}
+
+export async function listWorkspaces(env) {
+  try {
+    const { results } = await env.DB.prepare(
+      'SELECT scope, kind, runs, tasks, notes, last_task, updated_at FROM workspaces ORDER BY updated_at DESC LIMIT 200'
+    ).all();
+    return results || [];
+  } catch {
+    return [];
+  }
+}
+
+export async function deleteWorkspace(env, scope) {
+  try {
+    await env.DB.prepare('DELETE FROM workspaces WHERE scope = ?1').bind(scope).run();
+    return true;
+  } catch {
+    return false;
   }
 }
