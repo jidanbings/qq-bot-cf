@@ -76,7 +76,7 @@ routes = [
 
 ## ✨ 特性
 
-- **零服务器**：一个 Worker + 多个 Durable Object（QQ 网关 / ChatDO 对话 / ToolDO 工具 / WorkspaceDO 工作区 / AiDO 沙箱 / 限流）+ 一张 D1 表，全程免费额度内
+- **零服务器**：一个 Worker + 多个 Durable Object（QQ 网关 / ChatDO 对话 / WorkDO 工具+工作区 / AiDO 沙箱 / 限流）+ 一张 D1 表，全程免费额度内
 - **官方网关**：WebSocket 长连接，断线自动重连，每分钟巡检一次；部署后新版本会自己接管，无需手动重启
 - **多 AI 容错**：后台「AI 对话」可加多套 Base URL / Key / 模型（添加/编辑/测试都在弹窗里完成），按顺序尝试，前一个超时或报错自动切下一个；内置 19 家一键预填配置——国外 OpenAI、Google Gemini、xAI Grok、Groq、OpenRouter、Mistral，国内 DeepSeek、通义千问、智谱 GLM、Kimi、豆包、硅基流动、腾讯混元（TokenHub）、讯飞星火、MiniMax、零一万物、阶跃星辰、百川智能、魔搭（免费额度）。列表上的开关一点就能启用/停用
 - **生图模型预设**：后台「生图模型」页配置（同样收进弹窗，先测试通过才能保存），内置 qwen-image、wanx、seedream、cogview、dall-e-3、gpt-image-1.5、flux、nano-banana 等主流模型一键填入

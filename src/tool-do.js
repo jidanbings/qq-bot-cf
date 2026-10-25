@@ -1,5 +1,5 @@
 /**
- * ToolDO —— 工具执行 DO（一个会话一个实例）。
+ * ToolEngine —— 工具执行器（由 WorkDO 内部持有，不是一个独立的 DO）。
  *
  * 机器人主 DO（QQBotDO）只负责收发与派发；真正的工具动作都在这里做：
  * 生图、梗图、语音、定时提醒、查群资料 / 状态 / 禁言。
@@ -27,9 +27,8 @@ function toBase64(bytes) {
   return out;
 }
 
-export class ToolDO {
-  constructor(state, env) {
-    this.state = state;
+export class ToolEngine {
+  constructor(env) {
     this.env = env;
     this.seq = 0;
   }
@@ -284,15 +283,5 @@ export class ToolDO {
     }
   }
 
-  async fetch(request) {
-    const url = new URL(request.url);
-    if (request.method !== 'POST') return new Response('method not allowed', { status: 405 });
-    try {
-      const body = await request.json().catch(() => ({}));
-      if (url.pathname === '/exec') return Response.json(await this.exec(body));
-      return new Response('not found', { status: 404 });
-    } catch (e) {
-      return Response.json({ error: String((e && e.message) || e) }, { status: 500 });
-    }
-  }
 }
+

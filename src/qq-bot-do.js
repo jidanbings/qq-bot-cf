@@ -1518,7 +1518,7 @@ export class QQBotDO {
   /* ------------------------------ AI 工作区（/do） ------------------------------ */
 
   async handleWorkspaceCommand({ isC2C, scopeId, msgId, content, userId }) {
-    const ns = this.env && this.env.WORKSPACE;
+    const ns = this.env && (this.env.WORK || this.env.WORKSPACE);
     if (!ns || typeof ns.idFromName !== 'function') {
       await this.sendReply({
         isC2C,
@@ -2186,7 +2186,7 @@ export class QQBotDO {
       return;
     }
     // 生图也在独立的 ToolDO 里执行（没有绑定时走下面的本地实现）
-    const toolNs = this.env && this.env.TOOL;
+    const toolNs = this.env && (this.env.WORK || this.env.TOOL);
     if (toolNs && typeof toolNs.idFromName === 'function') {
       if (msgId) {
         try {

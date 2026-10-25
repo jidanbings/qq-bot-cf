@@ -1,11 +1,13 @@
 /**
  * AI 工作区 Durable Object：一个会话一个实例（idFromName('group:<id>' / 'c2c:<id>')）。
  *
- * 用来「干活」而不是聊天：`/do <任务>` 会把任务带进这里执行，AI 可以维护
+ * 同时负责「工具执行」（生图 / 梗图 / 语音 / 提醒 / 查群，由内部 ToolEngine 完成）
+ * 和「工作区」（`/do <任务>` 的任务清单 / 笔记）。，AI 可以维护
  * 任务清单（task.add / task.done）和笔记（note），状态存在 DO 自己的存储里，
  * 同时往 D1 的 workspaces 表写一份索引，后台「AI 工作区」页据此管理。
  */
 import { withRetry } from './utils/retry.js';
+import { ToolEngine } from './tool-do.js';
 
 const KEY = 'ws';
 const MAX_TASKS = 50;
@@ -76,10 +78,17 @@ export function applyWorkspaceOps(ws, ops) {
   return applied;
 }
 
-export class WorkspaceDO {
+export class WorkDO {
   constructor(state, env) {
     this.state = state;
     this.env = env;
+    // 工具执行器（发图 / 梗图 / 语音 / 提醒 / 查群）复用同一个 DO 实例
+    this.tools = new ToolEngine(env);
+  }
+
+  /** 工具执行：转发给 ToolEngine */
+  async exec(body) {
+    return this.tools.exec(body);
   }
 
   async load() {
@@ -198,6 +207,7 @@ export class WorkspaceDO {
     if (request.method !== 'POST') return new Response('method not allowed', { status: 405 });
     try {
       const body = await request.json().catch(() => ({}));
+      if (url.pathname === '/exec') return Response.json(await this.exec(body));
       if (url.pathname === '/run') return Response.json(await this.run(body));
       if (url.pathname === '/state') return Response.json(await this.getState());
       if (url.pathname === '/reset') return Response.json(await this.reset());

@@ -58,8 +58,7 @@ bindings = [
   { name = "QQ_BOT", class_name = "QQBotDO" },
   { name = "RATE_LIMITER", class_name = "RateLimiter" },
   { name = "CHAT", class_name = "ChatDO" },
-  { name = "WORKSPACE", class_name = "WorkspaceDO" },
-  { name = "TOOL", class_name = "ToolDO" },
+  { name = "WORK", class_name = "WorkDO" },
   { name = "AIDO", class_name = "AiDO" }
 ]
 
@@ -96,3 +95,8 @@ new_sqlite_classes = ["ToolDO"]
 [[migrations]]
 tag = "v7"
 new_sqlite_classes = ["AiDO"]
+
+[[migrations]]
+tag = "v8"
+renamed_classes = [{ from = "WorkspaceDO", to = "WorkDO" }]
+deleted_classes = ["ToolDO"]

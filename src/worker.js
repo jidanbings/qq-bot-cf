@@ -1,7 +1,6 @@
 import { adminPage, homePage, loginPage, setupPage, keyRecoveryPage, recoverGatePage } from './html.js';
 import { ChatDO } from './chat-do.js';
-import { WorkspaceDO } from './work-do.js';
-import { ToolDO } from './tool-do.js';
+import { WorkDO } from './work-do.js';
 import { AiDO } from './ai-sandbox-do.js';
 import { FAVICON_SVG, FAVICON_PNG_32, FAVICON_ICO, APPLE_TOUCH_PNG } from './assets/icons.js';
 import {
@@ -580,8 +579,8 @@ async function handleApi(request, env, url) {
       const body = await readJson(request);
       const scope = String(body?.scope || '');
       if (!scope) throw new HttpError(400, 'invalid_scope', '缺少 scope');
-      if (!env.WORKSPACE) throw new HttpError(503, 'no_workspace', '工作区未绑定（需要 WORKSPACE 绑定）');
-      const stub = env.WORKSPACE.get(env.WORKSPACE.idFromName(scope));
+      if (!(env.WORK || env.WORKSPACE)) throw new HttpError(503, 'no_workspace', '工作区未绑定（需要 WORKSPACE 绑定）');
+      const stub = (env.WORK || env.WORKSPACE).get((env.WORK || env.WORKSPACE).idFromName(scope));
       const res = await stub.fetch('https://ws/state', { method: 'POST', body: '{}' });
       const state = await res.json();
       return jsonResult({ scopeMasked: await maskId(scope), ...state });
@@ -592,8 +591,8 @@ async function handleApi(request, env, url) {
       const body = await readJson(request);
       const scope = String(body?.scope || '');
       if (!scope) throw new HttpError(400, 'invalid_scope', '缺少 scope');
-      if (env.WORKSPACE) {
-        const stub = env.WORKSPACE.get(env.WORKSPACE.idFromName(scope));
+      if ((env.WORK || env.WORKSPACE)) {
+        const stub = (env.WORK || env.WORKSPACE).get((env.WORK || env.WORKSPACE).idFromName(scope));
         await stub.fetch('https://ws/reset', { method: 'POST', body: '{}' });
       }
       await deleteWorkspace(env, scope);
@@ -801,4 +800,4 @@ export default {
   },
 };
 
-export { ChatDO, WorkspaceDO, ToolDO, AiDO };
+export { ChatDO, WorkDO, AiDO };
