@@ -42,10 +42,10 @@ export const AIDO_ENV_RULES = `
 - 内容很长时可以分多次（WRITE 一次 + APPEND 若干次），单文件上限 1.5MB。
 - 如果用户要的文件在沙箱里不存在，直接如实告诉他「没有这个文件」，**绝对不要新建一个只包含说明文字的文件来冒充**。
 - 只有用户明确要求创建/写入文件时，才使用 file.write / file.append。
-- [ENV]{"op":"file.send","path":"..."} 表示「把文件作为附件发给用户」（一次最多 3 个）。
+- [ENV]{"op":"file.send","path":"..."} 表示「把文件作为附件发给用户」（可以多个；超过 3 个时系统会自动打包成 zip 发一个）。
 - **只有用户明确要文件时才 file.send**（例如「发我 / 给我 / 发送 / 下载 / 附件 / 把 xx 发我」）；普通提问、聊天、修改文件、列目录都不要发文件。
 - 用户要文件时，直接把原文件用 file.send 发出去；不要为了「打包成 zip / 合并成一个文件」而拒绝发送——沙箱不支持 zip 和二进制，遇到这类要求就逐个 file.send 原文件，并说明「已逐个发送」。
-- 用户说「把目录里的 xx 文件给我」时：先 file.list，再对每个匹配的文件 file.send（最多 3 个，超过就说明需要分批发）。
+- 用户说「把目录里的 xx 文件给我」时：先 file.list，再对每个匹配的文件 file.send；超过 3 个系统会自动打包成 zip。
 - 用户说「发给我 / 生成后发我 / 给我文件」时，创建完文件必须用 file.send 发出去，不要只回「已保存」。
 - 每次最多 ${MAX_OPS_PER_STEP} 个操作；系统执行后会把结果回给你，然后你再继续，任务完成就只给最终答复、不要再输出操作。
 - [ENV] 行不会展示给用户，也不要放进代码块。`;
@@ -331,8 +331,8 @@ export class AiDO {
         const p = resolveIn(sb, op.path);
         if (!p || !(p in sb.files)) {
           results.push(`发送失败：${op.path} 不存在`);
-        } else if (sendQueue.length >= 3) {
-          results.push('发送失败：一次最多发 3 个文件');
+        } else if (sendQueue.length >= 50) {
+          results.push('发送失败：一次最多 50 个文件');
         } else if (!sendQueue.includes(p)) {
           sendQueue.push(p);
           results.push(`已加入发送队列：${p}（系统会把它作为附件发出）`);

@@ -13,6 +13,7 @@ import { parseReminder, nextDueFrom } from './utils/reminder.js';
 import { normalizeFaceTags } from './utils/qq-face.js';
 import { applyMp3Gain } from './utils/mp3-gain.js';
 import { providerSupportsVision } from './utils/vision.js';
+import { buildZip } from './utils/zip.js';
 import {
   APP_VERSION,
   QQ_BASE,
@@ -1581,7 +1582,39 @@ export class QQBotDO {
     const passiveOk = !!msgId && Date.now() - startedAt < 240000;
     const waitMs = Date.now() - startedAt;
     if (Array.isArray(out.send) && out.send.length) {
-      for (const p of out.send.slice(0, 3)) {
+      const sendList = out.send.slice(0, 50);
+      if (sendList.length > 3) {
+        // 超过 3 个文件：打包成一个 zip 发送
+        const entries = [];
+        for (const p of sendList) {
+          try {
+            const f = await callDo('/file', { path: p });
+            if (f && !f.error) entries.push({ path: f.path, content: String(f.content || '') });
+          } catch {
+            /* 跳过读不到的文件 */
+          }
+        }
+        if (entries.length > 3) {
+          try {
+            const zip = buildZip(entries);
+            if (zip.length > 4 * 1024 * 1024) {
+              failedFiles.push(`打包失败：zip 超过 4MB（${Math.round(zip.length / 1024)}KB）`);
+            } else {
+              const r = await this.execToolDo(
+                'file',
+                { name: 'sandbox_files.zip', contentBase64: toBase64(zip) },
+                { isC2C, scopeId, msgId: passiveOk ? msgId : '', userId }
+              );
+              if (r && r.ok) sentFiles.push(`sandbox_files.zip（${entries.length} 个文件）`);
+              else failedFiles.push(`sandbox_files.zip（${(r && r.note) || '发送失败'}）`);
+            }
+          } catch (e) {
+            failedFiles.push(`打包失败：${e.message.slice(0, 40)}`);
+          }
+          sendList.length = 0;
+        }
+      }
+      for (const p of sendList) {
         try {
           const f = await callDo('/file', { path: p });
           if (f && !f.error) {

@@ -220,10 +220,16 @@ export class ToolEngine {
 
   async toolFile(ctx, args) {
     const name = String(args.name || (args.path || '').split('/').pop() || 'file.txt').slice(0, 80);
-    const content = String(args.content == null ? '' : args.content);
     if (!name) throw new Error('缺少文件名');
-    const bytes = new TextEncoder().encode(content);
-    if (bytes.length > 512 * 1024) throw new Error('文件超过 512KB');
+    let bytes;
+    if (args.contentBase64) {
+      const bin = atob(String(args.contentBase64));
+      bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    } else {
+      bytes = new TextEncoder().encode(String(args.content == null ? '' : args.content));
+    }
+    if (bytes.length > 4 * 1024 * 1024) throw new Error('文件超过 4MB');
     const ext = name.indexOf('.') >= 0 ? name.split('.').pop().slice(0, 8) : 'txt';
     const msgId = await this.sendMedia(ctx, {
       fileType: 4,
