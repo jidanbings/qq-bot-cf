@@ -29,6 +29,8 @@ export const AIDO_ENV_RULES = `
   [ENV]{"op":"file.read","path":"notes/todo.md"}
   [ENV]{"op":"file.list"}
   [ENV]{"op":"file.delete","path":"notes/todo.md"}
+  [ENV]{"op":"file.send","path":"index.html"}
+- [ENV]{"op":"file.send","path":"..."} 表示「把文件作为附件发给用户」（一次最多 3 个）。用户说「发给我 / 生成后发我 / 给我文件」时，创建完文件必须用 file.send 发出去，不要只回「已保存」。
 - 每次最多 ${MAX_OPS_PER_STEP} 个操作；系统执行后会把结果回给你，然后你再继续，任务完成就只给最终答复、不要再输出操作。
 - [ENV] 行不会展示给用户，也不要放进代码块。`;
 
@@ -185,6 +187,7 @@ export class AiDO {
 
     let reply = '';
     let steps = 0;
+    const sendQueue = [];
     let lastErr = null;
     for (; steps < MAX_STEPS; steps++) {
       let raw = null;
@@ -202,7 +205,20 @@ export class AiDO {
       if (text) reply = text;
       if (!ops.length) break;
 
-      const results = applyEnvOps(sb, ops);
+      const sendOps = ops.filter((o) => o.op === 'file.send');
+      const otherOps = ops.filter((o) => o.op !== 'file.send');
+      const results = applyEnvOps(sb, otherOps);
+      for (const op of sendOps) {
+        const p = safePath(op.path);
+        if (!p || !(p in sb.files)) {
+          results.push(`发送失败：${op.path} 不存在`);
+        } else if (sendQueue.length >= 3) {
+          results.push('发送失败：一次最多发 3 个文件');
+        } else if (!sendQueue.includes(p)) {
+          sendQueue.push(p);
+          results.push(`已加入发送队列：${p}（系统会把它作为附件发出）`);
+        }
+      }
       await this.save(sb);
       messages.push({ role: 'assistant', content: raw });
       messages.push({
@@ -224,6 +240,7 @@ export class AiDO {
       steps: steps + 1,
       files: Object.keys(sb.files).length,
       runs: sb.runs,
+      send: sendQueue,
     };
   }
 

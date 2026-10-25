@@ -1413,13 +1413,13 @@ export class QQBotDO {
 
   /** 调 ToolDO 执行工具；没有绑定时返回 null，走本地实现 */
   async execToolDo(tool, args, { isC2C, scopeId, msgId, caption, userId }) {
-    const ns = this.env && this.env.TOOL;
+    const ns = this.env && (this.env.WORK || this.env.TOOL);
     if (!ns || typeof ns.idFromName !== 'function') return null;
     const key = this.ownerKey({ isC2C, scopeId, userId });
     const stub = ns.get(ns.idFromName(key));
     const token = await this.getToken();
     const provider = (this.config.aiProviders || []).find((p) => p && p.enabled !== 0 && p.baseUrl && p.apiKey);
-    const seqBase = (msgId && this.msgSeqMap.get(msgId)) || 0;
+    const seqBase = (msgId && this.msgSeqMap ? this.msgSeqMap.get(msgId) : 0) || 0;
     const res = await stub.fetch('https://tool/exec', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1446,7 +1446,10 @@ export class QQBotDO {
     });
     if (!res.ok) throw new Error(`ToolDO HTTP ${res.status}`);
     const out = await res.json();
-    if (msgId && out && out.used) this.msgSeqMap.set(msgId, seqBase + out.used);
+    if (msgId && out && out.used) {
+      if (!this.msgSeqMap) this.msgSeqMap = new Map();
+      this.msgSeqMap.set(msgId, seqBase + out.used);
+    }
     return { ok: !!(out && out.ok), note: (out && out.note) || '' };
   }
 
@@ -1480,7 +1483,7 @@ export class QQBotDO {
         '/沙箱 <任务> —— 让 AI 在隔离沙箱里干活（可以自己建文件、写笔记、做多步任务）',
         '/沙箱 文件 —— 看沙箱里的文件（只有你能看到）',
         '/沙箱 查看 <路径> —— 在聊天里看文件内容',
-        '/沙箱 发送 <路径> —— 把文件作为附件发给你',
+        '/沙箱 发送 <路径> —— 把文件作为附件发给你（AI 生成文件后也会自己发）',
         '/沙箱 清空 —— 清空沙箱',
         '边界：只能读写它自己的虚拟文件，不能发消息、不能联网、不能碰其他 DO。',
       ];
@@ -1549,10 +1552,30 @@ export class QQBotDO {
       await this.sendReply({ isC2C, scopeId, content: `沙箱执行失败：${(out && out.error) || '未知错误'}`, msgId });
       return;
     }
+    // AI 在沙箱里要求发送的文件（file.send）：这里真正上传并发送
+    const sentFiles = [];
+    if (Array.isArray(out.send) && out.send.length) {
+      for (const p of out.send.slice(0, 3)) {
+        try {
+          const f = await callDo('/file', { path: p });
+          if (f && !f.error) {
+            const r = await this.execToolDo(
+              'file',
+              { path: f.path, content: f.content, name: f.path.split('/').pop() },
+              { isC2C, scopeId, msgId, userId }
+            );
+            if (r && r.ok) sentFiles.push(f.path);
+          }
+        } catch (e) {
+          this.logger.warn(`sandbox send failed: ${e.message}`);
+        }
+      }
+    }
+    const sentNote = sentFiles.length ? `\n（已发送文件：${sentFiles.join('、')}）` : '';
     await this.sendReply({
       isC2C,
       scopeId,
-      content: `${out.reply}\n\n（沙箱：${out.steps} 步 · ${out.files} 个文件）`,
+      content: `${out.reply}${sentNote}\n\n（沙箱：${out.steps} 步 · ${out.files} 个文件）`,
       msgId,
     });
     this.logExchange({
