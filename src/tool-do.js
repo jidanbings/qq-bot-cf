@@ -197,14 +197,14 @@ export class ToolEngine {
     const bytes = new TextEncoder().encode(content);
     if (bytes.length > 512 * 1024) throw new Error('文件超过 512KB');
     const ext = name.indexOf('.') >= 0 ? name.split('.').pop().slice(0, 8) : 'txt';
-    await this.sendMedia(ctx, {
+    const msgId = await this.sendMedia(ctx, {
       fileType: 4,
       source: `data:text/plain;base64,${toBase64(bytes)}`,
       fileName: name,
       fileExt: ext,
     });
     if (args.caption) await this.sendText(ctx, args.caption);
-    return { note: `已发送文件 ${name}` };
+    return { note: `已发送文件 ${name}${msgId ? '（id=' + msgId + '）' : ''}` };
   }
 
   async toolRemind(ctx, args) {

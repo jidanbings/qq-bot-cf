@@ -1555,6 +1555,7 @@ export class QQBotDO {
         this.logger.warn(`sandbox wait notice failed: ${e.message}`);
       }
     }
+    const startedAt = Date.now();
     const out = await callDo('/run', {
       task: arg,
       scope: key,
@@ -1569,6 +1570,8 @@ export class QQBotDO {
     }
     // AI 在沙箱里要求发送的文件（file.send）：这里真正上传并发送
     const sentFiles = [];
+    const passiveOk = !!msgId && Date.now() - startedAt < 240000;
+    const waitMs = Date.now() - startedAt;
     if (Array.isArray(out.send) && out.send.length) {
       for (const p of out.send.slice(0, 3)) {
         try {
@@ -1577,16 +1580,40 @@ export class QQBotDO {
             const r = await this.execToolDo(
               'file',
               { path: f.path, content: f.content, name: f.path.split('/').pop() },
-              { isC2C, scopeId, msgId, userId }
+              // 任务跑了很久时 msg_id 可能已过期，改用主动消息发送
+              { isC2C, scopeId, msgId: passiveOk ? msgId : '', userId }
             );
-            if (r && r.ok) sentFiles.push(f.path);
+            if (r && r.ok) {
+              sentFiles.push(f.path);
+            } else if (!isC2C) {
+              // 群聊发文件失败：把内容分段当文本发出来，并提示私聊拿完整文件
+              const text = String(f.content || '');
+              const chunks = [];
+              for (let k = 0; k < text.length && chunks.length < 3; k += 1400) chunks.push(text.slice(k, k + 1400));
+              for (const c of chunks) {
+                await this.sendReply({ isC2C, scopeId, content: c, msgId: passiveOk ? msgId : '' });
+              }
+              await this.sendReply({
+                isC2C,
+                scopeId,
+                content: `（文件 ${f.path.split('/').pop()} 发送失败，以上是内容节选；完整文件请私聊我发「/沙箱 发送 ${f.path.split('/').pop()}」）`,
+                msgId: passiveOk ? msgId : '',
+              });
+            }
           }
         } catch (e) {
           this.logger.warn(`sandbox send failed: ${e.message}`);
         }
       }
     }
-    const sentNote = sentFiles.length ? `\n（已发送文件：${sentFiles.join('、')}）` : '';
+    const sentNote = sentFiles.length
+      ? `\n（已发送文件：${sentFiles.join('、')}）${isC2C ? '' : '　群里看不到文件卡片的话，私聊我发「/沙箱 发送 <文件名>」'}`
+      : '';
+    if (sentFiles.length) {
+      this.logger.info(`sandbox files sent: ${sentFiles.join(',')}（任务耗时 ${Math.round(waitMs / 1000)}s, passive=${passiveOk}）`);
+    } else if (Array.isArray(out.send) && out.send.length) {
+      this.logger.warn(`sandbox files NOT sent: ${out.send.join(',')}（任务耗时 ${Math.round(waitMs / 1000)}s, passive=${passiveOk}）`);
+    }
     const finalText = `${out.reply}${sentNote}\n\n（沙箱：${out.steps} 步 · ${out.files} 个文件）`;
     const sent = await this.sendReply({ isC2C, scopeId, content: finalText, msgId });
     if (!sent && msgId) {
