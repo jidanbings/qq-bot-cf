@@ -1685,15 +1685,22 @@ export class QQBotDO {
   /* -------------------- 独立的 ChatDO（会话历史 + 模型调用） -------------------- */
 
   /** 调 ChatDO 完成一轮对话；没有绑定时返回 null，走本地逻辑 */
+  /** 取 ChatDO 的 stub（每次重试都重新取，避免打到已被重启的旧实例） */
+  chatDoStub(key) {
+    const ns = this.env && (this.env.CHAT || this.env.AI_WORKER);
+    if (!ns || typeof ns.idFromName !== 'function') return null;
+    return ns.get(ns.idFromName(key));
+  }
+
   async askAiDo({ key, providers, systemPrompt, historyLimit, content, image }) {
     const ns = this.env && (this.env.CHAT || this.env.AI_WORKER);
     if (!ns || typeof ns.idFromName !== 'function') return null;
-    const stub = ns.get(ns.idFromName(key));
     const payload = JSON.stringify({ key, providers, systemPrompt, historyLimit, content, image });
     let lastErr = null;
-    // 网络抖动 / DO 冷启动时重试一次，别让一条消息直接掉进兜底话术
-    for (let attempt = 1; attempt <= 2; attempt++) {
+    // 部署 / 休眠会让 DO 实例重启：每次重试都重建 stub，给新实例接管的时间
+    for (let attempt = 1; attempt <= 3; attempt++) {
       try {
+        const stub = this.chatDoStub(key);
         const res = await stub.fetch('https://ai-do/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1704,23 +1711,33 @@ export class QQBotDO {
       } catch (e) {
         lastErr = e;
         this.logger.warn(`ChatDO attempt ${attempt} failed: ${e.message}`);
-        if (attempt === 1) await new Promise((r) => setTimeout(r, 400));
+        if (attempt < 3) await new Promise((r) => setTimeout(r, 500 * attempt));
       }
     }
     throw lastErr;
   }
 
-  /** 把助手这一轮说的话记进 ChatDO 的会话历史 */
   async recordAiDo({ key, assistant, historyLimit }) {
-    const ns = this.env && (this.env.CHAT || this.env.AI_WORKER);
-    if (!ns || typeof ns.idFromName !== 'function') return;
-    const stub = ns.get(ns.idFromName(key));
-    const res = await stub.fetch('https://ai-do/record', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ key, assistant, historyLimit }),
-    });
-    if (!res.ok) throw new Error(`ChatDO record HTTP ${res.status}`);
+    const payload = JSON.stringify({ key, assistant, historyLimit });
+    let lastErr = null;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const stub = this.chatDoStub(key);
+        if (!stub) return;
+        const res = await stub.fetch('https://ai-do/record', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: payload,
+        });
+        if (!res.ok) throw new Error(`ChatDO record HTTP ${res.status}`);
+        return;
+      } catch (e) {
+        lastErr = e;
+        this.logger.warn(`ChatDO record attempt ${attempt} failed: ${e.message}`);
+        if (attempt < 2) await new Promise((r) => setTimeout(r, 500 * attempt));
+      }
+    }
+    throw lastErr;
   }
 
   /** 记录助手这轮内容：走 ChatDO 就写进 ChatDO，否则写本地会话 */
