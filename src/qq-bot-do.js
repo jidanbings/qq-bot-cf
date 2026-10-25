@@ -1461,7 +1461,7 @@ export class QQBotDO {
   }
 
   /** /沙箱 <任务>：在 AiDO 沙箱里执行（最高自由度，但只能动沙箱自己的文件） */
-  async handleAiSandbox({ isC2C, scopeId, msgId, content, userId }) {
+  async handleAiSandbox({ isC2C, scopeId, msgId, content, userId, background = false }) {
     const ns = this.env && this.env.AIDO;
     if (!ns || typeof ns.idFromName !== 'function') {
       await this.sendReply({ isC2C, scopeId, content: 'AiDO 还没启用（缺 AIDO 绑定），等新版部署后再试。', msgId });
@@ -1549,8 +1549,8 @@ export class QQBotDO {
     }
     if (isC2C && msgId) this.state.waitUntil(this.sendTyping({ scopeId, msgId }));
     // 长任务（写文章/多步）可能要几分钟，先给个反馈
-    // 单聊被动回复只有 4 条额度：不发「开始处理」，把额度留给文件和结果
-    if (msgId && !isC2C) {
+    // 单聊被动回复只有 4 条额度：不发「开始处理」，把额度留给文件和结果；后台模式已经发过提示
+    if (!background && msgId && !isC2C) {
       try {
         await this.sendReply({
           isC2C,
@@ -2682,7 +2682,39 @@ export class QQBotDO {
     if (name === 'sandbox') {
       const task = String(call.args.task || '').trim();
       if (!task) return this.sendReply({ isC2C, scopeId, content: '要做什么？给我一句任务描述吧～', msgId });
-      return this.handleAiSandbox({ isC2C, scopeId, msgId, content: '沙箱 ' + task, userId });
+      // 长任务放后台跑，别把整个会话队列（同群其他人的消息）堵住
+      const running = this.sandboxRunning || 0;
+      if (running >= 2) {
+        return this.sendReply({ isC2C, scopeId, content: '前面还有任务在跑，等它完成我再处理这个～', msgId });
+      }
+      this.sandboxRunning = running + 1;
+      try {
+        await this.sendReply({
+          isC2C,
+          scopeId,
+          content: '收到，开始处理了～长任务可能要几分钟，完成后把结果（和文件）发你。',
+          msgId,
+        });
+      } catch (e) {
+        this.logger.warn(`sandbox ack failed: ${e.message}`);
+      }
+      const runner = async () => {
+        try {
+          await this.handleAiSandbox({ isC2C, scopeId, msgId, content: '沙箱 ' + task, userId, background: true });
+        } catch (e) {
+          this.logger.warn(`sandbox background failed: ${e.message}`);
+          try {
+            await this.sendReply({ isC2C, scopeId, content: `工作区执行失败：${e.message.slice(0, 80)}` });
+          } catch {
+            /* ignore */
+          }
+        } finally {
+          this.sandboxRunning = Math.max(0, (this.sandboxRunning || 1) - 1);
+        }
+      };
+      if (this.state && typeof this.state.waitUntil === 'function') this.state.waitUntil(runner());
+      else await runner();
+      return { ok: true };
     }
 
     // file 工具：从 AiDO 沙箱读文件，再交给 ToolEngine 当附件发出去
