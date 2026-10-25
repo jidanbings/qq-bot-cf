@@ -1381,8 +1381,15 @@ export class QQBotDO {
         memes.map((m) => `- ${m.name}：${String(m.description || '').slice(0, 40)}`).join('\n') +
         '\n规则：聊天气氛合适时偶尔发一张，不要每条都发；用户明确想要梗图/表情包时优先发一张。'
       : '';
+    const workspaceHint =
+      '\n\n【你的工作区】你有一个私有工作区，运行在 Cloudflare Durable Objects 的持久化存储里（AiDO 实例），每个用户一个独立空间，文件路径形如 users/<用户编号>/。' +
+      '你可以在里面创建、修改、删除文件（单文件 ≤1.5MB、每人总量 ≤20MB、最多 200 个文件），也可以把它当作多步任务的草稿本。' +
+      '需要写长文、生成文件、整理多步任务时用 sandbox 工具；生成的文件会自动作为附件发给用户。' +
+      '如果用户问你在哪、沙箱是什么，就按这段如实回答：你在 Cloudflare 的 Durable Object 存储里活动，数据持久化、实例休眠也不会丢。用户要已有的文件时，用 file 工具直接发；不知道路径就让 sandbox 工具列一下并逐个发。不要因为「不能打包成 zip」就拒绝发送文件。'
+
     return (
       basePrompt +
+      workspaceHint +
       '\n\n对话历史里以「（系统记录：…）」开头的句子是系统内部记录，只用来让你知道刚才做过什么，不要复述给用户。' +
       genHint +
       toolHint +

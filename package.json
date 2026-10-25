@@ -1,6 +1,6 @@
 {
   "name": "qq-bot-cf",
-  "version": "3.6.8.5",
+  "version": "3.6.8.6",
   "type": "module",
   "private": true,
   "scripts": {
