@@ -708,7 +708,7 @@ export class QQBotDO {
           aiReady,
           aiCount: aiList.length,
           aiModel: aiList.length ? aiList[0].model : '',
-          historyLimit: Number(this.config.historyLimit) || 20,
+          historyLimit: Number(this.config.historyLimit) || 10,
           markdownReply: this.config.markdownReply === '1',
           autoRecall: this.config.autoRecall === '1',
           welcomeEnabled: this.config.welcomeEnabled === '1',
@@ -1232,6 +1232,210 @@ export class QQBotDO {
     upsertGroup(this.env, openid, 'auto').catch(() => {});
   }
 
+  /**
+   * 下载用户发来的文件附件，尽量转成 AI 能读的内容。
+   *
+   * 为什么要做：原来只处理图片附件，用户发 .txt / .md / .py 时 AI 完全收不到内容，
+   * 只能凭空编（典型症状：「把这个存进工作目录」→ AI 自己造了个快照说「工作区为空」）。
+   *
+   * 处理策略：
+   *   - 文本类（.md/.py/.js/.json/.csv/代码/日志/配置…）→ 直接解码，这是主要路径
+   *   - docx/xlsx/pptx → 本质是 zip，抽里面的 XML 文本
+   *   - 图片 → 交给识图（走 imageUrl 那条路）
+   *   - .so/.zip/.exe 等二进制 → 明确告诉 AI「读不了」，避免它瞎编内容
+   *
+   * 不做 PDF：PDF 文本层抽取在纯 JS 下不可靠（字体编码、子集化、扫描件都会失败），
+   * 与其给模型一堆乱码，不如明确说读不了。
+   */
+  async downloadAttachment(url, contentType, filenameHint) {
+    const MAX_BYTES = 4 * 1024 * 1024; // 4MB 原始文件上限
+    const MAX_TEXT = 12000;            // 送给模型的文本上限（字符）
+    const ct = String(contentType || '').toLowerCase();
+    const name = String(filenameHint || url.split('?')[0].split('/').pop() || '').slice(0, 80);
+    const extMatch = name.match(/\.([a-z0-9]+)$/i);
+    const ext = extMatch ? extMatch[1].toLowerCase() : '';
+
+    // 文本类扩展名白名单：代码、标记、配置、数据、日志都算
+    const TEXT_EXT = new RegExp(
+      '^(' +
+        [
+          // 文档 / 标记
+          'txt', 'md', 'markdown', 'rst', 'adoc', 'org', 'tex', 'bib',
+          // 数据 / 配置
+          'json', 'jsonl', 'ndjson', 'csv', 'tsv', 'yml', 'yaml', 'toml', 'ini', 'conf', 'cfg', 'env', 'properties', 'lock', 'gitignore', 'gitattributes', 'editorconfig', 'dockerfile',
+          // 前端
+          'html', 'htm', 'css', 'scss', 'sass', 'less', 'js', 'mjs', 'cjs', 'jsx', 'ts', 'tsx', 'vue', 'svelte', 'astro',
+          // 后端 / 脚本
+          'py', 'pyi', 'rb', 'php', 'java', 'kt', 'kts', 'scala', 'groovy', 'cs', 'fs', 'go', 'rs', 'swift', 'm', 'mm',
+          'c', 'h', 'cc', 'cpp', 'cxx', 'hpp', 'hh', 'lua', 'pl', 'r', 'jl', 'dart', 'ex', 'exs', 'erl', 'clj', 'hs', 'ml',
+          // 命令 / 构建
+          'sh', 'bash', 'zsh', 'fish', 'ps1', 'psm1', 'bat', 'cmd', 'makefile', 'mk', 'cmake', 'gradle', 'pom', 'sbt',
+          // 查询 / 序列化
+          'sql', 'graphql', 'gql', 'proto', 'xml', 'xsd', 'xsl', 'svg', 'plist',
+          // 日志 / 字幕 / 纯文本数据
+          'log', 'out', 'err', 'srt', 'ass', 'vtt', 'diff', 'patch',
+        ].join('|') +
+      ')$',
+      'i'
+    );
+    const isText = ct.startsWith('text/') || /json|xml|csv|javascript|markdown|yaml|x-sh|x-httpd-php|sql/.test(ct) || TEXT_EXT.test(ext);
+
+    let bytes = null;
+    const getBytes = async () => {
+      if (bytes) return bytes;
+      let res;
+      try {
+        res = await fetch(url, { signal: AbortSignal.timeout(20000) });
+      } catch (e) {
+        throw new Error(`下载失败：${e.message}`);
+      }
+      if (!res.ok) throw new Error(`下载失败：HTTP ${res.status}`);
+      const buf = new Uint8Array(await res.arrayBuffer());
+      if (buf.length > MAX_BYTES) throw new Error(`文件太大（${Math.round(buf.length / 1024 / 1024)}MB，上限 4MB）`);
+      bytes = buf;
+      return bytes;
+    };
+
+    const clip = (t) => {
+      const s = String(t || '').replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').trim();
+      if (s.length <= MAX_TEXT) return s;
+      return s.slice(0, MAX_TEXT) + `\n…（内容过长，已截断，原文约 ${s.length} 字）`;
+    };
+
+    try {
+      // 1) 图片：交给识图链路，这里只报类型
+      if (ct.startsWith('image/') || /^(png|jpe?g|gif|webp|bmp|ico)$/.test(ext)) {
+        return { ok: false, reason: '这是图片，已按识图处理', isImage: true };
+      }
+
+      // 2) Office 必须排在文本判断之前：
+      //    docx/xlsx/pptx 的 content-type 里带 "xml" 字样，会被 isText 误判成文本，
+      //    然后卡在二进制检查上，永远走不到解压分支。
+      if (/^(docx|xlsx|pptx)$/.test(ext)) {
+        const b = await getBytes();
+        const text = await this.extractOfficeText(b, ext);
+        if (!text || !text.trim()) return { ok: false, reason: `${ext} 里没提取到文字` };
+        return { ok: true, text: clip(text), filename: name, bytes: b.length, kind: ext };
+      }
+
+      // 3) 文本类：直接解码
+      if (isText) {
+        const b = await getBytes();
+        const zeros = b.reduce((n, v) => n + (v === 0 ? 1 : 0), 0);
+        if (b.length && zeros / b.length > 0.02) {
+          return { ok: false, reason: '内容看起来是二进制（不是纯文本）' };
+        }
+        const text = new TextDecoder('utf-8', { fatal: false }).decode(b);
+        return { ok: true, text: clip(text), filename: name, bytes: b.length, kind: 'text' };
+      }
+
+      // 4) 其它二进制：明确说读不了，别让模型瞎猜
+      const known = {
+        so: '编译好的动态库', dll: 'Windows 动态库', exe: '可执行文件', dylib: '动态库',
+        zip: '压缩包', rar: '压缩包', '7z': '压缩包', tar: '压缩包', gz: '压缩包',
+        pdf: 'PDF 格式暂不支持解析', doc: '老版 Word，请另存为 docx', xls: '老版 Excel，请另存为 xlsx', ppt: '老版 PPT，请另存为 pptx',
+        mp3: '音频', wav: '音频', mp4: '视频', mov: '视频', avi: '视频',
+      };
+      const desc = known[ext] ? `（${known[ext]}）` : '';
+      return { ok: false, reason: `这是二进制文件${desc}，无法读取文字内容` };
+    } catch (e) {
+      return { ok: false, reason: e.message };
+    }
+  }
+
+  /** raw deflate 解压（Office 的 zip 条目用 raw deflate） */
+  async inflateRaw(bytes) {
+    if (typeof DecompressionStream === 'undefined') throw new Error('环境不支持解压');
+    // 先试 raw deflate；失败再试 zlib（带 2 字节头）
+    for (const fmt of ['deflate-raw', 'deflate']) {
+      try {
+        const ds = new DecompressionStream(fmt);
+        const stream = new Blob([bytes]).stream().pipeThrough(ds);
+        const buf = await new Response(stream).arrayBuffer();
+        return new Uint8Array(buf);
+      } catch {}
+    }
+    throw new Error('解压失败');
+  }
+
+  /** 从 docx/xlsx/pptx（zip）里抽 XML 文字 */
+  async extractOfficeText(bytes, kind) {
+    const entries = await this.unzipEntries(bytes);
+    const texts = [];
+    for (const [path, data] of entries) {
+      // 只挑真正含正文的 XML
+      const wanted =
+        (kind === 'docx' && path === 'word/document.xml') ||
+        (kind === 'pptx' && /^ppt\/slides\/slide\d+\.xml$/.test(path)) ||
+        (kind === 'xlsx' && /^xl\/sharedStrings\.xml$/.test(path)) ||
+        (kind === 'xlsx' && /^xl\/worksheets\/sheet\d+\.xml$/.test(path));
+      if (!wanted) continue;
+      const xml = new TextDecoder('utf-8', { fatal: false }).decode(data);
+      // <w:t> 是 Word，<a:t> 是 PPT，<t> 是 Excel 共享字符串
+      const parts = xml.match(/<(?:w|a)?:?t(?:\s[^>]*)?>([^<]*)<\/(?:w|a)?:?t>/g) || [];
+      for (const p of parts) {
+        const inner = p.replace(/^<[^>]+>/, '').replace(/<\/[^>]+>$/, '');
+        if (inner.trim()) texts.push(this.decodeXmlEntities(inner));
+      }
+      if (kind === 'xlsx' && path.includes('sheet')) texts.push('\n');
+    }
+    return texts.join(kind === 'xlsx' ? ' ' : '\n').trim();
+  }
+
+  decodeXmlEntities(s) {
+    return String(s)
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&apos;/g, "'")
+      .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
+      .replace(/&amp;/g, '&');
+  }
+
+  /**
+   * 极简 zip 解包（读中央目录，支持 stored 与 deflate）。
+   * Office 文件是标准 zip，deflate 条目必须解压才能拿到 XML。
+   */
+  async unzipEntries(bytes) {
+    const out = [];
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    let eocd = -1;
+    for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 65558); i--) {
+      if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+    }
+    if (eocd < 0) return out;
+    const count = dv.getUint16(eocd + 10, true);
+    let p = dv.getUint32(eocd + 16, true);
+    const jobs = [];
+    for (let i = 0; i < count; i++) {
+      if (dv.getUint32(p, true) !== 0x02014b50) break;
+      const method = dv.getUint16(p + 10, true);
+      const compSize = dv.getUint32(p + 20, true);
+      const nameLen = dv.getUint16(p + 28, true);
+      const extraLen = dv.getUint16(p + 30, true);
+      const commentLen = dv.getUint16(p + 32, true);
+      const localOff = dv.getUint32(p + 42, true);
+      const name = new TextDecoder('utf-8').decode(bytes.subarray(p + 46, p + 46 + nameLen));
+      const lNameLen = dv.getUint16(localOff + 26, true);
+      const lExtraLen = dv.getUint16(localOff + 28, true);
+      const dataStart = localOff + 30 + lNameLen + lExtraLen;
+      const comp = bytes.subarray(dataStart, dataStart + compSize);
+      if (method === 0) out.push([name, comp]);
+      else if (method === 8) jobs.push([name, comp]);
+      p += 46 + nameLen + extraLen + commentLen;
+    }
+    // deflate 条目异步解压
+    for (const [name, comp] of jobs) {
+      try {
+        const raw = await this.inflateRaw(Uint8Array.from(comp));
+        out.push([name, raw]);
+      } catch {
+        /* 解不开就跳过这个条目，不影响其它 */
+      }
+    }
+    return out;
+  }
+
   async handleMessage(type, data) {
     if (this.pendingMessages >= MAX_PENDING_MESSAGES) {
       this.logger.warn("Message backlog full (" + this.pendingMessages + "), dropping event");
@@ -1260,14 +1464,18 @@ export class QQBotDO {
     const attachments = Array.isArray(data.attachments) ? data.attachments : [];
     // 群聊/单聊的附件结构不一定一样：优先挑 content_type 是图片（或 URL 长得像图片）的那一项
     let imageUrl = null;
+    let fileAttachment = null; // 非图片附件（txt / md / pdf 等）
     for (const a of attachments) {
       if (!a) continue;
       const url = String(a.url || a.src || a.file_url || '').trim();
       if (!url) continue;
       const ct = String(a.content_type || a.contentType || '').toLowerCase();
-      if (!ct || ct.startsWith('image/') || /\.(png|jpe?g|gif|webp)(\?|$)/i.test(url)) {
+      const fname = String(a.filename || a.file_name || a.name || '').trim();
+      const looksImage = !ct || ct.startsWith('image/') || /\.(png|jpe?g|gif|webp)(\?|$)/i.test(url);
+      if (looksImage && !imageUrl) {
         imageUrl = url;
-        break;
+      } else if (!looksImage && !fileAttachment) {
+        fileAttachment = { url, contentType: ct, filename: fname };
       }
     }
     if (!imageUrl) {
@@ -1282,13 +1490,40 @@ export class QQBotDO {
     }
     if (imageUrl) {
       this.logger.info(`Inbound image url=${imageUrl.slice(0, 90)}...`);
-    } else if (attachments.length) {
-      this.logger.warn('Inbound attachments present but no image url picked');
-    } else if (!isC2C && /\\[图片\\]|\\[image\\]|图片/.test(content)) {
+    } else if (attachments.length && !fileAttachment) {
+      this.logger.warn('Inbound attachments present but no usable url picked');
+    } else if (!attachments.length && !isC2C && /\\[图片\\]|\\[image\\]|图片/.test(content)) {
       this.logger.warn('Group message looks like an image but no attachment url (确认是否 @ 了机器人)');
     }
-    if (!content && !imageUrl) return;
-    if (!content) content = '请描述这张图片';
+    if (!content && !imageUrl && !fileAttachment) return;
+    if (!content) content = imageUrl ? '请描述这张图片' : '（我发了一个文件）';
+
+    // 文件附件：把内容读进来交给 AI，让它能真正「看到」文件
+    // 以前只处理图片，用户发 .txt / .md / .py 时 AI 根本收不到内容，只能瞎编
+    let fileText = '';
+    if (fileAttachment) {
+      try {
+        const r = await this.downloadAttachment(
+          fileAttachment.url,
+          fileAttachment.contentType,
+          fileAttachment.filename
+        );
+        if (r.ok) {
+          fileText = r.text;
+          const name = fileAttachment.filename || r.filename || '附件';
+          content = `${content}\n\n【用户发来文件：${name}，共 ${r.bytes} 字节】\n\`\`\`\n${fileText}\n\`\`\``.slice(0, 14000);
+          this.logger.info(`Inbound file attached: ${name} (${r.bytes}B, kind=${r.kind})`);
+        } else if (r.isImage && !imageUrl) {
+          // 附件其实是图片但没被上面识别到：补上，让它走识图
+          imageUrl = fileAttachment.url;
+        } else {
+          this.logger.warn(`Inbound file not readable: ${r.reason}`);
+          content = `${content}\n\n【用户发来文件${fileAttachment.filename ? '：' + fileAttachment.filename : ''}，但无法读取：${r.reason}。请如实告诉用户读不了，不要编造文件内容。】`;
+        }
+      } catch (e) {
+        this.logger.warn(`downloadAttachment failed: ${e.message}`);
+      }
+    }
 
     if (!isC2C && this.groupBlacklist.has(scopeId)) return;
     if (this.sensitiveWords.some((w) => content.includes(w))) return;
@@ -1544,7 +1779,7 @@ export class QQBotDO {
       return;
     }
 
-    const historyLimit = Number(this.config.historyLimit) || 20;
+    const historyLimit = Number(this.config.historyLimit) || 10;
     const chatDoNs = this.env && (this.env.CHAT || this.env.AI_WORKER);
     const useAiDo = !!chatDoNs;
     let session = await this.loadSession(key);
@@ -1720,7 +1955,7 @@ export class QQBotDO {
     if (this.config.imageGenModel) {
       const genMatch = reply.match(/\[GEN_IMAGE\]\s*([\s\S]+)/);
       if (genMatch) {
-        await this.rememberAssistant({ key, session, history, text: '（系统记录：已生成图片并发送给用户）', useAiDo, historyLimit });
+        await this.rememberAssistant({ key, session, history, text: '（系统记录：已生成图片并发送给用户）', useAiDo, historyLimit, providers });
         // 标记前面如果写了话，就当作配图文案（图发完再发这句）
         const caption = reply.slice(0, reply.indexOf('[GEN_IMAGE]')).trim();
         await this.handleImageGen({ isC2C, scopeId, msgId, prompt: genMatch[1].trim(), caption, userId, userContent: content });
@@ -1732,7 +1967,7 @@ export class QQBotDO {
           .trim()
           .slice(0, 400);
         if (prompt) {
-          await this.rememberAssistant({ key, session, history, text: '（系统记录：已生成图片并发送给用户）', useAiDo, historyLimit });
+          await this.rememberAssistant({ key, session, history, text: '（系统记录：已生成图片并发送给用户）', useAiDo, historyLimit, providers });
           await this.handleImageGen({ isC2C, scopeId, msgId, prompt, userId, userContent: content });
           return;
         }
@@ -1744,8 +1979,12 @@ export class QQBotDO {
       const toolCall = this.extractToolCall(reply);
       if (toolCall) {
         // 模型偶尔会在调用前加一句「好的，我这就去…」：只保留工具结果，避免一次回两条重复消息
-        await this.runTool(toolCall, { isC2C, scopeId, key, msgId, userId, userContent: content });
-        await this.rememberAssistant({ key, session, history, text: this.toolRecordNote(toolCall), useAiDo, historyLimit });
+        const toolResult = await this.runTool(toolCall, { isC2C, scopeId, key, msgId, userId, userContent: content, useAiDo });
+        await this.rememberAssistant({ key, session, history, text: this.toolRecordNote(toolCall), useAiDo, historyLimit, providers });
+        // 有长期价值的结果（发过文件 / 做过任务 / 定过提醒）单独进 facts 层；
+        // 图片、梗图、表情这类一次性产物不记，避免上下文膨胀
+        const fact = this.factFromTool(toolCall, toolResult);
+        if (fact) await this.rememberFact({ key, text: fact, useAiDo });
         session.lastUsed = Date.now();
         await this.saveSession(key, session);
         return;
@@ -1782,7 +2021,7 @@ export class QQBotDO {
     if (!sentId) return;
 
     if (session && msgId) session.lastBotMsg = { msgId: sentId, at: Date.now() };
-    await this.rememberAssistant({ key, session, history, text: normalizeFaceTags(reply), useAiDo, historyLimit });
+    await this.rememberAssistant({ key, session, history, text: normalizeFaceTags(reply), useAiDo, historyLimit, providers });
     if (session) {
       session.lastUsed = Date.now();
       await this.saveSession(key, session);
@@ -1855,12 +2094,108 @@ export class QQBotDO {
   }
 
   /** 工具执行后写回历史的一行内部记录（不发给用户，模型也不该复述） */
+  /**
+   * 工具执行留痕：写进对话历史的那一行。
+   *
+   * 设计原则（防止上下文膨胀）：**只记「做过什么」，不记结果全文**。
+   * 图片、梗图、表情这类一次性产物只需留个痕迹；
+   * 文件/任务这种「以后还会问起」的，另外用 rememberFact() 写进长期记忆。
+   */
   toolRecordNote(call) {
     const args = (call && call.args) || {};
+    const name = (call && call.name) || '工具';
+    if (name === 'file') {
+      const p = String(args.path || '').trim();
+      return `（系统记录：已把文件 ${p || '附件'} 发给用户）`;
+    }
+    if (name === 'sandbox') {
+      const task = String(args.task || '').slice(0, 60);
+      return `（系统记录：已在工作区执行任务「${task}」）`;
+    }
     const brief = args.text || args.prompt || args.name || args.when || '';
-    const label = (call && call.name) || '工具';
     const detail = brief ? `「${String(brief).slice(0, 40)}」` : '';
-    return `（系统记录：已执行 ${label}${detail}，结果已发送给用户）`;
+    return `（系统记录：已执行 ${name}${detail}，结果已发送给用户）`;
+  }
+
+  /**
+   * 值得长期记住的工具结果 → 交给 ChatDO 的 facts 层。
+   *
+   * 哪些算「值得」：用户会重复问起的东西。
+   *   - 发过的文件（路径 + 名字）：下次说「把上次那个文件发我」要能想起来
+   *   - 做过的任务（一句话摘要）：下次问「我之前让你做的呢」要答得上
+   *   - 定的提醒：什么时候提醒什么
+   *
+   * 不记：图片 prompt、梗图名、emoji —— 这些是一次性产物，记了只占地方。
+   */
+  async rememberFact({ key, text, useAiDo }) {
+    const clean = String(text || '').trim().slice(0, 120);
+    if (!clean) return;
+    if (!useAiDo) return; // 没有 ChatDO 就没有 facts 层，跳过
+    try {
+      const stub = this.chatDoStub(key);
+      if (!stub) return;
+      await stub.fetch('https://ai-do/fact', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key, text: clean }),
+      });
+    } catch (e) {
+      this.logger.warn(`rememberFact failed: ${e.message}`);
+    }
+  }
+
+  /**
+   * 沙箱任务完成后，把「做了什么 + 产出哪些文件」写进长期记忆。
+   *
+   * 为什么放在任务完成之后：沙箱是后台异步跑的，runTool 返回时还不知道结果。
+   * 只有跑完才能拿到真实文件列表，这时记下来才准。
+   */
+  async rememberSandboxFact({ key, task, isC2C, scopeId, userId, useAiDo }) {
+    if (!useAiDo) return;
+    const parts = [];
+    const t = String(task || '').trim().slice(0, 50);
+    if (t) parts.push(`做过任务「${t}」`);
+    try {
+      // 直接问 AiDO 要当前文件列表（比解析发送队列可靠）
+      const ns = this.env && this.env.AIDO;
+      if (ns && typeof ns.idFromName === 'function') {
+        const stub = ns.get(ns.idFromName(this.ownerKey({ isC2C, scopeId, userId })));
+        const res = await stub.fetch('https://aido/state', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}',
+        });
+        const st = await res.json().catch(() => null);
+        const files = st && Array.isArray(st.files) ? st.files.map((f) => String(f.path).split('/').pop()).filter(Boolean) : [];
+        if (files.length) parts.push(`工作区现有文件 ${files.slice(0, 4).join('、')}${files.length > 4 ? ` 等 ${files.length} 个` : ''}`);
+      }
+    } catch {}
+    if (parts.length) await this.rememberFact({ key, text: parts.join('，'), useAiDo });
+  }
+
+  /** 从工具调用里挑出值得进长期记忆的那条事实（没有就返回 null） */
+  factFromTool(call, result) {
+    const args = (call && call.args) || {};
+    const name = (call && call.name) || '';
+    if (name === 'file') {
+      const p = String(args.path || '').trim();
+      const fname = p.split('/').pop() || p;
+      return fname ? `给用户发过文件 ${fname}` : null;
+    }
+    if (name === 'sandbox') {
+      const task = String(args.task || '').trim().slice(0, 60);
+      const files = (result && Array.isArray(result.sent) ? result.sent : []).map((f) => String(f).split('/').pop()).filter(Boolean);
+      const parts = [];
+      if (task) parts.push(`做过任务「${task}」`);
+      if (files.length) parts.push(`产出文件 ${files.slice(0, 3).join('、')}`);
+      return parts.length ? parts.join('，') : null;
+    }
+    if (name === 'remind') {
+      const when = String(args.when || '').trim().slice(0, 30);
+      const what = String(args.text || '').trim().slice(0, 40);
+      return when && what ? `设过提醒：${when} 提醒「${what}」` : null;
+    }
+    return null; // image / meme / voice / 查询类都不记
   }
 
   /* ------------------------------ 独立工具 DO ------------------------------ */
@@ -2263,8 +2598,10 @@ export class QQBotDO {
     throw lastErr;
   }
 
-  async recordAiDo({ key, assistant, historyLimit }) {
-    const payload = JSON.stringify({ key, assistant, historyLimit });
+  async recordAiDo({ key, assistant, historyLimit, providers }) {
+    // 带上 providers：ChatDO 的 record 需要它才能把滚出的消息压成摘要，
+    // 否则只能干等（原来直接 splice 丢弃，那部分内容永久丢失）
+    const payload = JSON.stringify({ key, assistant, historyLimit, providers });
     let lastErr = null;
     for (let attempt = 1; attempt <= 2; attempt++) {
       try {
@@ -2287,10 +2624,10 @@ export class QQBotDO {
   }
 
   /** 记录助手这轮内容：走 ChatDO 就写进 ChatDO，否则写本地会话 */
-  async rememberAssistant({ key, session, history, text, useAiDo, historyLimit }) {
+  async rememberAssistant({ key, session, history, text, useAiDo, historyLimit, providers }) {
     if (useAiDo) {
       try {
-        await this.recordAiDo({ key, assistant: text, historyLimit });
+        await this.recordAiDo({ key, assistant: text, historyLimit, providers });
       } catch (e) {
         this.logger.warn(`ChatDO record failed: ${e.message}`);
       }
@@ -3048,7 +3385,7 @@ export class QQBotDO {
 
   /** 历史太长时把最早的一批消息压成摘要（后台异步，失败只丢旧消息） */
   async maybeSummarize(key, session, provider) {
-    const limit = Number(this.config.historyLimit) || 20;
+    const limit = Number(this.config.historyLimit) || 10;
     if (!Array.isArray(session.history) || session.history.length <= limit + 4) return;
     const cut = session.history.length - 1 - limit;
     if (cut <= 0) return;
@@ -3289,7 +3626,7 @@ export class QQBotDO {
     }
   }
 
-  async runTool(call, { isC2C, scopeId, key, msgId, userId, userContent }) {
+  async runTool(call, { isC2C, scopeId, key, msgId, userId, userContent, useAiDo }) {
     const name = call.name;
     // sandbox 工具：把「写长文 / 做文件 / 多步任务」交给私有工作区执行
     if (name === 'sandbox') {
@@ -3314,6 +3651,9 @@ export class QQBotDO {
       const runner = async () => {
         try {
           await this.handleAiSandbox({ isC2C, scopeId, msgId, content: '沙箱 ' + task, userId, background: true });
+          // 任务完成后才真正知道「做了什么、产出了哪些文件」，这时再写长期记忆最准。
+          // 只记一行摘要，不记文件全文，避免上下文膨胀。
+          await this.rememberSandboxFact({ key, task, isC2C, scopeId, userId, useAiDo });
         } catch (e) {
           this.logger.warn(`sandbox background failed: ${e.message}`);
           try {

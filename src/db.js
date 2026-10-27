@@ -7,7 +7,7 @@ export const CONFIG_FIELDS = {
   secret: { type: 'string', max: 256, secret: true },
   sandbox: { type: 'flag' },
   systemPrompt: { type: 'string', max: 4000 },
-  historyLimit: { type: 'int', min: 1, max: 100 },
+  historyLimit: { type: 'int', min: 1, max: 50 },
   groupBlacklist: { type: 'string', max: 4000 },
   sensitiveWords: { type: 'string', max: 4000 },
   markdownReply: { type: 'flag' },
