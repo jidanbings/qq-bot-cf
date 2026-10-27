@@ -853,6 +853,22 @@ export async function dueReminders(env, nowIso, limit = 5) {
   }
 }
 
+/**
+ * 下一条待发提醒的时间（ISO 字符串），没有就返回 null。
+ * alarm 用它决定「什么时候再醒一次」，这样提醒可以精确到点，
+ * 不用靠 cron 每分钟轮询。
+ */
+export async function nextReminderDue(env) {
+  try {
+    const row = await env.DB.prepare(
+      "SELECT due_at FROM reminders WHERE status = 'pending' ORDER BY due_at ASC LIMIT 1"
+    ).first();
+    return row && row.due_at ? String(row.due_at) : null;
+  } catch {
+    return null;
+  }
+}
+
 /** 抢占一条待发任务，返回 true 表示本实例拿到了（防多个 cron 同时发） */
 export async function claimReminder(env, id) {
   const res = await env.DB.prepare(

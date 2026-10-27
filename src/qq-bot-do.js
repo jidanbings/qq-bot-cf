@@ -6,6 +6,7 @@ import {
   finishReminder,
   getConfig,
   listMemes,
+  nextReminderDue,
   rescheduleReminder,
   upsertGroup,
 } from './db.js';
@@ -347,12 +348,12 @@ export class QQBotDO {
             return Response.json({ ok: true, action: 'transport-switched', transport: 'webhook' });
           }
         }
-        // 到点的定时提醒 / 清理长时间不用的会话
+        // 到点的定时提醒：正常由 alarm 精确驱动，这里是兜底（cron 每 6 小时一次）
         try { await this.fireDueReminders(); } catch (e) { this.logger.warn(`Reminder scan: ${e.message}`); }
-        // 会话清理改成每小时一次：Webhook 模式下每分钟唤醒都会重新计费，
-        // 每分钟 list 一遍存储既费行读取也白白拉长存活时间
-        const minute = new Date().getUTCMinutes();
-        if (minute === 0 && this.state && typeof this.state.waitUntil === 'function') {
+        // 顺带把下一次 alarm 排上：部署新版本后新 DO 没有 alarm，靠这里补
+        await this.scheduleNextAlarm().catch(() => {});
+        // 会话清理：cron 本身已经很稀疏，直接执行
+        if (this.state && typeof this.state.waitUntil === 'function') {
           this.state.waitUntil(this.pruneStoredSessions());
         }
         const workerVersion = url.searchParams.get('v') || '';
@@ -1193,6 +1194,8 @@ export class QQBotDO {
         reminderIntent.whenText ||
         new Date(reminderIntent.dueAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
       const warn = isC2C ? '' : await this.proactiveWarning(scopeId);
+      // 新提醒落库后立刻重排 alarm，让它到点被唤醒（不再依赖每分钟 cron）
+      await this.scheduleNextAlarm().catch(() => {});
       await this.sendReply({
         isC2C,
         scopeId,
@@ -2747,6 +2750,40 @@ export class QQBotDO {
 
   /* ------------------------------ 定时提醒（AI 自主任务） ------------------------------ */
 
+  /**
+   * 把下一次唤醒排到「最近一条待发提醒」的时刻。
+   *
+   * 为什么不用 cron 每分钟轮询：那是每天固定 1,440 次调用，而绝大多数时刻根本没有
+   * 待发提醒。改成 alarm 之后，只在实际有提醒时才唤醒，且能精确到秒。
+   * 一个 DO 同时只能挂一个 alarm，所以每次都重新算最近的、直接覆盖。
+   */
+  async scheduleNextAlarm() {
+    try {
+      const nextDue = await nextReminderDue(this.env);
+      if (!nextDue) return null;
+      const at = new Date(nextDue).getTime();
+      if (!Number.isFinite(at)) return null;
+      // 过去的时刻（例如刚重启、或有积压）立刻唤醒
+      const when = Math.max(at, Date.now() + 500);
+      await this.state.storage.setAlarm(when);
+      return when;
+    } catch (e) {
+      this.logger.warn(`scheduleNextAlarm failed: ${e.message}`);
+      return null;
+    }
+  }
+
+  /** alarm 回调：发到点的提醒，然后把下一次排上 */
+  async alarm() {
+    try {
+      await this.loadConfig().catch(() => {});
+      await this.fireDueReminders().catch((e) => this.logger.warn(`alarm reminders: ${e.message}`));
+    } finally {
+      // 无论成功失败都要重排，否则一次失败就再也不唤醒了
+      await this.scheduleNextAlarm().catch(() => {});
+    }
+  }
+
   /** 主动消息（不带 msg_id）：返回详细错误，后台能看到失败原因 */
   async sendProactive({ isC2C, scopeId, content }) {
     const token = await this.getToken();
@@ -3012,6 +3049,7 @@ export class QQBotDO {
           repeatRule: parsed.repeatRule,
         });
         this.logSystem(`新增定时提醒（AI 工具）：${parsed.text.slice(0, 60)} @ ${parsed.dueAt}`);
+        await this.scheduleNextAlarm().catch(() => {});
         const warn = isC2C ? '' : await this.proactiveWarning(scopeId);
         return this.sendReply({
           isC2C,

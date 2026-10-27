@@ -190,6 +190,9 @@ try{ autoRefresh=localStorage.getItem('botAutoRefresh')!=='0'; }catch(e){}
 
 var S={};             // 最近一次状态数据
 var rendered=false;   // 状态页是否已经渲染过骨架
+var TRANSPORT_MODE='';// 配置页里显式保存的事件接收方式（webhook / ws，空=自动）
+var CUR_APPID='';     // 配置页里当前的 QQ AppID，用来拼开放平台跳转链接
+var CUR_WEBHOOK_VERIFIED=false; // 平台是否校验过回调地址（决定自动模式实际走哪条）
 
 function stateOf(s){
   if(!s)return {text:'读取中',kind:''};
@@ -606,15 +609,80 @@ function resetLimits(){
 }
 
 /* ============================== 机器人配置 ============================== */
+
+/** QQ 开放平台「开发设置」页，AppID 从配置里动态拼，不写死 */
+function qqDevSettingsUrl(appId){
+  var id=String(appId||'').replace(/[^0-9]/g,'');
+  return 'https://q.qq.com/qqbot/dashboard/manage/'+id+'?sec=dev-settings';
+}
+
+/**
+ * 事件接收方式选择卡：两种方式各一张，点了就选中。
+ * 不用 <select> 是因为两者的差别（计费、要不要配回调、断线行为）
+ * 塞进下拉选项里根本讲不清楚，而选错方向直接影响账单。
+ */
+function transportCards(){
+  // 实际生效的方式：老配置可能没存过 transport（自动模式），
+  // 这时按「平台是否校验过回调地址」推断，否则会出现一张卡都没选中的怪状态
+  var cur=TRANSPORT_MODE||(CUR_WEBHOOK_VERIFIED?'webhook':'ws');
+  var appId=CUR_APPID||'';
+  var webhookUrl=(location.origin||'')+'/qq/webhook';
+  var devUrl=qqDevSettingsUrl(appId);
+  var h='<div class="tp-wrap">';
+
+  var modes=[
+    {key:'webhook',name:'Webhook（推荐）',tag:'不计持续时间',
+     pros:['机器人只在你发消息时才醒，空闲不产生 GB-s','不占会话配额，不会因为配额耗尽或断线掉线','不存在心跳超时 / 重连风暴'],
+     cons:['需要在 QQ 开放平台填回调地址，且域名要能被 QQ 访问到','回调地址配错或域名不通，消息会进不来'],
+     need:'idle'},
+    {key:'ws',name:'WebSocket 网关长连接',tag:'24 小时常驻',
+     pros:['不需要公网回调地址，配好 AppID / Secret 就能用','平台侧不支持 Webhook 时可退回去'],
+     cons:['Durable Object 会 24 小时在线，约 10,800 GB-s/天，容易吃满免费额度','占用网关会话配额，断线要重连、心跳超时要恢复'],
+     need:'always'}
+  ];
+
+  for(var i=0;i<modes.length;i++){
+    var m=modes[i];
+    var on=cur===m.key;
+    h+='<div class="tp-card'+(on?' on':'')+'" data-tp="'+esc(m.key)+'" role="button" tabindex="0">';
+    h+='<div class="tp-head"><span class="tp-radio"><i></i></span>'
+      +'<b>'+esc(m.name)+'</b><span class="tp-tag'+(m.need==='idle'?' ok':' warn')+'">'+esc(m.tag)+'</span></div>';
+    h+='<ul class="tp-list pros">';
+    for(var p=0;p<m.pros.length;p++)h+='<li>'+esc(m.pros[p])+'</li>';
+    h+='</ul><ul class="tp-list cons">';
+    for(var c=0;c<m.cons.length;c++)h+='<li>'+esc(m.cons[c])+'</li>';
+    h+='</ul>';
+    if(m.key==='webhook'){
+      h+='<div class="tp-extra"><span class="tp-k">回调地址</span>'
+        +'<code class="tp-url" id="tp-url">'+esc(webhookUrl)+'</code>'
+        +'<button class="btn sm" type="button" id="tp-copy">复制</button></div>';
+    }
+    h+='</div>';
+  }
+  h+='</div>';
+
+  // 跳转到 QQ 开放平台配置回调：AppID 从后台配置读取，未填则提示先填
+  h+='<div class="tp-actions">';
+  if(appId){
+    h+='<a class="btn primary" href="'+esc(devUrl)+'" target="_blank" rel="noopener noreferrer">'
+      +IX.link+'<span>去 QQ 开放平台配置</span></a>';
+    h+='<span class="tp-note">打开后到「开发设置 → 事件订阅」，把上面的回调地址贴进去并保存</span>';
+  }else{
+    h+='<span class="tp-note warn">先在上面填好 <b>QQ AppID</b> 并保存，这里才会出现跳转按钮</span>';
+  }
+  h+='</div>';
+  h+='<input type="hidden" id="cf_transport" value="'+esc(cur)+'">';
+  return h;
+}
+
 var FIELDS=[
   {id:'qq',icon:IX.bot,title:'QQ 开放平台',desc:'QQ 机器人开放平台里的应用凭据',items:[
     {key:'appId',label:'QQ AppID',type:'text',ph:'机器人 AppID',required:true},
     {key:'secret',label:'QQ Secret',type:'password',ph:'机器人密钥',secret:true,required:true},
     {key:'sandbox',label:'沙箱环境',type:'select',options:[['0','否（正式环境）'],['1','是（沙箱环境）']],
-      hint:'机器人未上线或已下架时只能连沙箱，正式环境会拒绝鉴权（关闭码 4914）'},
-    {key:'transport',label:'事件接收方式',type:'select',options:[['','自动（回调验证通过后走 Webhook）'],['webhook','强制 Webhook'],['ws','WebSocket 网关长连接（旧）']],
-      hint:'Webhook 不回连网关，处理完就休眠，Durable Object 持续时间≈0；选它要先去 QQ 开放平台把「事件订阅」改成 Webhook，地址填 https://你的域名/qq/webhook。自动模式下平台校验通过一次后会自动切过来。WebSocket 会 24 小时占用一个 DO，持续计费'}
+      hint:'机器人未上线或已下架时只能连沙箱，正式环境会拒绝鉴权（关闭码 4914）'}
   ]},
+  {id:'transport',icon:IX.link,title:'事件接收方式',desc:'决定机器人怎么收到 QQ 的消息，直接影响计费',custom:transportCards},
   {id:'behavior',icon:IX.chat,title:'对话行为',desc:'回复方式与上下文长度',items:[
     {key:'systemPrompt',label:'系统提示词',type:'textarea',ph:'你是一个友好、靠谱的 QQ 机器人助手……',wide:true},
     {key:'historyLimit',label:'历史消息条数',type:'number',ph:'20',hint:'每次对话携带的上下文条数，1 ~ 100'},
@@ -684,14 +752,24 @@ function fieldHtml(f,cfg,conf){
 function renderConfig(d){
   var cfg=d.config||{};
   var conf=d.configured||{};
+  TRANSPORT_MODE=cfg.transport||'';
+  CUR_APPID=cfg.appId||'';
+  CUR_WEBHOOK_VERIFIED=!!cfg.webhookVerifiedAt;
   var h='';
   for(var s=0;s<FIELDS.length;s++){
     var sec=FIELDS[s];
     h+='<div class="form-section"><div class="fs-head"><span class="fs-ico">'+sec.icon+'</span>'
       +'<div><h3>'+esc(sec.title)+'</h3><p>'+esc(sec.desc)+'</p></div>'
-      +'<span class="fs-state" id="fs-'+sec.id+'"></span></div><div class="fs-body"><div class="grid">';
-    for(var i=0;i<sec.items.length;i++)h+=fieldHtml(sec.items[i],cfg,conf);
-    h+='</div></div></div>';
+      +'<span class="fs-state" id="fs-'+sec.id+'"></span></div><div class="fs-body">';
+    if(sec.custom){
+      // 自定义区块自己负责布局（比如事件接收方式的两张对比卡）
+      h+=sec.custom();
+    }else{
+      h+='<div class="grid">';
+      for(var i=0;i<sec.items.length;i++)h+=fieldHtml(sec.items[i],cfg,conf);
+      h+='</div>';
+    }
+    h+='</div></div>';
   }
   // 照 user.html：按钮直接放在表单末尾，没有 sticky 悬浮栏、没有常驻状态文字
   h+='<div class="form-actions">'
@@ -701,6 +779,8 @@ function renderConfig(d){
 
   $('b-save').addEventListener('click',function(){saveConfig(false);});
   $('b-save-restart').addEventListener('click',function(){saveConfig(true);});
+
+  bindTransportCards();
 
   var toggles=document.querySelectorAll('.pw-toggle');
   for(var t=0;t<toggles.length;t++){
@@ -726,10 +806,56 @@ function markDirty(){
   updateSectionStates();
 }
 
+/** 事件接收方式：两张卡片单选，选中值写进隐藏字段 cf_transport */
+function bindTransportCards(){
+  var cards=document.querySelectorAll('.tp-card');
+  for(var i=0;i<cards.length;i++){
+    (function(card){
+      var pick=function(){
+        var v=card.getAttribute('data-tp');
+        TRANSPORT_MODE=v;
+        var hidden=$('cf_transport');
+        if(hidden)hidden.value=v;
+        for(var k=0;k<cards.length;k++){
+          cards[k].className='tp-card'+(cards[k].getAttribute('data-tp')===v?' on':'');
+        }
+        updateSectionStates();
+      };
+      card.addEventListener('click',pick);
+      card.addEventListener('keydown',function(e){
+        if(e.key==='Enter'||e.key===' '){e.preventDefault();pick();}
+      });
+    })(cards[i]);
+  }
+  var copy=$('tp-copy');
+  if(copy){
+    copy.addEventListener('click',function(e){
+      e.stopPropagation();
+      var url=($('tp-url')||{}).textContent||'';
+      if(navigator.clipboard&&navigator.clipboard.writeText){
+        navigator.clipboard.writeText(url).then(function(){toast('回调地址已复制','ok');})
+          .catch(function(){toast('复制失败，请手动选中','bad');});
+      }else{
+        toast('当前浏览器不支持一键复制','bad');
+      }
+    });
+  }
+}
+
 /** 每个分组的右上角显示「已填写 n/m」，一眼看出还差什么 */
 function updateSectionStates(){
   for(var s=0;s<FIELDS.length;s++){
     var sec=FIELDS[s];
+    if(sec.custom){
+      // 自定义区块：选了一种方式就算填好
+      var st=$('fs-'+sec.id);
+      if(st){
+        var ok=!!(TRANSPORT_MODE||CUR_WEBHOOK_VERIFIED);
+        st.className='fs-state'+(ok?' ok':'');
+        st.innerHTML='<i></i>'+(ok?'已选择':'未选择');
+      }
+      continue;
+    }
     var total=0,filled=0;
     for(var i=0;i<sec.items.length;i++){
       var f=sec.items[i];
@@ -778,6 +904,9 @@ function saveConfig(restart){
     var el=$('cf_'+keys[k]);
     if(el)patch[keys[k]]=el.value;
   }
+  // 事件接收方式是自定义卡片，值在隐藏字段里
+  var tp=$('cf_transport');
+  if(tp)patch.transport=tp.value;
   var b1=$('b-save'),b2=$('b-save-restart');
   busy(b1,true);
   busy(b2,true);
