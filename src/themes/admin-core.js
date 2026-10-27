@@ -696,9 +696,16 @@ function transportCards(){
   if(appId){
     h+='<a class="btn primary" href="'+esc(devUrl)+'" target="_blank" rel="noopener noreferrer">'
       +IX.link+'<span>去 QQ 开放平台修改</span></a>';
-    h+='<button class="btn" id="b-detect" type="button">'+IX.refresh+'<span>重新检测</span></button>';
-    h+='<span class="tp-note">在「开发设置 → 事件订阅」切换推送方式。改成 Webhook 会自动同步；'
-      +'改回 WebSocket 后本页不会立刻知道（那样就收不到任何推送了），请点「重新检测」。</span>';
+    // 两个方向都做成显式按钮：网关可连与否证明不了平台在用哪种方式，
+    // 所以只能由用户自己声明「我在平台上设成了什么」
+    if(isWebhook){
+      h+='<button class="btn" id="b-to-ws" type="button">'+IX.refresh+'<span>我在平台改成了 WebSocket</span></button>';
+    }else{
+      h+='<button class="btn" id="b-to-webhook" type="button">'+IX.refresh+'<span>我在平台改成了 Webhook</span></button>';
+    }
+    h+='<span class="tp-note">在「开发设置 → 事件订阅」切换推送方式。'
+      +'改成 Webhook 会自动同步（收到推送即确认）；改回 WebSocket 后本页收不到任何信号，'
+      +'所以请点上面的按钮手动同步。</span>';
   }else{
     h+='<span class="tp-note warn">先在上面填好 <b>QQ AppID</b> 并保存，这里才会出现跳转按钮</span>';
   }
@@ -857,23 +864,27 @@ function bindTransportCards(){
       }
     });
   }
-  var det=$('b-detect');
-  if(det){
-    det.addEventListener('click',function(){
-      busy(det,true);
-      // 真的去连一次网关：连得上 = 平台在用 WebSocket，连不上 = 仍是 Webhook
-      api('POST','/api/detect-platform',{}).then(function(d){
-        if(!d)return;
-        if(d.wsReachable){
-          toast('检测到网关可连，已切回 WebSocket 长连接','ok');
-        }else if(d.transport==='webhook'){
-          toast('网关连不上，判定平台仍是 Webhook'+(d.reason?'（'+d.reason+'）':''),'');
-        }else{
-          toast('检测完成：当前 '+(d.transport==='webhook'?'Webhook':'WebSocket'),'ok');
-        }
+  // 两个方向各一个显式按钮：只由用户声明，不做自动猜测
+  var toWs=$('b-to-ws');
+  if(toWs){
+    toWs.addEventListener('click',function(){
+      busy(toWs,true);
+      api('POST','/api/detect-platform',{action:'to-ws'}).then(function(){
+        toast('已切到 WebSocket 长连接','ok');
         return api('GET','/api/config').then(function(c){ if(c)renderConfig(c); });
       }).catch(function(e){toast(e.message,'bad');})
-        .then(function(){busy(det,false);});
+        .then(function(){busy(toWs,false);});
+    });
+  }
+  var toWh=$('b-to-webhook');
+  if(toWh){
+    toWh.addEventListener('click',function(){
+      busy(toWh,true);
+      api('POST','/api/detect-platform',{action:'to-webhook'}).then(function(){
+        toast('已切到 Webhook','ok');
+        return api('GET','/api/config').then(function(c){ if(c)renderConfig(c); });
+      }).catch(function(e){toast(e.message,'bad');})
+        .then(function(){busy(toWh,false);});
     });
   }
 }

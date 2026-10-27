@@ -289,14 +289,15 @@ export class QQBotDO {
   }
 
   /**
-   * 真正去探测平台当前的推送方式。
+   * 探测：网关是否可达 + 凭据是否有效。
    *
-   * QQ 开放平台**没有提供查询推送方式的 API**（文档里只有「配置回调地址」的单向操作），
-   * 所以只能靠行为探测：**主动去连一次网关**。
-   *   - 平台是 WebSocket → 连得上，能收到 HELLO/READY
-   *   - 平台已切 Webhook → 网关连接会被拒绝或立刻断开（平台不会往长连接推事件）
+   * ⚠ 重要：**探测结果不能用来判断平台的推送方式。**
+   * QQ 网关对任何机器人都接受 WebSocket 连接，跟平台侧设的是 Webhook 还是
+   * WebSocket 无关。所以「能连上」不能证明平台在用 WebSocket ——
+   * 早期版本按这个判据自动切换，结果把用户刚设好的 Webhook 又改回了 WS，属于反向 bug。
    *
-   * 这是「重新检测」按钮的实现：探到 ws 就真的切回 ws；探不到就保持 webhook 并说明原因。
+   * 因此这里只做**诊断**：报告凭据是否可用、网关是否可达、最近有没有收到推送，
+   * 由后台展示给用户，切换必须由用户显式点按钮（action=to-ws / to-webhook）。
    */
   async probePlatform() {
     const out = {
@@ -319,7 +320,7 @@ export class QQBotDO {
       return out;
     }
 
-    // 1) 先问网关要地址 —— 这一步和推送方式无关，仅用来确认凭据可用
+    // 1) 先问网关要地址 —— 仅用来确认凭据可用，和推送方式无关
     let gwUrl = '';
     try {
       const res = await fetch(`${this.apiBase()}/gateway/bot`, {
@@ -342,7 +343,7 @@ export class QQBotDO {
       return out;
     }
 
-    // 2) 真连一次，看能否握手成功
+    // 2) 试连一次，只用于确认网关可达（不据此改模式！）
     out.probed = true;
     try {
       const httpUrl = gwUrl.replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:');
@@ -356,7 +357,6 @@ export class QQBotDO {
       }
       const ws = resp.webSocket;
       if (ws) {
-        // 能拿到 webSocket 就说明网关接受连接 → 平台此刻在用 WebSocket
         out.wsReachable = true;
         try {
           ws.accept();
@@ -370,13 +370,17 @@ export class QQBotDO {
       out.reason = `连接网关异常：${e.message}`;
     }
 
-    // 3) 按探测结果落定
-    if (out.wsReachable) {
-      await this.markPlatformWs('探测到网关可连');
-      out.transport = 'ws';
-      out.reason = '网关可连，判定平台在用 WebSocket';
-    } else {
-      out.transport = this.transportName();
+    // 3) 只报告，不切换。附上「最近有没有收到推送」这个唯一可信的旁证
+    const lastEvent = Number(this.lastEventAt) || 0;
+    out.lastEventAt = lastEvent || null;
+    out.sinceEventMs = lastEvent ? Date.now() - lastEvent : null;
+    out.transport = this.transportName();
+    out.note =
+      '网关可连不代表平台在用 WebSocket（任何机器人都能连网关）。'
+      + '判断平台推送方式只能看：是否收到 /qq/webhook 推送。'
+      + '要切换请显式点「切回长连接」或「切到 Webhook」。';
+    if (!out.reason) {
+      out.reason = out.wsReachable ? '凭据可用、网关可达' : '网关不可达';
     }
     return out;
   }

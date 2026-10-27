@@ -27,6 +27,7 @@ import {
   deleteSandbox,
   normalizeUrl,
   purgeExpiredSessions,
+  readRawConfig,
   randomHex,
   removeGroup,
   resetEncryptedConfig,
@@ -38,7 +39,7 @@ import {
 } from './db.js';
 import { APP_VERSION, COOKIE_NAME, LOGIN_LIMIT, API_LIMIT } from './constants.js';
 import { hitRateLimit, resetRateLimit } from './utils/rate-limit.js';
-import { maskId } from './utils/crypto.js';
+import { maskId, decryptText } from './utils/crypto.js';
 import { fetchModelList } from './utils/models.js';
 import {
   HttpError,
@@ -289,15 +290,6 @@ async function handleQqWebhook(request, env, ctx) {
   // 必须拿原始字节验签，先 clone 一份给后面解析用
   const body = new Uint8Array(await request.arrayBuffer());
 
-  let cfg;
-  try {
-    cfg = await getConfig(env);
-  } catch (err) {
-    console.error('webhook: getConfig failed:', redact(err && err.stack ? err.stack : err));
-    return jsonFail(503, 'config_unavailable', '配置读取失败');
-  }
-  const secret = cfg.secret || '';
-
   let payload = null;
   try {
     payload = JSON.parse(new TextDecoder().decode(body));
@@ -305,6 +297,25 @@ async function handleQqWebhook(request, env, ctx) {
     return jsonFail(400, 'bad_payload', '请求体不是合法 JSON');
   }
   const op = Number(payload && payload.op);
+
+  /**
+   * 取 Bot Secret。
+   *
+   * 关键：**只读 secret 这一项**，不要走完整的 getConfig()。
+   * getConfig 会连带解密 AI providers、执行 migrateLegacyAi / dropLegacyKeys
+   * 这些**写操作**，任何一步抛错都会让 op=13 变成 503，
+   * 而 QQ 平台把非 200 一律显示成「签名校验不通过」—— 极易误导。
+   *
+   * 首次配置回调地址时尤其容易踩：那时库里可能还有旧的、解不开的残留数据。
+   */
+  let secret = '';
+  try {
+    const raw = await readRawConfig(env);
+    if (raw.secret) secret = await decryptText(env, raw.secret, 'secret');
+  } catch (err) {
+    console.error('webhook: 读取 secret 失败:', redact(String(err && err.message ? err.message : err)));
+    return jsonFail(503, 'secret_unavailable', '读取 Secret 失败，请检查 CONFIG_ENC_KEY 是否与库里一致');
+  }
 
   // op=13：开放平台校验回调地址，必须用私钥对 event_ts + plain_token 签名后原样返回
   if (op === 13) {
