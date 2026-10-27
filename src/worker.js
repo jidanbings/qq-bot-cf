@@ -245,6 +245,32 @@ async function handleLogin(request, env, ip) {
 }
 
 /**
+ * QQ Webhook 的 ACK / 验证响应一律用「裸」JSON。
+ * 不能用 jsonResult()：它会把结果包成 {ok:true,data:{...}}，
+ * 而 QQ 只认根节点上的 plain_token / signature / op，套一层就报「签名校验不通过」。
+ */
+function qqJson(obj) {
+  return new Response(JSON.stringify(obj), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+  });
+}
+
+/** op=12：告诉平台「已收到事件」 */
+function qqAck() {
+  return qqJson({ op: 12, d: {} });
+}
+
+/**
+ * op=13 回调地址验证的响应体：根节点必须是 plain_token + signature。
+ * 单独抽出来是为了能直接测（历史上这里套过 {ok,data}，导致平台报「签名校验不通过」）。
+ */
+export async function qqValidationResponse(secret, d) {
+  const signature = await signValidation(secret, d && d.event_ts, d && d.plain_token);
+  return qqJson({ plain_token: d && d.plain_token, signature });
+}
+
+/**
  * QQ 开放平台 Webhook 入口（POST /qq/webhook）
  *
  * 为什么走 Webhook 而不是网关长连接：
@@ -282,16 +308,25 @@ async function handleQqWebhook(request, env) {
 
   // op=13：开放平台校验回调地址，必须用私钥对 event_ts + plain_token 签名后原样返回
   if (op === 13) {
-    const d = payload.d || {};
+    // d 正常是对象；个别情况下平台会把它序列化成字符串，两种都兼容
+    let d = payload.d;
+    if (typeof d === 'string') {
+      try {
+        d = JSON.parse(d);
+      } catch {
+        d = {};
+      }
+    }
+    if (!d || typeof d !== 'object') d = {};
     if (!secret) return jsonFail(503, 'no_secret', '尚未配置 Secret');
     try {
-      const signature = await signValidation(secret, d.event_ts, d.plain_token);
+      const res = await qqValidationResponse(secret, d);
       // 记下「平台已校验通过」：DO 的自动模式据此把长连接停掉，改走 Webhook
       Promise.resolve()
         .then(() => saveConfig(env, { webhookVerifiedAt: String(Date.now()) }))
         .then(() => callBot(env, 'reload').catch(() => {}))
         .catch((err) => console.warn('webhook: 记录校验时间失败', redact(String(err && err.message))));
-      return jsonResult({ plain_token: d.plain_token, signature });
+      return res;
     } catch (err) {
       console.error('webhook: signValidation failed:', redact(err && err.stack ? err.stack : err));
       return jsonFail(500, 'sign_failed', '回调地址验证签名失败');
@@ -314,7 +349,7 @@ async function handleQqWebhook(request, env) {
 
   if (op !== 0) {
     // 心跳/鉴权类 opcode 在 Webhook 模式下没有意义，直接 ACK 掉
-    return jsonResult({ op: 12, d: {} });
+    return qqAck();
   }
 
   // 转给 QQBotDO；DO 内部 waitUntil 异步处理，这里不等结果，保证 3 秒内回 ACK
@@ -331,7 +366,7 @@ async function handleQqWebhook(request, env) {
     // 超时或 DO 抖动都不影响 ACK：QQ 只关心我们有没有收下
     console.error('webhook: 转发 DO 失败:', redact(String(err && err.message ? err.message : err)));
   }
-  return jsonResult({ op: 12, d: {} });
+  return qqAck();
 }
 
 async function handleApi(request, env, url) {

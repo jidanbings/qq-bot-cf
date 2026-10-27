@@ -146,12 +146,18 @@ export class QQBotDO {
     this.awaitingAck = false;
     this.retiredFor = null;
     this.retiredAt = 0;
+    this.lastEventAt = 0;
+    this._eventAtSaved = 0;
 
     state.blockConcurrencyWhile(async () => {
       try {
         await this.loadConfig();
         const storedRun = await state.storage.get('desired_running');
         this.desiredRunning = storedRun !== false;
+        try {
+          const lastEventAt = await state.storage.get('last_event_at');
+          if (lastEventAt) this.lastEventAt = Number(lastEventAt);
+        } catch {}
         this.logger.info(
           `DO init: desiredRunning=${this.desiredRunning} transport=${this.transportName()}`
         );
@@ -222,6 +228,13 @@ export class QQBotDO {
           payload = await request.json();
         } catch {}
         if (!payload || typeof payload !== 'object') return Response.json({ ok: false, error: 'bad payload' });
+        // 记下「最近一次收到真实事件」的时间：后台据此判断 Webhook 通道是否真的通
+        // （只写内存 + 低频落盘，避免每条消息都多一次写操作）
+        this.lastEventAt = Date.now();
+        if (!this._eventAtSaved || this.lastEventAt - this._eventAtSaved > 60000) {
+          this._eventAtSaved = this.lastEventAt;
+          this.state.storage.put('last_event_at', this.lastEventAt).catch(() => {});
+        }
         const t = String(payload.t || '');
         const d = payload.d || {};
         if (t === 'GROUP_AT_MESSAGE_CREATE' || t === 'GROUP_MESSAGE_CREATE' || t === 'C2C_MESSAGE_CREATE') {
@@ -320,7 +333,20 @@ export class QQBotDO {
         return Response.json({ ok: true, reloaded: true, running: this.running });
       case '/ensure': {
         // 每分钟 cron 看门狗顺带热更新配置：即使 reload 通知丢了，配置最多 1 分钟内也会生效
+        const prevTransport = this.transportName();
         try { await this.loadConfig(); } catch {}
+        // 传输方式变了（典型场景：QQ 平台刚校验通过回调地址）：
+        // 这里必须和 /reload 一样处理，否则万一下发通知失败，就会一直挂在长连接上白烧 GB-s
+        if (prevTransport !== this.transportName()) {
+          this.logger.info(`Watchdog: 传输方式 ${prevTransport} → ${this.transportName()}`);
+          this.teardown();
+          if (this.isWsTransport()) {
+            if (this.desiredRunning) this.state.waitUntil(this.startBot());
+          } else {
+            this.running = this.desiredRunning;
+            return Response.json({ ok: true, action: 'transport-switched', transport: 'webhook' });
+          }
+        }
         // 到点的定时提醒 / 清理长时间不用的会话
         try { await this.fireDueReminders(); } catch (e) { this.logger.warn(`Reminder scan: ${e.message}`); }
         // 会话清理改成每小时一次：Webhook 模式下每分钟唤醒都会重新计费，
@@ -375,6 +401,8 @@ export class QQBotDO {
           running: this.running,
           desiredRunning: this.desiredRunning,
           transport: this.transportName(),
+          webhookVerifiedAt: this.config.webhookVerifiedAt ? Number(this.config.webhookVerifiedAt) : null,
+          lastEventAt: this.lastEventAt || null,
           wsState: this.ws?.readyState,
           sessionCount: this.sessions.size,
           tokenValid: !!(this.token && now < this.tokenExpiry),

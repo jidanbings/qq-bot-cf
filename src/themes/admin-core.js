@@ -215,6 +215,11 @@ function banners(s){
       '网关持续拒绝 IDENTIFY（op9）。机器人还没上线时，到「机器人配置」把「沙箱环境」打开再试。']);
   }
   if(!s.running&&!out.length)out.push(['info','机器人已停止','点下面「启动」恢复运行。自动保活'+(s.desiredRunning?'仍在等待':'已关闭')+'。']);
+  // 切到 Webhook 后如果一直收不到事件，说明域名不通 / 回调地址配错，得明确提示
+  if(!isWs&&s.desiredRunning&&!s.lastEventAt){
+    out.push(['warn','Webhook 还没收到过任何事件',
+      '已切到 Webhook 但一次事件都没进来。确认 QQ 开放平台的回调地址是 '+(location.origin||'你的域名')+'/qq/webhook，且该域名能从公网访问。收不到消息时可临时改回「WebSocket 网关长连接」。']);
+  }
   var h='';
   for(var i=0;i<out.length;i++){
     var k=out[i][0];
@@ -419,6 +424,11 @@ function paintStatus(s){
     var rows=[
       ['运行环境与版本',verTxt,sameVer?'ok':'warn'],
       ['事件接收方式',isWs?'WebSocket 网关长连接（DO 常驻计费）':'Webhook（请求驱动，空闲不计持续时间）',isWs?'warn':'ok'],
+      ['回调地址验证',(function(){
+        if(!s.webhookVerifiedAt)return '尚未验证（去 QQ 开放平台填 '+location.origin+'/qq/webhook）';
+        return '已通过 · '+fmtClock(s.webhookVerifiedAt);
+      })(),s.webhookVerifiedAt?'ok':(isWs?'':'warn')],
+      ['最近收到事件',s.lastEventAt?(fmtClock(s.lastEventAt)+'（'+fmtDur(now-s.lastEventAt)+'前）'):'还没有收到过',s.lastEventAt?'ok':'warn'],
       ['API 域名',s.apiBase||'—',''],
       ['会话 ID',s.sessionId||(isWs?'尚未建立（还没成功登录过）':'不适用（Webhook 模式无会话）'),''],
       ['活跃模型',s.aiModel||'未选择',s.aiModel?'ok':'bad'],
