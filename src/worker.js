@@ -386,6 +386,7 @@ async function readPublicConfig(env) {
   try {
     const st = await callBot(env, 'status');
     pub.config.transport = (st && st.transport) || '';
+    pub.config.platformMode = (st && st.platformMode) || '';
     pub.config.lastEventAt = st && st.lastEventAt ? String(st.lastEventAt) : '';
   } catch {}
   return pub;
@@ -471,6 +472,15 @@ async function handleApi(request, env, url) {
         botReloaded = true;
       } catch {}
       return jsonResult({ saved: result.saved, botReloaded });
+    }
+
+    case '/api/detect-platform': {
+      if (method !== 'POST') throw new HttpError(405, 'method_not_allowed', '请使用 POST');
+      const body = await readJson(request).catch(() => ({}));
+      // 明确指定要切到哪个方向时直接执行，否则只做检测
+      const target = body && (body.action === 'to-ws' || body.action === 'to-webhook') ? body.action : 'detect';
+      const qs = target === 'detect' ? '' : `?action=${target}`;
+      return jsonResult(await callBot(env, `detect-platform${qs}`));
     }
 
     case '/api/ai': {

@@ -20,9 +20,10 @@ export const CONFIG_FIELDS = {
   toolCalling: { type: 'flag' },
   voiceLang: { type: 'string', max: 8 },
   voiceGain: { type: 'string', max: 4 },
-  // 事件接收方式**只读**：由程序根据 QQ 开放平台的实际配置自动判定，不再作为开关。
-  // 保留这个字段是为了让 /api/config 能把当前结果回传给后台展示（保留历史值以防万一）。
-  transport: { type: 'string', max: 8 },
+  // 平台当前的事件推送方式（显式双向）：'ws' / 'webhook' / ''。
+  // 由程序根据平台实况自动维护，后台只读展示。存成显式值而不是「有过痕迹就算」，
+  // 否则从 Webhook 切回 WebSocket 时永远翻不回来。
+  platformMode: { type: 'string', max: 8 },
   // 平台已切 Webhook 的证据：op=13 校验通过的时间戳，或首次收到 /event 推送的时间
   webhookVerifiedAt: { type: 'string', max: 32 },
   doVersion: { type: 'string', max: 32 },

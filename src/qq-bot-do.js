@@ -197,25 +197,27 @@ export class QQBotDO {
   }
 
   /**
-   * 传输方式判定：**始终以 QQ 开放平台的设置为准**，后台不再手动覆盖。
+   * 传输方式判定：跟随 QQ 开放平台的实际设置。
    *
-   * 平台侧才是真正的开关 —— 平台配了 Webhook，消息就 POST 到 /qq/webhook；
-   * 后台选什么都改变不了这件事。所以后台那个选项只应该是「显示同步结果」，
-   * 不能当成开关用（否则会出现「平台已 Webhook、后台还开着长连接」白烧 GB-s）。
+   * 平台侧才是真正的开关。判定存成**显式的双向模式**（platformMode），
+   * 而不是「有过 Webhook 痕迹就一直当 Webhook」—— 否则从 Webhook 切回
+   * WebSocket 时永远翻不回来（webhookVerifiedAt 是历史记录，不会自己消失）。
    *
-   * 怎么判断平台已经切到 Webhook：两个信号，任一成立即可
-   *   - webhookVerifiedAt：平台校验过回调地址（op=13 成功）
-   *   - lastEventAt     ：真的从 /event 收到过推送（最硬的证据）
+   * 证据来源：
+   *   → webhook：收到 /event 真实推送，或 op=13 校验通过
+   *   → ws     ：从网关长连接收到真实的 DISPATCH 消息事件
    *
-   * 都没有就默认走 WebSocket —— 首次接入的人多半是长连接，
-   * 而且这个默认值也保证了「还没配回调地址」时不会把唯一的收消息途径关掉。
+   * 默认 'ws'：首次接入的人多半是长连接，且能保证「还没配回调」时不断掉唯一通道。
    */
   transportName() {
     if (!this.config) return 'ws';
+    const mode = this.config.platformMode;
+    if (mode === 'webhook' || mode === 'ws') return mode;
+    // 兼容老数据：没存过 platformMode 时就按旧的痕迹推断
     return this.platformUsesWebhook() ? 'webhook' : 'ws';
   }
 
-  /** 平台是否已经切到 Webhook */
+  /** 平台是否已经切到 Webhook（仅在没有显式 platformMode 时作为兜底推断） */
   platformUsesWebhook() {
     const cfg = this.config || {};
     if (cfg.webhookVerifiedAt) return true;
@@ -224,17 +226,18 @@ export class QQBotDO {
   }
 
   /**
-   * 把「平台已切 Webhook」这个事实落盘，并立刻停掉多余的长连接。
+   * 把「平台已切 Webhook」写进显式模式，并立刻停掉多余的长连接。
    *
-   * 注意顺序：**先切内存状态、先断连接，再尝试落盘**。
+   * 顺序：先切内存状态、先断连接，再尝试落盘。
    * 落盘只是为了跨实例记住，不该成为「能不能切换」的前提 ——
    * 否则一旦 D1 抖动或写入失败，就白留着一条正在烧 GB-s 的长连接。
    */
   async markPlatformWebhook(reason) {
     if (!this.config) return false;
-    if (this.config.webhookVerifiedAt) return false;
+    if (this.transportName() === 'webhook' && this.config.platformMode === 'webhook') return false;
 
     const now = String(Date.now());
+    this.config.platformMode = 'webhook';
     this.config.webhookVerifiedAt = now;
 
     // 1) 立刻生效：模式已变，长连接没用了
@@ -247,12 +250,69 @@ export class QQBotDO {
     // 2) 再尝试落盘，失败也不影响本次切换
     try {
       const { saveConfig } = await import('./db.js');
-      await saveConfig(this.env, { webhookVerifiedAt: now });
+      await saveConfig(this.env, { platformMode: 'webhook', webhookVerifiedAt: now });
       this.logger.info(`平台已切到 Webhook（${reason}），已同步`);
     } catch (e) {
       this.logger.warn(`markPlatformWebhook 落盘失败（本次仍已切换）: ${e.message}`);
     }
     return true;
+  }
+
+  /**
+   * 反向：平台切回了 WebSocket 网关。
+   *
+   * 这个方向只能在「还在跑长连接」时自动发现 —— 因为 Webhook 模式下本对象
+   * 根本不连网关，收不到 WS 事件，也就没有信号可依。所以：
+   *   - 手动切回：后台「重新检测」按钮 / 调用 /detect-platform
+   *   - 自动发现：只要长连接还活着、能收到 DISPATCH，就说明平台在用 WebSocket
+   */
+  async markPlatformWs(reason) {
+    if (!this.config) return false;
+    if (this.transportName() === 'ws' && this.config.platformMode === 'ws') return false;
+
+    this.config.platformMode = 'ws';
+    this.config.webhookVerifiedAt = '';
+
+    try {
+      const { saveConfig } = await import('./db.js');
+      await saveConfig(this.env, { platformMode: 'ws', webhookVerifiedAt: '' });
+      this.logger.info(`平台已切回 WebSocket（${reason}），已同步`);
+    } catch (e) {
+      this.logger.warn(`markPlatformWs 落盘失败（本次仍已切换）: ${e.message}`);
+    }
+
+    // 切回长连接：如果此刻在跑 Webhook 模式（没连接），就把它建起来
+    if (this.isWsTransport() && this.desiredRunning && !this.isAlive()) {
+      this.state.waitUntil(this.startBot());
+    }
+    return true;
+  }
+
+  /**
+   * 探测平台当前用的是哪种推送方式。
+   *
+   * 只在 Webhook 模式下有意义（长连接模式靠收到 WS 事件就能自证）。
+   * 做法：向 /gateway/bot 取网关地址，看能否拿到 —— 但这并不能区分平台配置，
+   * 所以真正可靠的判据是「最近有没有收到 /event 推送」：
+   *   - 近期有推送 → 平台是 Webhook
+   *   - 近期没有   → 很可能已切回 WS（或只是没人说话）
+   * 因此这里只负责给出「建议」，并附带两条证据供后台展示与用户判断。
+   */
+  async detectPlatform() {
+    const now = Date.now();
+    const lastEvent = Number(this.lastEventAt) || 0;
+    const sinceEvent = lastEvent ? now - lastEvent : null;
+    return {
+      transport: this.transportName(),
+      platformMode: this.config.platformMode || '(未设置)',
+      lastEventAt: lastEvent || null,
+      sinceEventMs: sinceEvent,
+      // 24 小时内没有任何推送，且本对象没在跑长连接 → 提示可能已切回
+      suggestion:
+        this.transportName() === 'webhook' && sinceEvent !== null && sinceEvent > 24 * 60 * 60 * 1000
+          ? 'ws'
+          : null,
+    };
   }
 
   isWsTransport() {
@@ -330,6 +390,22 @@ export class QQBotDO {
           this.touchGroup(`c2c:${d.openid || ''}`);
         }
         return Response.json({ ok: true, t });
+      }
+      case '/detect-platform': {
+        // 后台「重新检测」：探测平台当前推送方式，并在用户确认后切换
+        // 为什么需要手动触发：Webhook 模式下本对象不连网关，收不到 WS 事件，
+        // 平台切回 WebSocket 时没有任何信号能自动发现。
+        const action = url.searchParams.get('action') || 'detect';
+        if (action === 'to-ws') {
+          await this.markPlatformWs('后台手动切回');
+          return Response.json({ ok: true, transport: this.transportName(), switched: 'ws' });
+        }
+        if (action === 'to-webhook') {
+          await this.markPlatformWebhook('后台手动切换');
+          return Response.json({ ok: true, transport: this.transportName(), switched: 'webhook' });
+        }
+        const info = await this.detectPlatform();
+        return Response.json({ ok: true, ...info });
       }
       case '/group-manage': {
         // 后台「群管理」：群资料 + 机器人群内状态 + 禁言状态，各自容错（白名单权限可能只有其一）
@@ -481,6 +557,7 @@ export class QQBotDO {
           running: this.running,
           desiredRunning: this.desiredRunning,
           transport: this.transportName(),
+          platformMode: this.config.platformMode || '',
           webhookVerifiedAt: this.config.webhookVerifiedAt ? Number(this.config.webhookVerifiedAt) : null,
           lastEventAt: this.lastEventAt || null,
           wsState: this.ws?.readyState,
@@ -905,12 +982,22 @@ export class QQBotDO {
         this.lastError = null;
         this.sessionId = d?.session_id || null;
         this.logger.info(`Bot ready: ${d?.user?.username} session=${this.sessionId || 'none'}`);
+        // 能从网关拿到 READY，说明平台此刻用的是 WebSocket 推送。
+        // 如果是「平台已切回 WS 但本地还记着 webhook」，这一下就能纠正过来。
+        this.markPlatformWs('网关 READY').catch(() => {});
       } else if (t === 'RESUMED') {
         this.reconnectAttempt = 0;
         this.identifyFailures = 0;
         this.lastError = null;
         this.logger.info('Session resumed');
+        this.markPlatformWs('网关 RESUMED').catch(() => {});
       } else if (t === 'GROUP_AT_MESSAGE_CREATE' || t === 'GROUP_MESSAGE_CREATE' || t === 'C2C_MESSAGE_CREATE') {
+        // 收到真实消息事件 —— 平台确实在用 WebSocket
+        if (this.config && this.config.platformMode !== 'ws') {
+          this.config.platformMode = 'ws';
+          this.config.webhookVerifiedAt = '';
+          this.markPlatformWs('收到网关消息事件').catch(() => {});
+        }
         await this.handleMessage(t, d);
       } else if (t === 'GROUP_MEMBER_ADD') {
         this.state.waitUntil(this.handleGroupMemberAdd(d));

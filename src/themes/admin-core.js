@@ -194,6 +194,7 @@ var TRANSPORT_MODE='';// 配置页里显式保存的事件接收方式（webhook
 var CUR_APPID='';     // 配置页里当前的 QQ AppID，用来拼开放平台跳转链接
 var CUR_WEBHOOK_VERIFIED=false; // 平台是否校验过回调地址（决定自动模式实际走哪条）
 var CUR_LAST_EVENT_AT=0;       // 最近一次从 /event 收到真实推送的时间（平台已走 Webhook 的硬证据）
+var CUR_PLATFORM_MODE='';      // 平台当前推送方式（'ws' / 'webhook'），由 DO 判定后回传
 
 function stateOf(s){
   if(!s)return {text:'读取中',kind:''};
@@ -618,19 +619,18 @@ function qqDevSettingsUrl(appId){
 }
 
 /**
- * 事件接收方式：**只读展示**，跟随 QQ 开放平台的实际配置，不再让用户手选。
+ * 事件接收方式：跟随 QQ 开放平台，主路径自动同步，另给一个「重新检测」兜底。
  *
- * 为什么改成只读：平台侧才是真正的开关。平台配了 Webhook，消息就直接 POST 到
- * /qq/webhook，后台选什么都改变不了；反过来平台还是长连接时，后台选 Webhook 也收不到东西。
- * 之前允许手选，最坏的结果是「平台已 Webhook + 后台还开着长连接」：
- * 消息能收到，但 DO 24 小时白烧 GB-s。
+ * 为什么不能只靠自动：
+ *   - 平台切到 Webhook → 能自动发现（收到 /event 推送就是硬证据）
+ *   - 平台切回 WebSocket → **自动发现不了**：Webhook 模式下本对象根本不连网关，
+ *     收不到任何 WS 事件，没有任何信号可依。所以必须给一个手动触发的入口。
  *
- * 现在的规则：
- *   - 首次接入（平台还没配回调地址）→ WebSocket，直接能用
- *   - 平台一旦改成 Webhook（校验通过或收到过推送）→ 自动切过来，长连接自动断开
+ * 以前 webhookVerifiedAt 只写不清，导致切回 WebSocket 后判定永远翻不回来，这是 bug。
+ * 现在改成显式的双向 platformMode。
  */
 function transportCards(){
-  var isWebhook=!!(CUR_WEBHOOK_VERIFIED||CUR_LAST_EVENT_AT);
+  var isWebhook=(CUR_PLATFORM_MODE==='webhook')||(CUR_PLATFORM_MODE!=='ws'&&!!(CUR_WEBHOOK_VERIFIED||CUR_LAST_EVENT_AT));
   var appId=CUR_APPID||'';
   var webhookUrl=(location.origin||'')+'/qq/webhook';
   var devUrl=qqDevSettingsUrl(appId);
@@ -648,8 +648,8 @@ function transportCards(){
   h+='<div class="tp-banner '+(isWebhook?'ok':'info')+'">'
     +'<b>当前生效：'+(isWebhook?'Webhook':'WebSocket 网关长连接')+'</b>'
     +'<span>'+(isWebhook
-        ? '本面板与 QQ 开放平台已同步（'+(CUR_LAST_EVENT_AT?'最近收到推送':'回调地址已校验')+'）。想换回长连接，请先去 QQ 开放平台改回 WebSocket 推送，这里会自动跟随。'
-        : '首次接入默认走长连接，配好 AppID / Secret 就能用。想让空闲不计费，去 QQ 开放平台把事件推送改成 Webhook，这里会自动跟随。')
+        ? '本面板跟随 QQ 开放平台。'+(CUR_LAST_EVENT_AT?'最近收到过推送，说明平台确实在用 Webhook。':'回调地址已校验通过。')
+        : '本面板跟随 QQ 开放平台。想让空闲不计费，去平台把事件推送改成 Webhook，这里会自动跟随。')
     +'</span></div>';
 
   for(var i=0;i<modes.length;i++){
@@ -680,7 +680,9 @@ function transportCards(){
   if(appId){
     h+='<a class="btn primary" href="'+esc(devUrl)+'" target="_blank" rel="noopener noreferrer">'
       +IX.link+'<span>去 QQ 开放平台修改</span></a>';
-    h+='<span class="tp-note">在「开发设置 → 事件订阅」切换推送方式；改成 Webhook 时把上面的回调地址贴进去并保存，本页面会自动同步</span>';
+    h+='<button class="btn" id="b-detect" type="button">'+IX.refresh+'<span>重新检测</span></button>';
+    h+='<span class="tp-note">在「开发设置 → 事件订阅」切换推送方式。改成 Webhook 会自动同步；'
+      +'改回 WebSocket 后本页不会立刻知道（那样就收不到任何推送了），请点「重新检测」。</span>';
   }else{
     h+='<span class="tp-note warn">先在上面填好 <b>QQ AppID</b> 并保存，这里才会出现跳转按钮</span>';
   }
@@ -772,6 +774,7 @@ function renderConfig(d){
   CUR_APPID=cfg.appId||'';
   CUR_WEBHOOK_VERIFIED=!!cfg.webhookVerifiedAt;
   CUR_LAST_EVENT_AT=Number(cfg.lastEventAt)||0;
+  CUR_PLATFORM_MODE=cfg.platformMode||'';
   var h='';
   for(var s=0;s<FIELDS.length;s++){
     var sec=FIELDS[s];
@@ -823,7 +826,7 @@ function markDirty(){
   updateSectionStates();
 }
 
-/** 事件接收方式：只读展示，只绑定「复制回调地址」 */
+/** 事件接收方式：只读展示，只绑定「复制回调地址」与「重新检测」 */
 function bindTransportCards(){
   var copy=$('tp-copy');
   if(copy){
@@ -836,6 +839,20 @@ function bindTransportCards(){
       }else{
         toast('当前浏览器不支持一键复制','bad');
       }
+    });
+  }
+  var det=$('b-detect');
+  if(det){
+    det.addEventListener('click',function(){
+      busy(det,true);
+      api('POST','/api/detect-platform',{}).then(function(d){
+        if(!d)return;
+        var tip='当前：'+(d.transport==='webhook'?'Webhook':'WebSocket 长连接');
+        if(d.suggestion==='ws')tip+='　平台可能已切回 WebSocket，点「强制切回长连接」';
+        toast(tip,'ok');
+        return api('GET','/api/config').then(function(c){ if(c)renderConfig(c); });
+      }).catch(function(e){toast(e.message,'bad');})
+        .then(function(){busy(det,false);});
     });
   }
 }
