@@ -25,34 +25,36 @@ const MAX_OPS_PER_STEP = 4;
 
 export const AIDO_ENV_RULES = `
 
-【运行环境（必须遵守）】
-- 你运行在一个隔离的沙箱 Durable Object（AiDO）里：**位于 Cloudflare Durable Objects 的持久化存储中**，实例只属于当前这个用户；文件全部存在该 DO 的存储里（users/<你的编号>/），实例休眠或重启都不会丢。
-- 你唯一能操作的是这个沙箱里的虚拟文件系统：单文件最大约 1.9MB（受 Durable Object 单值 2MB 限制），总量最大 1GB。大文件请分块写入（WRITE 一次 + APPEND 多次），不要放弃。
-- 文件路径用相对路径（例如 article.md），不要用绝对路径或 .. 跳出沙箱；系统会自动把它归档到你的用户目录 users/<你的编号>/ 下。
-- 你**不能**发 QQ 消息、不能访问网络、不能调用其他 DO、不能执行任意代码或系统命令；这些操作会被直接拒绝。
-- 需要操作文件时，在回复最后单独输出：
-  [ENV]{"op":"file.write","path":"notes/todo.md","content":"..."}
-  [ENV]{"op":"file.read","path":"notes/todo.md"}
-  [ENV]{"op":"file.list"}
-  [ENV]{"op":"file.delete","path":"notes/todo.md"}
-  [ENV:WRITE path="article.md"]
-  ……这里直接写正文，可以多行，不需要 JSON 转义……
-  [/ENV]
-  [ENV:APPEND path="article.md"]
-  ……续写内容……
-  [/ENV]
-  [ENV]{"op":"file.send","path":"index.html"}
-- 写**长文本**（超过约 300 字）必须用上面的 [ENV:WRITE]…[/ENV] 块语法：正文原样写在里面，不要放进 JSON 字符串，否则换行和引号会把内容弄坏。
-- 内容很长时可以分多次（WRITE 一次 + APPEND 若干次），单文件上限 1.5MB。
-- 如果用户要的文件在沙箱里不存在，直接如实告诉他「没有这个文件」，**绝对不要新建一个只包含说明文字的文件来冒充**。
-- 只有用户明确要求创建/写入文件时，才使用 file.write / file.append。
-- [ENV]{"op":"file.send","path":"..."} 表示「把文件作为附件发给用户」（可以多个；超过 3 个时系统会自动打包成 zip 发一个）。
-- **只有用户明确要文件时才 file.send**（例如「发我 / 给我 / 发送 / 下载 / 附件 / 把 xx 发我」）；普通提问、聊天、修改文件、列目录都不要发文件。
-- 用户要文件时，直接把原文件用 file.send 发出去；不要为了「打包成 zip / 合并成一个文件」而拒绝发送——沙箱不支持 zip 和二进制，遇到这类要求就逐个 file.send 原文件，并说明「已逐个发送」。
-- 用户说「把目录里的 xx 文件给我」时：先 file.list，再对每个匹配的文件 file.send；超过 3 个系统会自动打包成 zip。
-- 用户说「发给我 / 生成后发我 / 给我文件」时，创建完文件必须用 file.send 发出去，不要只回「已保存」。
-- 每次最多 ${MAX_OPS_PER_STEP} 个操作；系统执行后会把结果回给你，然后你再继续，任务完成就只给最终答复、不要再输出操作。
-- [ENV] 行不会展示给用户，也不要放进代码块。`;
+【沙箱】
+隔离的 Durable Object，只有当前用户的虚拟文件（users/<编号>/）。单文件 ≤1.9MB，总量 ≤1GB，写不下就 WRITE 一次 + APPEND 续写。
+只能动文件：不能发消息、不能联网、不能调其他 DO、不能执行命令。路径用相对路径，不要 ..。
+
+操作（写在回复末尾，不会展示给用户）：
+[ENV]{"op":"file.write","path":"a.md","content":"..."}
+[ENV]{"op":"file.read","path":"a.md"}
+[ENV]{"op":"file.list"}
+[ENV]{"op":"file.delete","path":"a.md"}
+[ENV:WRITE path="a.md"]
+……正文原样写这里，多行不用转义……
+[/ENV]
+[ENV:APPEND path="a.md"]
+……续写……
+[/ENV]
+[ENV]{"op":"file.send","path":"a.md"}
+超过 300 字必须用 [ENV:WRITE] 块语法，别塞进 JSON 字符串。
+每次最多 ${MAX_OPS_PER_STEP} 个操作；系统回执行结果后你再继续，做完了只给最终答复。
+
+【发送文件】
+只有用户明确要文件（「发我/给我/发送/下载/附件/打包」）才 file.send；列目录、聊天、改文件都不发。
+要文件时创建完必须 file.send，别只回「已保存」。
+沙箱不支持 zip，遇到打包要求就逐个 file.send 原文件。
+用户要的文件不存在就直说「没有这个文件」，绝不要新建一个只有说明文字的空文件冒充。
+
+【排版】
+可以用 Markdown 表格，但每个格子都要填真实值。路径、大小、修改时间都照抄 file.list / 【当前沙箱】给你的原文，**不要写「暂不可知」「系统未返回」这类占位词**——系统已经把时间给你了。真没有就把那一列去掉。
+表格里不要嵌套反引号，直接写文件名。
+不要用 # 标题、不要用 ** 加粗（QQ 会原样显示星号）。`;
+
 
 function safePath(p) {
   const s = String(p || '').replace(/\\/g, '/').trim();
@@ -73,10 +75,31 @@ function resolveIn(sb, p) {
   return userBase(sb) + s;
 }
 
+/** 把毫秒时间戳格式化成「2026-10-27 22:07」，给 AI 和后台共用 */
+function fmtTime(ms) {
+  const n = Number(ms);
+  if (!n) return '';
+  const d = new Date(n);
+  const p = (x) => String(x).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+/**
+ * 把沙箱文件清单渲染成给 AI 看的纯文本。
+ *
+ * 刻意用「一行一个文件」而不是 Markdown 表格：表格在手机 QQ 里会被折行折成一团，
+ * 而且模型照抄表格时很容易把「修改时间」写成「暂不可知」这类占位符。
+ * 每行都带真实时间，模型就没有编造的余地。
+ */
 function renderFiles(sb) {
   const paths = Object.keys(sb.files);
   if (!paths.length) return '\n\n【当前沙箱】\n文件：（空）';
-  return '\n\n【当前沙箱】\n文件：\n' + paths.map((p) => `- ${p}（${Buffer.byteLength(sb.files[p], 'utf8')}B）`).join('\n');
+  const lines = paths.map((p) => {
+    const t = fmtTime((sb.fileMeta || {})[p]);
+    const b = Buffer.byteLength(sb.files[p], 'utf8');
+    return `- ${p} ｜ ${b}B${t ? ` ｜ 修改于 ${t}` : ''}`;
+  });
+  return '\n\n【当前沙箱】\n文件（共 ' + paths.length + ' 个）：\n' + lines.join('\n');
 }
 
 export function parseEnvOps(text) {
@@ -138,7 +161,17 @@ export function applyEnvOps(sb, ops) {
     try {
       if (op.op === 'file.list') {
         const paths = Object.keys(sb.files);
-        results.push(paths.length ? '文件列表：\n' + paths.map((p) => `- ${p}`).join('\n') : '文件列表：（空）');
+        if (!paths.length) {
+          results.push('文件列表：（空）');
+        } else {
+          // 每行带上大小与修改时间，模型直接照着转述即可，不需要自己编
+          const lines = paths.map((p) => {
+            const t = fmtTime((sb.fileMeta || {})[p]);
+            const b = Buffer.byteLength(sb.files[p], 'utf8');
+            return `- ${p} ｜ ${b}B${t ? ` ｜ 修改于 ${t}` : ''}`;
+          });
+          results.push(`文件列表（共 ${paths.length} 个）：\n` + lines.join('\n'));
+        }
       } else if (op.op === 'file.write') {
         const p = resolveIn(sb, op.path);
         if (!p) {
@@ -238,9 +271,17 @@ export class AiDO {
         /* ignore */
       }
     }
+    // 每个文件的最后修改时间：{ 路径: 毫秒时间戳 }。
+    // 不记这个的话 file.list / getState 只能给出路径和大小，AI 被问到「什么时候改的」
+    // 就只能编一张「系统未返回修改时间，暂不可知」的表格糊弄用户。
+    const fileMeta = meta.fileMeta && typeof meta.fileMeta === 'object' ? meta.fileMeta : {};
     return {
       files,
+      fileMeta,
       owner: typeof meta.owner === 'string' ? meta.owner : '',
+      // scope/kind 存下来，putFile 这类不带参数的写入也能同步 D1 索引
+      scope: typeof meta.scope === 'string' ? meta.scope : '',
+      kind: typeof meta.kind === 'string' ? meta.kind : '',
       runs: Number(meta.runs) || 0,
       updatedAt: Number(meta.updatedAt) || 0,
       log: Array.isArray(meta.log) ? meta.log : [],
@@ -252,16 +293,32 @@ export class AiDO {
     sb.updatedAt = Date.now();
     const prev = before || {};
     const puts = {};
+    // 逐个文件记下改动时间：新建的、内容变了的都刷成 now；删掉的清掉记录。
+    // 没变的保持原来的时间，避免「读一次目录所有文件时间都变成现在」。
+    const fileMeta = { ...(sb.fileMeta || {}) };
     for (const [p, v] of Object.entries(sb.files)) {
-      if (prev[p] !== v) puts[FILE_PREFIX + p] = v;
+      if (prev[p] !== v) {
+        puts[FILE_PREFIX + p] = v;
+        fileMeta[p] = sb.updatedAt;
+      } else if (!fileMeta[p]) {
+        // 老数据没有记录：用沙箱的 updatedAt 兜底，保证界面上永远有时间可显示
+        fileMeta[p] = sb.updatedAt;
+      }
     }
     const dels = Object.keys(prev).filter((p) => !(p in sb.files)).map((p) => FILE_PREFIX + p);
+    for (const k of Object.keys(fileMeta)) {
+      if (!(k in sb.files)) delete fileMeta[k];
+    }
+    sb.fileMeta = fileMeta;
     if (Object.keys(puts).length) await this.state.storage.put(puts);
     if (dels.length) await this.state.storage.delete(dels);
     await this.state.storage.put(META, {
       owner: sb.owner || '',
+      scope: sb.scope || '',
+      kind: sb.kind || '',
       runs: sb.runs,
       updatedAt: sb.updatedAt,
+      fileMeta,
       log: sb.log,
     });
   }
@@ -301,6 +358,8 @@ export class AiDO {
   async run({ task, systemPrompt, providers, scope, kind, owner }) {
     const sb = await this.load();
     if (owner) sb.owner = String(owner).slice(0, 32);
+    if (scope) sb.scope = String(scope).slice(0, 120);
+    if (kind) sb.kind = String(kind).slice(0, 16);
     const basePrompt = String(systemPrompt || '') + AIDO_ENV_RULES + renderFiles(sb);
     const messages = [
       { role: 'system', content: basePrompt },
@@ -397,6 +456,8 @@ export class AiDO {
       files: Object.keys(sb.files).map((p) => ({
         path: p,
         bytes: Buffer.byteLength(sb.files[p], 'utf8'),
+        // 每个文件真实的最后修改时间（毫秒），后台与 AI 都靠它
+        updatedAt: Number((sb.fileMeta || {})[p]) || sb.updatedAt || 0,
         // 后台预览：单文件最多 4KB
         content: sb.files[p].slice(0, 4000),
       })),
@@ -412,10 +473,12 @@ export class AiDO {
    * 模型看到几千字内容反而容易编（实测会创建一个只写「缺少具体保存内容」的空文件）。
    * 由代码按原始文件名直接落盘，既准确又省 token。
    *
-   * 仍然走同一套限制（单文件 1.5MB、总量 20MB、最多 200 个），
+   * 限制与 AI 写入完全一致：单文件 1.9MB、总量 1GB、最多 5000 个；
    * 路径自动归档到 users/<编号>/ 下，保持隐私隔离。
+   *
+   * scope / kind 用来同步 D1 索引（后台沙箱列表靠它统计文件数）。
    */
-  async putFile({ name, content, path, owner }) {
+  async putFile({ name, content, path, owner, scope, kind }) {
     const sb = await this.load();
     // 先设 owner：resolveIn 依赖 sb.owner 拼出 users/<编号>/ 前缀，
     // 不设的话文件会落到根目录，和 getState/readFile 的路径对不上。
@@ -437,7 +500,13 @@ export class AiDO {
     const before = { ...sb.files };
     sb.files = next;
     sb.runs = (sb.runs || 0) + 1;
+    if (scope) sb.scope = String(scope).slice(0, 120);
+    if (kind) sb.kind = String(kind).slice(0, 16);
     await this.save(sb, before);
+    // 关键：这里必须同步 D1 索引。
+    // 以前 putFile 不走 syncIndex，用户发来文件被自动存进沙箱后，
+    // 后台「沙箱」页的文件数还停在旧值（实际 2 个却显示 1 个）。
+    await this.syncIndex(sb.scope || '', sb.kind || '', sb, sb.lastTask || '');
     return { ok: true, path: target, bytes: Buffer.byteLength(text, 'utf8') };
   }
 

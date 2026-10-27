@@ -1529,7 +1529,15 @@ export class QQBotDO {
               const ares = await astub.fetch('https://aido/put', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name, content: r.full || fileText, owner: await maskId(userId || scopeId) }),
+                body: JSON.stringify({
+                  name,
+                  content: r.full || fileText,
+                  owner: await maskId(userId || scopeId),
+                  // 带上 scope/kind，AiDO 才能同步 D1 索引里的「文件 N 个」。
+                  // 不传的话后台沙箱页会一直显示旧的文件数（实际 2 个却显示 1 个）。
+                  scope: this.ownerKey({ isC2C, scopeId, userId }),
+                  kind: isC2C ? 'c2c' : 'group',
+                }),
               });
               const aout = await ares.json().catch(() => null);
               if (aout && aout.ok) {

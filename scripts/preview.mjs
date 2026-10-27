@@ -4,6 +4,8 @@ import { adminPage, homePage, loginPage, setupPage, recoverGatePage, keyRecovery
 import { randomHex } from '../src/db.js';
 
 const PORT = Number(process.argv[2]) || 8788;
+// 固定只监听本机回环：预览服务没有任何鉴权，绑到 0.0.0.0 等于把后台敞开给同网段。
+const HOST = '127.0.0.1';
 
 const SECURITY_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
@@ -161,6 +163,9 @@ function demoApi(pathname, search) {
   if (pathname === '/api/models') {
     return { models: ['gpt-4o-mini', 'gpt-4o', 'gpt-4.1', 'deepseek-chat', 'deepseek-reasoner', 'qwen-plus'] };
   }
+  if (pathname === '/api/sandboxes') {
+    return { items: demoSandboxes() };
+  }
   return { ok: true };
 }
 
@@ -175,10 +180,85 @@ function withFakeBotVolume() {
   };
 }
 
+/* ------------------------------ 沙箱演示数据 ------------------------------ */
+// 造几个用户、每人 1~4 个文件，带上真实的「修改时间」，
+// 用来验证后台沙箱页与 AI 的 file.list 是否都能给出时间（而不是「暂不可知」）。
+const MIN = 60 * 1000;
+const SANDBOX_FILES = {
+  'c2c:OPENID_USER_A': [
+    ['affection.json', '{\n  "score": 88,\n  "level": "亲密",\n  "updated": "2026-10-27"\n}', 3 * MIN],
+    ['旅行计划.md', '# 杭州三日游\n\n第一天：西湖 + 河坊街\n第二天：灵隐寺 + 龙井村\n第三天：西溪湿地\n', 42 * MIN],
+  ],
+  'group:OPENGROUPID_B:u:OPENID_USER_B': [
+    ['周报-第43周.md', '# 本周进展\n\n1. 完成 Webhook 迁移\n2. 修掉 DO 空转计费\n3. 分层记忆上线\n', 26 * 60 * MIN],
+    ['待办.txt', '整理 README\n补 12 个测试脚本\n写发版说明\n', 5 * 60 * MIN],
+    ['notes/api.md', '## 接口清单\n\n- POST /qq/webhook\n- GET /api/status\n', 9 * 60 * MIN],
+  ],
+  'c2c:OPENID_USER_C': [
+    ['affection.json', '{\n  "score": 12,\n  "level": "陌生"\n}', 2 * 24 * 60 * MIN],
+  ],
+};
+
+function demoSandboxes() {
+  return Object.entries(SANDBOX_FILES).map(([scope, files]) => {
+    const newest = Math.max(...files.map((f) => f[2]));
+    return {
+      scope,
+      scopeMasked: scope.replace(/^c2c:/, '').replace(/^group:[^:]+:u:/, ''),
+      kind: scope.startsWith('c2c:') ? 'c2c' : 'group',
+      runs: files.length + 3,
+      files: files.length,
+      lastTask: files[0][0].startsWith('affection')
+        ? '查看沙箱目录'
+        : '把周报整理成 md 保存好',
+      updatedAt: Date.now() - newest,
+    };
+  });
+}
+
+function demoSandboxDetail(scope) {
+  const files = SANDBOX_FILES[scope] || [];
+  return {
+    scopeMasked: scope.replace(/^c2c:/, '').replace(/^group:[^:]+:u:/, ''),
+    files: files.map(([name, content, ago]) => ({
+      path: 'users/' + (scope.includes('u:') ? scope.split('u:').pop() : scope.split(':').pop()) + '/' + name,
+      bytes: Buffer.byteLength(content, 'utf8'),
+      updatedAt: Date.now() - ago,
+      content,
+    })),
+    runs: files.length + 3,
+    updatedAt: Date.now() - Math.min(...files.map((f) => f[2])),
+  };
+}
+
 createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
 
   if (url.pathname.startsWith('/api/')) {
+    // 沙箱详情是 POST，要读 body 拿 scope
+    if (url.pathname === '/api/sandboxes/detail' && req.method === 'POST') {
+      let raw = '';
+      req.on('data', (c) => (raw += c));
+      req.on('end', () => {
+        let scope = '';
+        try {
+          scope = JSON.parse(raw || '{}').scope || '';
+        } catch {
+          /* ignore */
+        }
+        res.writeHead(200, { ...SECURITY_HEADERS, 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: true, data: demoSandboxDetail(scope) }));
+      });
+      return;
+    }
+    if (url.pathname === '/api/sandboxes/clear' && req.method === 'POST') {
+      req.resume();
+      req.on('end', () => {
+        res.writeHead(200, { ...SECURITY_HEADERS, 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: true, data: { cleared: true } }));
+      });
+      return;
+    }
     if (url.pathname === '/api/status') {
       const status = url.searchParams.get('empty') ? withFakeBotVolume() : DEMO_STATUS;
       res.writeHead(200, { ...SECURITY_HEADERS, 'Content-Type': 'application/json; charset=utf-8' });
@@ -206,8 +286,8 @@ createServer((req, res) => {
   const html = render(nonce, url.href);
   res.writeHead(200, htmlResponse(html, nonce));
   res.end(html);
-}).listen(PORT, '0.0.0.0', () => {
-  console.log(`预览服务已启动（局域网可访问）：`);
+}).listen(PORT, HOST, () => {
+  console.log(`预览服务已启动（仅本机）：`);
   console.log(`  首页       http://127.0.0.1:${PORT}/`);
   console.log(`  登录页     http://127.0.0.1:${PORT}/login`);
   console.log(`  后台页     http://127.0.0.1:${PORT}/admin   （本地预览，未校验登录）`);

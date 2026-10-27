@@ -1015,6 +1015,16 @@ function fullTime(iso){
   if(dayKey(d)===dayKey(now))return hm;
   return pad2s(d.getMonth()+1)+'-'+pad2s(d.getDate())+' '+hm;
 }
+/**
+ * 列表里用的绝对时间：始终带「月-日 时:分」。
+ * fullTime 对今天的时间只给「22:06:49」，混在「10-26 20:48:49」旁边会让人以为格式错乱；
+ * 沙箱/工作区这类列表要的是「这个文件到底什么时候改的」，统一给完整日期更清楚。
+ */
+function absTime(iso){
+  var d=new Date(iso);
+  if(isNaN(d.getTime()))return '';
+  return pad2s(d.getMonth()+1)+'-'+pad2s(d.getDate())+' '+pad2s(d.getHours())+':'+pad2s(d.getMinutes());
+}
 
 function chatShell(){
   return '<div class="chat-wrap" id="chat-wrap">'
@@ -1616,7 +1626,7 @@ function showSandbox(){
   $('wrap').innerHTML='<div class="card"><div class="card-head"><h3>沙箱（AiDO）</h3>'
     +'<span class="hint">AI 会在需要时自动使用私有沙箱写文件，这里看每个人的文件（按用户隔离）</span>'
     +'<button class="btn sm" id="b-sb-refresh" type="button">'+IX.refresh+'<span>刷新</span></button></div>'
-    +'<p class="muted">沙箱是独立 DO：AI 只能读写它自己的虚拟文件（最多 20 个 / 单文件 8KB），<b>不能发消息、不能联网、不能碰其他 DO</b>。</p>'
+    +'<p class="muted">沙箱是独立 DO：AI 只能读写它自己的虚拟文件（最多 5000 个 / 单文件 1.9MB / 单用户总量 1GB），<b>不能发消息、不能联网、不能碰其他 DO</b>。文件按用户隔离，存在 <code>users/&lt;编号&gt;/</code> 下。</p>'
     +'<div id="sb-list"><div class="sk-field"><span class="sk-bar sk-w60"></span></div></div></div>';
   var btn=$('b-sb-refresh');
   if(btn)btn.addEventListener('click',loadSandboxes);
@@ -1649,7 +1659,7 @@ function renderSandboxes(items){
       +'<div class="ws-tags"><span class="ws-tag">'+(it.kind==='c2c'?'单聊':'群聊')+'</span>'
       +'<span class="ws-tag">执行 '+esc(String(it.runs||0))+' 次</span>'
       +'<span class="ws-tag">文件 '+esc(String(it.files||0))+' 个</span>'
-      +'<span class="ws-tag">'+esc(it.updatedAt?fullTime(it.updatedAt):'')+'</span></div></div>'
+      +'<span class="ws-tag">'+esc(it.updatedAt?absTime(it.updatedAt):'')+'</span></div></div>'
       +'<div class="prov-tools"><button class="btn sm" type="button" data-sb="detail">查看</button>'
       +'<button class="btn sm" type="button" data-sb="clear">清空</button></div></div>';
   }
@@ -1678,7 +1688,10 @@ function onSandboxClick(e){
 }
 
 function openSandboxDetail(d){
-  var files=(d.files||[]).length?d.files.map(function(f){return '<li><details><summary>· '+esc(f.path)+'（'+esc(String(f.bytes))+'B）</summary><pre class="file-pre">'+esc(String(f.content||'（无内容）'))+'</pre></details></li>';}).join(''):'<li class="muted">（空）</li>';
+  var files=(d.files||[]).length?d.files.map(function(f){
+    var t=f.updatedAt?absTime(f.updatedAt):'';
+    return '<li><details><summary>· '+esc(f.path)+'（'+esc(String(f.bytes))+'B'+(t?' · '+esc(t):'')+'）</summary><pre class="file-pre">'+esc(String(f.content||'（无内容）'))+'</pre></details></li>';
+  }).join(''):'<li class="muted">（空）</li>';
   var m=document.getElementById('sb-modal-mask');
   if(!m){
     m=document.createElement('div');
@@ -1745,7 +1758,7 @@ function renderWorkspaces(items){
       +'<span class="ws-tag">执行 '+esc(String(it.runs||0))+' 次</span>'
       +'<span class="ws-tag">任务 '+esc(String(it.tasks||0))+'</span>'
       +'<span class="ws-tag">笔记 '+esc(String(it.notes||0))+'</span>'
-      +'<span class="ws-tag">'+esc(it.updatedAt?fullTime(it.updatedAt):'')+'</span></div></div>'
+      +'<span class="ws-tag">'+esc(it.updatedAt?absTime(it.updatedAt):'')+'</span></div></div>'
       +'<div class="prov-tools"><button class="btn sm" type="button" data-ws="detail">查看</button>'
       +'<button class="btn sm" type="button" data-ws="clear">清空</button></div></div>';
   }

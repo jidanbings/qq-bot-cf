@@ -111,14 +111,14 @@ const FEATURES = [
   {
     icon: CUBE_ICON,
     title: '多个 AI 轮着用',
-    desc: '后台「AI 对话」里可以加多套 Base URL / Key / 模型，按顺序排优先级，前一个超时或报错就自动切下一个。调用跑在独立的 AI DO 里，慢请求（带图最长 180 秒）不会卡住 QQ 网关。',
+    desc: '后台「AI 对话」里可以加多套 Base URL / Key / 模型，按顺序排优先级，前一个超时或报错就自动切下一个。调用跑在独立的 ChatDO 里，慢请求（带图最长 180 秒）不会卡住事件分发。',
     tags: ['多套配置', '自动切换', '/chat/completions'],
   },
   {
     icon: BELL_ICON,
     title: '定时提醒，到点主动找你',
-    desc: '直接说「10 分钟后提醒我喝水」「每天 8:00 提醒我背单词」，不用指令。提醒存在 D1，跨重启不丢；重复任务发完自动顺延，后台「定时任务」页可查看和取消。',
-    tags: ['自然语言', '每分钟巡检', '重复顺延', '后台可管理'],
+    desc: '直接说「10 分钟后提醒我喝水」「每天 8:00 提醒我背单词」，不用指令。提醒存在 D1，跨重启不丢；到点由 Durable Object 的 alarm 精确唤醒（精确到秒，不靠轮询），重复任务发完自动顺延，后台「定时任务」页可查看和取消。',
+    tags: ['自然语言', 'alarm 精确唤醒', '重复顺延', '后台可管理'],
   },
   {
     icon: TOOL_ICON,
@@ -140,20 +140,20 @@ const FEATURES = [
   },
   {
     icon: LIFE_ICON,
-    title: '掉线自己爬起来',
-    desc: '每分钟一次巡检：期望运行但连接断了就自动拉起。断线优先用 RESUME 续上原会话，不白白消耗每日的会话配额。',
+    title: '两种接法，按需选',
+    desc: 'Webhook 走 HTTP 回调，处理完就休眠、空闲不计费；WebSocket 走网关长连接，配好 AppID / Secret 即可用。后台会跟随 QQ 平台的设置自动切换，不用手动改。',
     steps: [
-      ['1', '断线', '指数退避重连，5 秒起翻倍、上限 30 秒'],
-      ['2', '巡检', 'cron 每分钟检查连接与配额状态'],
-      ['3', '恢复', 'RESUME 续会话，或按配额重置时间自动起'],
+      ['1', 'Webhook', 'QQ 直接 POST 到 /qq/webhook，Ed25519 验签，处理完即休眠'],
+      ['2', 'WebSocket', '出站连网关，断线走 RESUME 续会话、漏掉的事件由网关补发'],
+      ['3', '自动跟随', '收到推送即判定为 Webhook；改回长连接后一键同步'],
     ],
     wide: true,
   },
   {
     icon: DB_ICON,
-    title: '记得住，也忘得掉',
-    desc: '每个会话一个独立的 AI DO，上下文存在它自己的 SQLite 里，重启、换版本都不丢；历史太长时自动把旧消息压成摘要继续带着，不会把上下文越滚越贵。',
-    tags: ['DO SQLite', '重启不丢', '摘要压缩'],
+    title: '分层记忆，忘不掉也不烧钱',
+    desc: '三层结构：最近 N 条原文逐字保真、滚动摘要覆盖中期脉络、长期事实记住你是谁。每 20 条才压缩一次；原文全丢时仍能靠长期事实答出你的名字、城市、技术栈和做过的事。',
+    tags: ['短期原文', '滚动摘要 ≤1500 字', '长期事实 ≤40 条', '每 20 条压缩'],
   },
   {
     icon: SHIELD_ICON,
@@ -166,6 +166,18 @@ const FEATURES = [
     title: '看得懂你发的图',
     desc: '把图片发给机器人，它会先把图下载下来交给视觉模型理解，再回答你的问题；回复里的图、生图、梗图都走官方富媒体上传发送，不需要外部图床。',
     tags: ['image_url', '多模态', '富媒体上传'],
+  },
+  {
+    icon: CUBE_ICON,
+    title: '发来的文件，它真的会读',
+    desc: '把 .md / .py / .js / .json / .csv / .docx / .xlsx 直接发给它，内容会被读进上下文再回答——不是假装看过。二进制（.so / .zip / .pdf）会明确说读不了，不会瞎编。',
+    tags: ['文本类直接解码', 'docx/xlsx 抽文字', '二进制明确拒答'],
+  },
+  {
+    icon: DB_ICON,
+    title: '每人一个私有工作区',
+    desc: '说「写一篇 3000 字文章存成 article.md 发我」，它会在隔离的 AiDO 里干活：单文件 1.9MB、总量 1GB。你发来的文件会按原始文件名自动存进去，单聊与群聊各自隔离，别人看不到。',
+    tags: ['AiDO 沙箱', '保留原始文件名', '按人隔离', '自动打包 zip'],
   },
   {
     icon: BOLT_ICON,
@@ -238,7 +250,7 @@ function featureTile(f, index) {
 
 export function homePage(nonce, reqUrl) {
   const adminHost = adminAddress(reqUrl);
-  return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${FAVICON_LINKS}<title>QQ Bot · 跑在 Cloudflare Workers 上的 QQ AI 机器人</title><meta name="description" content="基于 Cloudflare Workers 与 Durable Objects 的 QQ 机器人：接入 QQ 开放平台，在群聊和单聊里用任意 OpenAI 兼容模型自然对话，会画图、发梗图、发语音、定提醒，自带加密配置与可视化管理后台。"><meta name="robots" content="index,follow"><style nonce="${nonce}">
+  return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${FAVICON_LINKS}<title>QQ Bot · 跑在 Cloudflare Workers 上的 QQ AI 机器人</title><meta name="description" content="零服务器、零运行时依赖的 QQ 机器人：跑在 Cloudflare Workers 与 Durable Objects 上，接入 QQ 开放平台，在群聊和单聊里用任意 OpenAI 兼容模型自然对话，会画图、发梗图、发语音、定提醒、读文件，自带加密配置与可视化管理后台。"><meta name="robots" content="index,follow"><style nonce="${nonce}">
 :root{${homeVars()}}
 ${HOME_CSS}
 </style></head><body class="home motion t-light">
@@ -249,8 +261,8 @@ ${HOME_CSS}
       <a href="#features">功能</a>
       <a href="#flow">工作原理</a>
       <a href="#deploy">部署</a>
-      <a class="btn btn-ghost btn-sm" href="/login">管理后台${ARROW_ICON}</a>
     </nav>
+    <a class="btn btn-ghost btn-sm nav-login" href="/login"><span class="nav-full">管理后台</span><span class="nav-short">后台</span>${ARROW_ICON}</a>
   </div>
 </header>
 
@@ -261,24 +273,24 @@ ${HOME_CSS}
     <div class="grid-bg"></div>
     <div class="wrap hero-in">
       <div>
-        <span class="pill reveal"><span class="live"></span>单实例常驻 · 自动保活<b>Serverless</b></span>
+        <span class="pill reveal"><span class="live"></span>Webhook / WebSocket 双模式<b>Serverless</b></span>
         <h1 class="reveal d1">把你的 QQ 号<br>变成<span class="grad">会思考的助手</span></h1>
-        <p class="lede reveal d2">接入 QQ 开放平台官方网关，在群聊与私聊中由 AI 自然作答：会画图、会发梗图、会发语音、会自己定提醒，还记得住你们之前聊过什么。整个机器人跑在 Cloudflare 边缘网络上：一个 Worker、一个 Durable Object、一张 D1 表，不需要服务器，也不需要运维。</p>
+        <p class="lede reveal d2">接入 QQ 开放平台，在群聊与私聊中由 AI 自然作答：会画图、会发梗图、会发语音、会自己定提醒，能读你发来的文件，还会<b>分层记得住</b>你们聊过的一切。支持 Webhook 与 WebSocket 两种事件接收方式，空闲时不产生费用。<b>零服务器</b>——没有 VPS、没有 Docker、没有常驻进程；<b>零运行时依赖</b>——<code>dependencies</code> 是空的，不用装 Node、Python、Redis 或任何数据库。整个机器人就是一个 Worker、五个 Durable Object、一张 D1 表。</p>
         <div class="cta reveal d3">
           <a class="btn btn-primary" href="/login">进入管理后台${ARROW_ICON}</a>
           <a class="btn btn-ghost" href="#features">看看它能做什么</a>
         </div>
         <div class="facts reveal d4">
-          <span class="fact"><i></i>Workers + Durable Objects</span>
-          <span class="fact"><i></i>D1 持久化</span>
           <span class="fact"><i></i>零服务器</span>
+          <span class="fact"><i></i>零运行时依赖</span>
+          <span class="fact"><i></i>D1 持久化</span>
         </div>
       </div>
 
       <div class="preview reveal d2">
         <figure class="float f1">
           <span class="ico">${LIFE_ICON}</span>
-          <span><b>网关连接正常</b><span>心跳每 45 秒一次</span></span>
+          <span><b>Webhook 已启用</b><span>空闲不计持续时间</span></span>
         </figure>
         <div class="window">
           <div class="win-bar">
@@ -290,7 +302,7 @@ ${HOME_CSS}
             <div class="win-chips">
               <span class="chip">模型<b>已选择</b></span>
               <span class="chip">密钥<b>已加密</b></span>
-              <span class="chip">上下文<b>20 条</b></span>
+              <span class="chip">记忆<b>三层</b></span>
               <span class="chip">梗图<b>35 张</b></span>
               <span class="chip">语音<b>内置 TTS</b></span>
             </div>
@@ -305,7 +317,7 @@ ${HOME_CSS}
               </div>
             </div>
             <div class="metrics">
-              <span class="metric"><b class="ok">正常</b><span>网关连接</span></span>
+              <span class="metric"><b class="ok">正常</b><span>事件接收</span></span>
               <span class="metric"><b>35 张</b><span>内置梗图</span></span>
               <span class="metric"><b>2000</b><span>聊天记录上限</span></span>
             </div>
@@ -324,7 +336,7 @@ ${HOME_CSS}
     <div class="wrap band-in">
       <div class="cell reveal"><b>0</b><span>需要维护的服务器</span></div>
       <div class="cell reveal d1"><b>全兼容</b><span>OpenAI Chat Completions</span></div>
-      <div class="cell reveal d2"><b>60s</b><span>掉线巡检间隔</span></div>
+      <div class="cell reveal d2"><b>3 层</b><span>记忆结构（原文/摘要/事实）</span></div>
       <div class="cell reveal d3"><b>35 张</b><span>内置梗图 / 表情</span></div>
     </div>
   </section>
@@ -353,26 +365,45 @@ ${HOME_CSS}
           <p class="lede">从平台推送到群里出现回复，中间发生的事比想象的要多。</p>
         </div>
         <div class="flow-list">
-          <div class="fitem"><span class="fnum">01</span><div><h4>鉴权与建连</h4><p>取 AppAccessToken，向网关换取 WebSocket 地址，HELLO 后 IDENTIFY 建立会话；已有会话则走 RESUME 续上，不重复消耗配额。</p></div></div>
-          <div class="fitem"><span class="fnum">02</span><div><h4>事件过滤</h4><p>按 <b>msg_id + msg_seq</b> 去重（平台会重复推送）、剥掉 @ 标记、命中群黑名单或敏感词直接丢弃。</p></div></div>
-          <div class="fitem"><span class="fnum">03</span><div><h4>排队与会话隔离</h4><p>同一会话串行、不同会话并行。上下文存在 Durable Object 的 SQLite 里，重启、换版本都不丢；历史太长会自动压成摘要继续带。</p></div></div>
-          <div class="fitem"><span class="fnum">04</span><div><h4>调用 AI</h4><p>把会话历史交给独立的 <b>AI DO</b>，由它请求兼容接口：90 秒超时（带图 180 秒），网络抖动、5xx 与 429 先重试一次，仍失败就换下一个 AI；图片只发给标记了「支持识图」的模型。</p></div></div>
+          <div class="fitem fork"><span class="fnum">01</span><div>
+            <h4>事件接入：两条路，选一条</h4>
+            <div class="paths">
+              <div class="path">
+                <span class="p-tag"><i class="pdot"></i>Webhook</span>
+                <p>QQ 直接 POST 到 <b>/qq/webhook</b>：先验 Ed25519 签名与时间戳，op=13 回显校验串，op=0 在 3 秒内回 ACK 再转给 DO 处理。处理完即休眠，空闲不计持续时间。</p>
+              </div>
+              <div class="path">
+                <span class="p-tag"><i class="pdot"></i>WebSocket</span>
+                <p>Worker 主动连 <b>wss 网关</b>：HELLO 拿心跳间隔，IDENTIFY 建会话；断线用 <b>RESUME</b> 带上 session_id 与 seq 续上，漏掉的事件由网关补发，不重复消耗配额。</p>
+              </div>
+            </div>
+            <p class="p-note">后台「事件接入」里可以显式切换。收到 Webhook 推送即自动判定为 Webhook 模式；改回长连接后点一下按钮同步即可。</p>
+          </div></div>
+          <div class="fitem"><span class="fnum">02</span><div><h4>事件过滤</h4><p>按 <b>msg_id + msg_seq</b> 去重（平台会重复推送）、剥掉 @ 标记、命中群黑名单或敏感词直接丢弃。两种接入方式共用这一层，判定逻辑完全一致。</p></div></div>
+          <div class="fitem"><span class="fnum">03</span><div><h4>排队与会话隔离</h4><p>同一会话串行、不同会话并行。记忆分三层存在 ChatDO 的 SQLite 里：最近 N 条原文、滚动摘要、长期事实；每 20 条才压缩一次，重启与换版本都不丢。</p></div></div>
+          <div class="fitem"><span class="fnum">04</span><div><h4>调用 AI</h4><p>把三层记忆交给独立的 <b>ChatDO</b>，由它请求兼容接口：90 秒超时（带图 180 秒），网络抖动、5xx 与 429 先重试一次，仍失败就换下一个 AI；图片只发给标记了「支持识图」的模型。用户发来的文件内容也在这里一并交给模型。</p></div></div>
           <div class="fitem"><span class="fnum">05</span><div><h4>工具调用与富媒体</h4><p>AI 要「做事」时输出 <b>[TOOL]</b>（画图 / 梗图 / 语音 / 提醒 / 查群），一次只调一个：生图与梗图先上传成 QQ 媒体，语音用 Workers AI 的 MeloTTS 合成再上传，图发完还会补一句话；提醒类工具直接落 D1。</p></div></div>
-          <div class="fitem"><span class="fnum">06</span><div><h4>被动回复</h4><p>带 msg_id 回复原消息，超长自动截断，群聊可选择是否 @ 对方；凭证过期会重新获取并补发一次。</p></div></div>
+          <div class="fitem"><span class="fnum">06</span><div><h4>回复与附件</h4><p>带 msg_id 回复原消息，超长自动截断；文件走富媒体上传作为附件发出，超过 3 个自动打包 zip。凭证过期会重新获取并补发一次。Webhook 模式下回复走 HTTP 接口，WebSocket 模式下走网关同一条连接。</p></div></div>
           <div class="fitem"><span class="fnum">07</span><div><h4>落库</h4><p>文本回复、图片、梗图、语音都会写一条记录（发图前先出图、再补一句话）；失败会给一条兜底文案，不会让群里的人等到沉默。</p></div></div>
         </div>
       </div>
 
       <aside class="diagram reveal d1">
-        <div class="node edge"><div class="n-k">入口</div><div class="n-v">QQ 开放平台</div><div class="n-d">api.bot.qq.com · wss gateway</div></div>
+        <div class="node edge"><div class="n-k">入口</div><div class="n-v">QQ 开放平台</div><div class="n-d">Webhook 回调 · wss 网关</div></div>
         <div class="arrow">${ARROW_DOWN}</div>
-        <div class="node core"><div class="n-k">边缘</div><div class="n-v">Worker 路由</div><div class="n-d">登录 · 会话 · 限流 · cron</div></div>
+        <div class="node core"><div class="n-k">边缘</div><div class="n-v">Worker 路由</div><div class="n-d">验签 · 登录 · 会话 · 限流</div></div>
         <div class="arrow">${ARROW_DOWN}</div>
-        <div class="node"><div class="n-k">常驻</div><div class="n-v">QQBotDO</div><div class="n-d">网关连接 · 消息队列 · AI 调用</div></div>
+        <div class="node"><div class="n-k">分发</div><div class="n-v">QQBotDO</div><div class="n-d">事件分发 · 消息队列 · 工具调度</div></div>
         <div class="arrow">${ARROW_DOWN}</div>
         <div class="split">
-          <div class="node"><div class="n-v">AI 接口</div><div class="n-d">/chat/completions</div></div>
-          <div class="node"><div class="n-v">D1</div><div class="n-d">配置 · 会话 · 日志</div></div>
+          <div class="node"><div class="n-v">ChatDO</div><div class="n-d">分层记忆 · 模型调用</div></div>
+          <div class="node"><div class="n-v">AiDO</div><div class="n-d">私有沙箱 · 文件</div></div>
+          <div class="node"><div class="n-v">WorkDO</div><div class="n-d">工具 · 任务清单</div></div>
+        </div>
+        <div class="arrow">${ARROW_DOWN}</div>
+        <div class="split">
+          <div class="node"><div class="n-v">D1</div><div class="n-d">配置 · 提醒 · 梗图</div></div>
+          <div class="node"><div class="n-v">Workers AI</div><div class="n-d">MeloTTS 语音</div></div>
           <div class="node"><div class="n-v">RateLimiter</div><div class="n-d">固定窗口计数</div></div>
         </div>
       </aside>
@@ -385,7 +416,7 @@ ${HOME_CSS}
       <div class="sec-head">
         <span class="eyebrow">部署</span>
         <h2 class="title">四步，跑起来</h2>
-        <p class="lede">先把自定义域名绑好（workers.dev 入口已禁用，后台只能走域名访问），再加两个 Secret，然后一条命令发布——D1 库与内置梗图都会在部署时自动就绪。</p>
+        <p class="lede">先把自定义域名绑好（workers.dev 入口已禁用，后台只能走域名访问），再加两个 Secret，然后一条命令发布——D1 库与内置梗图都会在部署时自动就绪。部署命令务必用 <b>npm run deploy</b>，否则会丢 D1 绑定。</p>
       </div>
       <div class="bento">
         <figure class="tile wide reveal">
@@ -417,7 +448,7 @@ ${HOME_CSS}
           <div class="t-ico">${SHIELD_ICON}</div>
           <figcaption>
             <h3>workers.dev 默认全关</h3>
-            <p>预览地址与 workers.dev 入口都在配置里关掉了，后台只能走自定义域名；机器人收发消息走的是出站 WebSocket，不需要任何公网入站入口。</p>
+            <p>预览地址与 workers.dev 入口都在配置里关掉了，后台只能走自定义域名。WebSocket 模式是出站连接，不需要任何公网入口；Webhook 模式则需要 QQ 能访问到你的域名。</p>
           </figcaption>
         </figure>
       </div>
@@ -444,7 +475,7 @@ ${HOME_CSS}
 <footer class="foot">
   <div class="wrap">
     <p class="copyright"><span>©</span> 2026 <span class="c-sep">|</span> QQ Bot</p>
-    <p class="foot-links"><a class="foot-link" href="https://github.com/jidanbings" target="_blank" rel="noopener noreferrer">${GITHUB_ICON}<span>开源项目</span></a></p>
+    <p class="foot-links"><a class="foot-link" href="https://github.com/jidanbings/qq-bot-cf" target="_blank" rel="noopener noreferrer">${GITHUB_ICON}<span>开源项目</span></a></p>
   </div>
 </footer>
 

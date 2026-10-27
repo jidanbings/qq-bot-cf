@@ -201,10 +201,12 @@ export const HOME_CSS = `
 .home .nav-links{display:flex;align-items:center;gap:4px;margin-left:auto}
 .home .nav-links a{
   padding:8px 14px;border-radius:999px;font-size:14px;color:var(--fg-2);
-  transition:color .18s ease,background .18s ease;
+  transition:color .18s ease,background .18s ease;white-space:nowrap;
 }
 .home .nav-links a:hover{color:var(--fg);background:var(--panel)}
-.home .nav .btn{margin-left:4px}
+.home .nav .btn{margin-left:4px;flex:0 0 auto}
+/* 窄屏把「管理后台」缩成「后台」，省下来的宽度留给三个章节入口 */
+.home .nav-short{display:none}
 
 /* ============================ Hero ============================ */
 .home .hero{position:relative;padding:86px 0 96px;overflow:hidden}
@@ -244,6 +246,13 @@ export const HOME_CSS = `
   -webkit-background-clip:text;background-clip:text;color:transparent;
 }
 .home .hero .lede{font-size:16.5px;max-width:520px}
+/* 正文里夹的行内代码：dependencies、npm run deploy 之类，要跟普通文字区分开 */
+.home .lede code,.home .tile p code{
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  font-size:.9em;padding:1px 6px;border-radius:5px;
+  background:var(--panel-2);border:1px solid var(--line);color:var(--fg);
+  white-space:nowrap;
+}
 .home .cta{display:flex;flex-wrap:wrap;gap:12px;margin-top:32px}
 .home .facts{display:flex;flex-wrap:wrap;gap:10px;margin-top:30px}
 .home .fact{
@@ -416,6 +425,29 @@ export const HOME_CSS = `
 }
 .home .fitem h4{font-size:14.5px;font-weight:600}
 .home .fitem p{font-size:13px;color:var(--fg-2);line-height:1.75;margin-top:6px}
+
+/* 01 事件接入：两条并列路径（Webhook / WebSocket） */
+.home .fitem.fork{padding-bottom:20px}
+.home .paths{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:11px}
+.home .path{
+  padding:13px 14px;border-radius:var(--r-sm);
+  border:1px solid var(--line-2);background:var(--panel);
+}
+.home .p-tag{
+  display:inline-flex;align-items:center;gap:7px;
+  font-size:12px;font-weight:650;color:var(--fg);letter-spacing:.01em;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+.home .pdot{
+  width:7px;height:7px;border-radius:50%;flex:0 0 auto;
+  background:var(--brand);box-shadow:0 0 0 3px rgba(var(--tint-a),.16);
+}
+.home .path:nth-child(2) .pdot{background:var(--brand-2);box-shadow:0 0 0 3px rgba(var(--tint-b),.16)}
+.home .path p{font-size:12.5px;line-height:1.7;margin-top:7px}
+.home .p-note{
+  font-size:12.5px;color:var(--fg-3);line-height:1.7;
+  margin-top:11px;padding-top:11px;border-top:1px dashed var(--line-2);
+}
 
 .home .diagram{
   position:sticky;top:92px;padding:26px;border-radius:var(--r);
@@ -641,7 +673,13 @@ export const HOME_CSS = `
   .home .diagram{position:static;top:auto}
 }
 @media (max-width:860px){
-  .home .nav-links a{display:none}
+  /* 移动端不再隐藏章节入口：收窄内边距与字号，让「功能/工作原理/部署」留在导航里 */
+  .home .nav-in{gap:14px;height:60px}
+  .home .nav-links{gap:0;margin-left:auto}
+  .home .nav-links a{padding:7px 9px;font-size:13px}
+  .home .nav .btn{margin-left:0;padding:7px 11px;font-size:12.5px}
+  .home .nav-full{display:none}
+  .home .nav-short{display:inline}
   .home .sec{padding:70px 0}
   .home .sec-head{margin-bottom:40px}
   .home h2.title{font-size:29px}
@@ -653,6 +691,16 @@ export const HOME_CSS = `
 }
 @media (max-width:640px){
   .home .wrap{padding:0 18px}
+  /* 手机上把导航收紧：品牌只留图标+短名，三个章节入口与后台按钮都留在第一行 */
+  .home .nav-in{gap:10px;height:58px}
+  .home .brand{gap:8px;font-size:14px}
+  .home .brand small{display:none}
+  .home .logo{width:29px;height:29px;border-radius:9px}
+  .home .logo svg{width:16px;height:16px}
+  .home .nav-links{gap:0}
+  .home .nav-links a{padding:6px 8px;font-size:12.5px}
+  .home .nav .btn{padding:6px 9px;font-size:12px}
+  .home .nav .btn svg{width:13px;height:13px}
   .home .hero{padding:56px 0 68px}
   .home .hero h1{font-size:35px}
   .home .sec-head{margin-bottom:34px}
@@ -661,6 +709,7 @@ export const HOME_CSS = `
   .home .final h2{font-size:26px}
   .home .cta .btn{width:100%}
   .home .split{grid-template-columns:1fr}
+  .home .paths{grid-template-columns:1fr}
   .home .win-url{display:none}
 
   .home .win-body{padding:14px}
