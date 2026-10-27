@@ -28,6 +28,7 @@ import {
   normalizeUrl,
   purgeExpiredSessions,
   randomHex,
+  readRawConfig,
   removeGroup,
   resetEncryptedConfig,
   saveAiProviders,
@@ -39,6 +40,7 @@ import {
 import { APP_VERSION, COOKIE_NAME, LOGIN_LIMIT, API_LIMIT } from './constants.js';
 import { hitRateLimit, resetRateLimit } from './utils/rate-limit.js';
 import { maskId } from './utils/crypto.js';
+import { isEncrypted, decryptText } from './utils/crypto.js';
 import { fetchModelList } from './utils/models.js';
 import {
   HttpError,
@@ -933,6 +935,59 @@ async function handle(request, env, ctx) {
   }
 
   const missingSecrets = ['ADMIN_TOKEN', 'CONFIG_ENC_KEY'].filter((k) => !env[k]);
+
+  // 密钥自检页：加密密钥换过 / 恢复流程进不去时，用来确认到底卡在哪一步。
+  // 必须放在所有鉴权之前 —— 它本身就是给「进不了后台」的场景用的。
+  // 只暴露布尔值和数量，不泄露任何密钥或明文。
+  if (path === '/diag' && request.method === 'GET') {
+    const out = { workerVersion: APP_VERSION, checks: {} };
+    try {
+      out.checks.dbBound = !!env.DB;
+      out.checks.encKeySet = !!env.CONFIG_ENC_KEY;
+      out.checks.adminTokenSet = !!env.ADMIN_TOKEN;
+      if (env.DB) {
+        let raw = null;
+        try {
+          raw = await readRawConfig(env);
+          out.checks.readConfigOk = true;
+        } catch (err) {
+          out.checks.readConfigOk = false;
+          out.checks.readConfigError = String(err && err.message ? err.message : err).slice(0, 200);
+        }
+        if (raw) {
+          const encrypted = [];
+          for (const [k, v] of Object.entries(raw)) if (isEncrypted(v)) encrypted.push(k);
+          out.checks.encryptedKeys = encrypted;
+          out.checks.encryptedCount = encrypted.length;
+          const opened = [];
+          const failed = [];
+          for (const k of encrypted) {
+            try {
+              await decryptText(env, raw[k], k);
+              opened.push(k);
+            } catch {
+              failed.push(k);
+            }
+          }
+          out.checks.decryptOk = opened;
+          out.checks.decryptFailed = failed;
+          out.checks.verdict = !failed.length
+            ? 'ok'
+            : (opened.length ? 'partial' : 'mismatch');
+          try {
+            const st = await ensureKey(env);
+            out.checks.ensureKeyAction = st.action;
+          } catch (err) {
+            out.checks.ensureKeyAction = 'threw';
+            out.checks.ensureKeyError = String(err && err.message ? err.message : err).slice(0, 200);
+          }
+        }
+      }
+    } catch (err) {
+      out.checks.unexpected = String(err && err.message ? err.message : err).slice(0, 200);
+    }
+    return jsonResult(out);
+  }
 
   if (missingSecrets.length) {
     if (path === '/api/' || path.startsWith('/api/')) {
