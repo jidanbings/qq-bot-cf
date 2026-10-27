@@ -1249,7 +1249,7 @@ export class QQBotDO {
    */
   async downloadAttachment(url, contentType, filenameHint) {
     const MAX_BYTES = 4 * 1024 * 1024; // 4MB 原始文件上限
-    const MAX_TEXT = 12000;            // 送给模型的文本上限（字符）
+    const MAX_TEXT = 200000;           // 仅作极端保护（模型上下文有限，真正的截断在喂模型那一步做）
     const ct = String(contentType || '').toLowerCase();
     const name = String(filenameHint || url.split('?')[0].split('/').pop() || '').slice(0, 80);
     const extMatch = name.match(/\.([a-z0-9]+)$/i);
@@ -1315,7 +1315,7 @@ export class QQBotDO {
         const b = await getBytes();
         const text = await this.extractOfficeText(b, ext);
         if (!text || !text.trim()) return { ok: false, reason: `${ext} 里没提取到文字` };
-        return { ok: true, text: clip(text), filename: name, bytes: b.length, kind: ext };
+        return { ok: true, text, full: text, filename: name, bytes: b.length, kind: ext };
       }
 
       // 3) 文本类：直接解码
@@ -1326,7 +1326,9 @@ export class QQBotDO {
           return { ok: false, reason: '内容看起来是二进制（不是纯文本）' };
         }
         const text = new TextDecoder('utf-8', { fatal: false }).decode(b);
-        return { ok: true, text: clip(text), filename: name, bytes: b.length, kind: 'text' };
+        // 注意：这里返回**完整全文**，不做截断。
+        // 截断只应发生在「喂给模型」时；存进沙箱必须逐字完整，否则用户要回原文件就是残缺的。
+        return { ok: true, text, full: text, filename: name, bytes: b.length, kind: 'text' };
       }
 
       // 4) 其它二进制：明确说读不了，别让模型瞎猜
@@ -1527,7 +1529,7 @@ export class QQBotDO {
               const ares = await astub.fetch('https://aido/put', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name, content: fileText, owner: await maskId(userId || scopeId) }),
+                body: JSON.stringify({ name, content: r.full || fileText, owner: await maskId(userId || scopeId) }),
               });
               const aout = await ares.json().catch(() => null);
               if (aout && aout.ok) {
@@ -1540,7 +1542,13 @@ export class QQBotDO {
           } catch (e) {
             this.logger.warn(`auto-save inbound file failed: ${e.message}`);
           }
-          content = `${content}\n\n【用户发来文件：${name}，共 ${r.bytes} 字节】\n\`\`\`\n${fileText}\n\`\`\`${savedNote}`.slice(0, 14000);
+          // 喂给模型的内容可以截断（上下文有限），但存沙箱的必须是完整全文。
+          // 截断时明确告知模型「只看到前 N 字」，避免它以为全文就这么短。
+          // 尽量让模型看到全文；只有特别大（>6 万字）才截断，并明确告知全文已存好
+          const shown = fileText.length > 60000
+            ? fileText.slice(0, 60000) + `\n…（内容较长，这里展示前 6 万字，全文 ${fileText.length} 字已完整存入工作区）`
+            : fileText;
+          content = `${content}\n\n【用户发来文件：${name}，共 ${r.bytes} 字节】\n\`\`\`\n${shown}\n\`\`\`${savedNote}`.slice(0, 80000);
           this.logger.info(`Inbound file attached: ${name} (${r.bytes}B, kind=${r.kind})`);
         } else if (r.isImage && !imageUrl) {
           // 附件其实是图片但没被上面识别到：补上，让它走识图

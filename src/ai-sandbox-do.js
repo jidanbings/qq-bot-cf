@@ -13,9 +13,13 @@ import { withRetry } from './utils/retry.js';
 const META = 'meta';
 const FILE_PREFIX = 'file:';
 const LEGACY_KEY = 'sandbox';
-const MAX_FILES = 200;
-const MAX_FILE_BYTES = 1.5 * 1024 * 1024;
-const MAX_TOTAL_BYTES = 20 * 1024 * 1024;
+// 按 Cloudflare SQLite 型 DO 的真实上限设定，不再人为压小：
+//   - 单个 key+value 合计上限 2MB → 单文件取 1.9MB，留一点给 key 与元数据
+//   - 每个 DO 存储上限 10GB → 总量取 1GB（远低于上限，避免单实例被塞满影响其它会话）
+//   - 文件数不设死，按总量兜底
+const MAX_FILES = 5000;
+const MAX_FILE_BYTES = 1.9 * 1024 * 1024;
+const MAX_TOTAL_BYTES = 1024 * 1024 * 1024;
 const MAX_STEPS = 8;
 const MAX_OPS_PER_STEP = 4;
 
@@ -23,7 +27,7 @@ export const AIDO_ENV_RULES = `
 
 【运行环境（必须遵守）】
 - 你运行在一个隔离的沙箱 Durable Object（AiDO）里：**位于 Cloudflare Durable Objects 的持久化存储中**，实例只属于当前这个用户；文件全部存在该 DO 的存储里（users/<你的编号>/），实例休眠或重启都不会丢。
-- 你唯一能操作的是这个沙箱里的虚拟文件系统：最多 ${MAX_FILES} 个文件，单文件不超过 ${Math.round(MAX_FILE_BYTES / 1024)}KB，总量不超过 ${Math.round(MAX_TOTAL_BYTES / 1024 / 1024)}MB。
+- 你唯一能操作的是这个沙箱里的虚拟文件系统：单文件最大约 1.9MB（受 Durable Object 单值 2MB 限制），总量最大 1GB。大文件请分块写入（WRITE 一次 + APPEND 多次），不要放弃。
 - 文件路径用相对路径（例如 article.md），不要用绝对路径或 .. 跳出沙箱；系统会自动把它归档到你的用户目录 users/<你的编号>/ 下。
 - 你**不能**发 QQ 消息、不能访问网络、不能调用其他 DO、不能执行任意代码或系统命令；这些操作会被直接拒绝。
 - 需要操作文件时，在回复最后单独输出：
