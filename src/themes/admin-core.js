@@ -712,7 +712,10 @@ var FIELDS=[
 function allKeys(){
   var keys=[];
   for(var s=0;s<FIELDS.length;s++){
-    for(var i=0;i<FIELDS[s].items.length;i++)keys.push(FIELDS[s].items[i].key);
+    // 自定义区块（事件接收方式）没有 items，值单独从隐藏字段读，这里跳过
+    if(FIELDS[s].custom)continue;
+    var items=FIELDS[s].items||[];
+    for(var i=0;i<items.length;i++)keys.push(items[i].key);
   }
   return keys;
 }
