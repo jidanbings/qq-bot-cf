@@ -300,7 +300,8 @@ export class AiDO {
     const basePrompt = String(systemPrompt || '') + AIDO_ENV_RULES + renderFiles(sb);
     const messages = [
       { role: 'system', content: basePrompt },
-      { role: 'user', content: String(task || '').slice(0, 2000) },
+      // 上限放到 16000：用户发来的文件全文会拼进 task，2000 装不下（实测 3182 字的文章被截断，AI 只能瞎编）
+      { role: 'user', content: String(task || '').slice(0, 16000) },
     ];
 
     let reply = '';
@@ -400,6 +401,42 @@ export class AiDO {
     };
   }
 
+  /**
+   * 直接写入一个文件（不经 AI）。
+   *
+   * 用途：用户发来文件时说「存进我的目录」，这件事根本不需要模型参与 ——
+   * 模型看到几千字内容反而容易编（实测会创建一个只写「缺少具体保存内容」的空文件）。
+   * 由代码按原始文件名直接落盘，既准确又省 token。
+   *
+   * 仍然走同一套限制（单文件 1.5MB、总量 20MB、最多 200 个），
+   * 路径自动归档到 users/<编号>/ 下，保持隐私隔离。
+   */
+  async putFile({ name, content, path, owner }) {
+    const sb = await this.load();
+    // 先设 owner：resolveIn 依赖 sb.owner 拼出 users/<编号>/ 前缀，
+    // 不设的话文件会落到根目录，和 getState/readFile 的路径对不上。
+    if (owner) sb.owner = String(owner).slice(0, 32);
+    const rawName = String(name || '').trim() || 'upload.txt';
+    // 只取 basename，防止传进来的名字带路径跳出用户目录
+    const base = rawName.replace(/\\/g, '/').split('/').pop().slice(0, 80) || 'upload.txt';
+    const target = resolveIn(sb, String(path || base));
+    if (!target) return { error: '非法文件名' };
+    const text = String(content == null ? '' : content);
+    if (Buffer.byteLength(text, 'utf8') > MAX_FILE_BYTES) {
+      return { error: `文件超过 ${Math.round(MAX_FILE_BYTES / 1024)}KB` };
+    }
+    if (!(target in sb.files) && Object.keys(sb.files).length >= MAX_FILES) {
+      return { error: `文件数已达上限 ${MAX_FILES}` };
+    }
+    const next = { ...sb.files, [target]: text };
+    if (totalBytes(next) > MAX_TOTAL_BYTES) return { error: '沙箱总量已满' };
+    const before = { ...sb.files };
+    sb.files = next;
+    sb.runs = (sb.runs || 0) + 1;
+    await this.save(sb, before);
+    return { ok: true, path: target, bytes: Buffer.byteLength(text, 'utf8') };
+  }
+
   async readFile(path) {
     const meta = (await this.state.storage.get(META)) || {};
     const resolved = resolveIn({ owner: meta.owner || '' }, path);
@@ -437,6 +474,7 @@ export class AiDO {
       if (url.pathname === '/run') return Response.json(await this.run(body));
       if (url.pathname === '/state') return Response.json(await this.getState());
       if (url.pathname === '/file') return Response.json(await this.readFile(body.path));
+      if (url.pathname === '/put') return Response.json(await this.putFile(body));
       if (url.pathname === '/reset') return Response.json(await this.reset());
       return new Response('not found', { status: 404 });
     } catch (e) {

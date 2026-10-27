@@ -1497,10 +1497,14 @@ export class QQBotDO {
     }
     if (!content && !imageUrl && !fileAttachment) return;
     if (!content) content = imageUrl ? '请描述这张图片' : '（我发了一个文件）';
+    // 用户原话（不含后面拼进来的文件全文）。
+    // 定时提醒只能在这句上匹配 —— 否则文章里出现「X 点提醒」就会误建提醒。
+    const userText = content;
 
     // 文件附件：把内容读进来交给 AI，让它能真正「看到」文件
     // 以前只处理图片，用户发 .txt / .md / .py 时 AI 根本收不到内容，只能瞎编
     let fileText = '';
+    let fileName = '';
     if (fileAttachment) {
       try {
         const r = await this.downloadAttachment(
@@ -1511,7 +1515,32 @@ export class QQBotDO {
         if (r.ok) {
           fileText = r.text;
           const name = fileAttachment.filename || r.filename || '附件';
-          content = `${content}\n\n【用户发来文件：${name}，共 ${r.bytes} 字节】\n\`\`\`\n${fileText}\n\`\`\``.slice(0, 14000);
+          fileName = name;
+          // 先把文件按原始文件名直接存进 AiDO 沙箱（不经 AI）。
+          // 这件事让模型做很容易出错（实测它会建一个只写「缺少具体保存内容」的空文件），
+          // 而「保存用户给的原始内容」本来就不需要模型参与。
+          let savedNote = '';
+          try {
+            const aidNs = this.env && this.env.AIDO;
+            if (aidNs && typeof aidNs.idFromName === 'function') {
+              const astub = aidNs.get(aidNs.idFromName(this.ownerKey({ isC2C, scopeId, userId })));
+              const ares = await astub.fetch('https://aido/put', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, content: fileText, owner: await maskId(userId || scopeId) }),
+              });
+              const aout = await ares.json().catch(() => null);
+              if (aout && aout.ok) {
+                savedNote = `\n\n【系统已自动把这个文件按原名存进用户工作区：${aout.path}（${aout.bytes} 字节）】`;
+                this.logger.info(`Inbound file auto-saved: ${aout.path} (${aout.bytes}B)`);
+              } else if (aout && aout.error) {
+                savedNote = `\n\n【系统尝试自动保存失败：${aout.error}】`;
+              }
+            }
+          } catch (e) {
+            this.logger.warn(`auto-save inbound file failed: ${e.message}`);
+          }
+          content = `${content}\n\n【用户发来文件：${name}，共 ${r.bytes} 字节】\n\`\`\`\n${fileText}\n\`\`\`${savedNote}`.slice(0, 14000);
           this.logger.info(`Inbound file attached: ${name} (${r.bytes}B, kind=${r.kind})`);
         } else if (r.isImage && !imageUrl) {
           // 附件其实是图片但没被上面识别到：补上，让它走识图
@@ -1530,7 +1559,7 @@ export class QQBotDO {
 
     const key = isC2C ? `c2c:${userId}` : `group:${scopeId}`;
     if (!isC2C) this.touchGroup(scopeId);
-    const job = { isC2C, userId, scopeId, content, imageUrl, msgId: data.id };
+    const job = { isC2C, userId, scopeId, content, imageUrl, msgId: data.id, userText, fileName, fileText };
 
     this.pendingMessages++;
     const prev = this.messageQueues.get(key) || Promise.resolve();
@@ -1549,7 +1578,7 @@ export class QQBotDO {
   }
 
   async processMessage(key, job) {
-    const { isC2C, userId, scopeId, content, imageUrl, msgId } = job;
+    const { isC2C, userId, scopeId, content, imageUrl, msgId, userText, fileName, fileText } = job;
 
     // Webhook 模式下可能是全新实例：先把这条消息的 msg_seq 计数从存储里捞回来，
     // 否则第一次回复又会从 1 开始被 QQ 判为重复
@@ -1742,7 +1771,9 @@ export class QQBotDO {
     }
 
     // 定时提醒：识别「X 点提醒我…」直接落库，不绕 AI（AI 未配置也能用）
-    const reminderIntent = parseReminder(content);
+    // 只在「用户原话」上解析提醒：content 里可能拼了几千字的文件内容，
+    // 文章中出现「提醒」字样会误建提醒（实际踩过：发一篇文章就自动建了个 01:00 的提醒）
+    const reminderIntent = parseReminder(userText || content);
     if (reminderIntent) {
       await addReminder(this.env, {
         scopeKey: key,
@@ -2081,6 +2112,10 @@ export class QQBotDO {
       '\n\n【你的工作区】你有一个私有工作区，运行在 Cloudflare Durable Objects 的持久化存储里（AiDO 实例），每个用户一个独立空间，文件路径形如 users/<用户编号>/。' +
       '你可以在里面创建、修改、删除文件（单文件 ≤1.5MB、每人总量 ≤20MB、最多 200 个文件），也可以把它当作多步任务的草稿本。' +
       '需要写长文、生成文件、整理多步任务时用 sandbox 工具；生成的文件会自动作为附件发给用户。' +
+      '\n【关于用户发来的文件】消息里出现「【用户发来文件：xxx】」时，**那段代码块里的文字就是文件真实内容**，已经读到了。' +
+      '用户说「存进我的目录」「保存这个」「收下」时，必须把**这段真实内容原样写进工作区**（用 sandbox 工具，任务里明确给出文件名和内容），' +
+      '**严禁**创建空文件、占位文件、或只写一句「缺少具体保存内容」的说明文件 —— 那是严重错误。' +
+      '如果内容确实没读到（提示「无法读取」），才如实告诉用户读不了，并说明原因。' +
       '如果用户问你在哪、沙箱是什么，就按这段如实回答：你在 Cloudflare 的 Durable Object 存储里活动，数据持久化、实例休眠也不会丢。用户要已有的文件时，用 file 工具直接发；不知道路径就让 sandbox 工具列一下并逐个发。不要因为「不能打包成 zip」就拒绝发送文件。'
 
     return (
@@ -2109,7 +2144,7 @@ export class QQBotDO {
       return `（系统记录：已把文件 ${p || '附件'} 发给用户）`;
     }
     if (name === 'sandbox') {
-      const task = String(args.task || '').slice(0, 60);
+      const task = String(args.task || '').slice(0, 200);
       return `（系统记录：已在工作区执行任务「${task}」）`;
     }
     const brief = args.text || args.prompt || args.name || args.when || '';
