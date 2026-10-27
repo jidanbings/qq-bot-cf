@@ -636,8 +636,8 @@ function transportCards(){
      cons:['需要在 QQ 开放平台填回调地址，且域名要能被 QQ 访问到','回调地址配错或域名不通，消息会进不来'],
      need:'idle'},
     {key:'ws',name:'WebSocket 网关长连接',tag:'24 小时常驻',
-     pros:['不需要公网回调地址，配好 AppID / Secret 就能用','平台侧不支持 Webhook 时可退回去'],
-     cons:['Durable Object 会 24 小时在线，约 10,800 GB-s/天，容易吃满免费额度','占用网关会话配额，断线要重连、心跳超时要恢复'],
+     pros:['不需要公网回调地址，配好 AppID / Secret 就能用','平台侧不支持 Webhook 时可退回去','掉线、心跳超时、配额到点都会自动恢复（每 60 秒自检一次）'],
+     cons:['Durable Object 会 24 小时在线，约 10,800 GB-s/天，容易吃满免费额度','占用网关会话配额，频繁重连可能耗尽当日额度','域名不用公网可达，但也因此无法享受 Webhook 的低成本'],
      need:'always'}
   ];
 

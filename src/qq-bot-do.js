@@ -201,6 +201,8 @@ export class QQBotDO {
     this.desiredRunning = !!on;
     await this.state.storage.put('desired_running', !!on);
     if (!this.isWsTransport()) this.running = this.desiredRunning;
+    // 开关变化要重排 alarm：开启时挂上自检，关闭时退化成只管提醒
+    await this.scheduleNextAlarm().catch(() => {});
   }
 
   apiBase() {
@@ -377,6 +379,8 @@ export class QQBotDO {
         if (!this.desiredRunning) return Response.json({ ok: true, action: 'idle' });
         // Webhook 模式没有连接要守：接收开关开着就算活着，不要拉起网关
         if (!this.isWsTransport()) return Response.json({ ok: true, action: 'alive', transport: 'webhook' });
+        // WS 模式：cron 只做兜底，正常靠 DO 自己的 alarm 每 60 秒自检
+        await this.scheduleNextAlarm().catch(() => {});
         if (this.fatalStop) return Response.json({ ok: true, action: 'halted', error: this.fatalStop });
         if (Date.now() < this.quotaWaitUntil) {
           return Response.json({ ok: true, action: 'quota-wait', until: new Date(this.quotaWaitUntil).toISOString() });
@@ -616,9 +620,13 @@ export class QQBotDO {
           this.logger.error(this.lastError);
           this.running = false;
           await this.state.storage.put('desired_running', true);
+          // 配额耗尽不是永久停机：排上自检，到点自动重试（不再依赖 cron）
+          await this.scheduleNextAlarm().catch(() => {});
           return;
         }
       }
+      // WS 模式启动后立刻挂上自检，这样即使 cron 很久才跑一次也不会失联
+      await this.scheduleNextAlarm().catch(() => {});
       this.state.waitUntil(this.connectWS(gwData.url, generation));
     } catch (e) {
       if (generation !== this.generation) return;
@@ -673,6 +681,8 @@ export class QQBotDO {
       this.reconnectTimer = null;
       this.state.waitUntil(this.connectWS(wsUrl, nextGeneration));
     }, delay);
+    // 同时排 alarm 兜底：万一这条 setTimeout 随对象驱逐一起没了，自检还能把连接拉起来
+    this.scheduleNextAlarm().catch(() => {});
   }
 
   async connectWS(wsUrl, generation) {
@@ -707,6 +717,9 @@ export class QQBotDO {
       this.connecting = false;
       this.seq = null;
       this.logger.info('WebSocket connected');
+      // 连接建立后重排自检：此刻连接在、对象会被长连接钉在内存里，
+      // 但一旦连接断开而对象又被驱逐，setTimeout 就没了，只能靠 alarm 兜住
+      this.scheduleNextAlarm().catch(() => {});
       const isCurrent = () => this.running && generation === this.generation && this.ws === ws;
 
       ws.addEventListener('message', (event) => {
@@ -2751,20 +2764,43 @@ export class QQBotDO {
   /* ------------------------------ 定时提醒（AI 自主任务） ------------------------------ */
 
   /**
-   * 把下一次唤醒排到「最近一条待发提醒」的时刻。
+   * WebSocket 模式的连接自愈周期。
+   * 长连接模式下「断线要重连、配额到点要恢复」，本来靠每分钟 cron 兜底；
+   * cron 降频到 6 小时后必须由 DO 自己看护，否则一次断线可能几小时没人管。
+   */
+  static get WS_WATCHDOG_MS() {
+    return 60 * 1000;
+  }
+
+  /**
+   * 把下一次唤醒排到「最近一条待发提醒」的时刻，或 WS 模式下的下次自检。
    *
    * 为什么不用 cron 每分钟轮询：那是每天固定 1,440 次调用，而绝大多数时刻根本没有
-   * 待发提醒。改成 alarm 之后，只在实际有提醒时才唤醒，且能精确到秒。
-   * 一个 DO 同时只能挂一个 alarm，所以每次都重新算最近的、直接覆盖。
+   * 待发提醒。改成 alarm 之后，只在实际有活要干时才唤醒，且能精确到秒。
+   * 一个 DO 同时只能挂一个 alarm，所以每次都算「最该先做的那件事」，然后覆盖。
    */
   async scheduleNextAlarm() {
     try {
+      const now = Date.now();
+      let when = null;
+
+      // 1) WS 模式：定期自检连接（断线重连 / 配额到点恢复 / 心跳死了也能发现）
+      if (this.isWsTransport() && this.desiredRunning) {
+        when = now + QQBotDO.WS_WATCHDOG_MS;
+      }
+
+      // 2) 到点的提醒：只有更早才覆盖
       const nextDue = await nextReminderDue(this.env);
-      if (!nextDue) return null;
-      const at = new Date(nextDue).getTime();
-      if (!Number.isFinite(at)) return null;
-      // 过去的时刻（例如刚重启、或有积压）立刻唤醒
-      const when = Math.max(at, Date.now() + 500);
+      if (nextDue) {
+        const at = new Date(nextDue).getTime();
+        if (Number.isFinite(at)) {
+          // 过去的时刻（例如刚重启、或有积压）立刻唤醒
+          const dueAt = Math.max(at, now + 500);
+          if (when === null || dueAt < when) when = dueAt;
+        }
+      }
+
+      if (when === null) return null;
       await this.state.storage.setAlarm(when);
       return when;
     } catch (e) {
@@ -2773,11 +2809,29 @@ export class QQBotDO {
     }
   }
 
-  /** alarm 回调：发到点的提醒，然后把下一次排上 */
+  /**
+   * WS 模式自检：等价于原来看门狗在 cron 里做的事，但由 DO 自己按时唤醒。
+   * 只在长连接模式下生效；Webhook 模式没有连接要守，什么都不做。
+   */
+  async wsWatchdog() {
+    if (!this.isWsTransport() || !this.desiredRunning) return;
+    if (this.fatalStop) return;
+    // 配额等待期内不重连，到点后下一轮自然拉起
+    if (this.quotaWaitUntil && Date.now() < this.quotaWaitUntil) return;
+    if (this.isAlive()) return;
+    // 刚启动还在连，给握手留时间
+    if (Date.now() - this.lastStartAt < 90000) return;
+    this.logger.info('Watchdog: 连接已断，自动重连');
+    this.teardown();
+    await this.startBot();
+  }
+
+  /** alarm 回调：发到点的提醒 + WS 自检，然后把下一次排上 */
   async alarm() {
     try {
       await this.loadConfig().catch(() => {});
       await this.fireDueReminders().catch((e) => this.logger.warn(`alarm reminders: ${e.message}`));
+      await this.wsWatchdog().catch((e) => this.logger.warn(`alarm watchdog: ${e.message}`));
     } finally {
       // 无论成功失败都要重排，否则一次失败就再也不唤醒了
       await this.scheduleNextAlarm().catch(() => {});
