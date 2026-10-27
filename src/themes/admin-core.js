@@ -426,23 +426,39 @@ function paintStatus(s){
     var sameVer=!!(wv&&dv&&wv===dv);
     var verTxt=(s.sandbox?'沙箱环境':'正式环境')+' · Worker '+(wv?'v'+wv:'未上报')+' / DO '+(dv?'v'+dv:'未上报');
     if(!sameVer&&wv&&dv)verTxt+='（点「立即切换版本」可马上生效）';
-    var rows=[
-      ['运行环境与版本',verTxt,sameVer?'ok':'warn'],
-      ['事件接收方式',isWs?'WebSocket 网关长连接（DO 常驻计费）':'Webhook（请求驱动，空闲不计持续时间）',isWs?'warn':'ok'],
-      ['回调地址验证',(function(){
+
+    // 会话/配额/关闭码这些是长连接特有的；Webhook 模式没有连接，
+    // 回调验证与最近事件则是 Webhook 特有的 —— 各显示各的，互不干扰
+    var rows=[['运行环境与版本',verTxt,sameVer?'ok':'warn'],
+      ['事件接收方式',isWs?'WebSocket 网关长连接（DO 常驻计费）':'Webhook（请求驱动，空闲不计持续时间）',isWs?'warn':'ok']];
+
+    if(isWs){
+      rows.push(['会话 ID',s.sessionId||'尚未建立（还没成功登录过）','']);
+    }else{
+      rows.push(['回调地址验证',(function(){
         if(!s.webhookVerifiedAt)return '尚未验证（去 QQ 开放平台填 '+location.origin+'/qq/webhook）';
         return '已通过 · '+fmtClock(s.webhookVerifiedAt);
-      })(),s.webhookVerifiedAt?'ok':(isWs?'':'warn')],
-      ['最近收到事件',s.lastEventAt?(fmtClock(s.lastEventAt)+'（'+fmtDur(now-s.lastEventAt)+'前）'):'还没有收到过',s.lastEventAt?'ok':'warn'],
-      ['API 域名',s.apiBase||'—',''],
-      ['会话 ID',s.sessionId||(isWs?'尚未建立（还没成功登录过）':'不适用（Webhook 模式无会话）'),''],
-      ['活跃模型',s.aiModel||'未选择',s.aiModel?'ok':'bad'],
-      ['并发上限',lim&&lim.max_concurrency?('每 5 秒 '+lim.max_concurrency+' 个会话'):'—',''],
-      ['配额等待至',waiting?(fmtClock(s.quotaWaitUntil)+'（还有 '+fmtDur(s.quotaWaitUntil-now)+'）'):'无',waiting?'warn':''],
-      ['连续鉴权失败',(s.identifyFailures||0)+' 次',(s.identifyFailures||0)>=5?'bad':''],
-      ['最后关闭码',s.lastClose?('code='+s.lastClose.code+(s.lastClose.meaning?'　'+s.lastClose.meaning:'')+(s.lastClose.reason?'　'+s.lastClose.reason:'')+(s.lastClose.at?'　('+fmtClock(s.lastClose.at)+')':'')):'无',s.lastClose?'bad':''],
-      ['停机原因',s.fatalStop||'无',s.fatalStop?'bad':'']
-    ];
+      })(),s.webhookVerifiedAt?'ok':'warn']);
+      rows.push(['最近收到事件',s.lastEventAt?(fmtClock(s.lastEventAt)+'（'+fmtDur(now-s.lastEventAt)+'前）'):'还没有收到过',s.lastEventAt?'ok':'warn']);
+    }
+
+    rows.push(['API 域名',s.apiBase||'—','']);
+    rows.push(['活跃模型',s.aiModel||'未选择',s.aiModel?'ok':'bad']);
+
+    if(isWs){
+      rows.push(['并发上限',lim&&lim.max_concurrency?('每 5 秒 '+lim.max_concurrency+' 个会话'):'—','']);
+      rows.push(['配额等待至',waiting?(fmtClock(s.quotaWaitUntil)+'（还有 '+fmtDur(s.quotaWaitUntil-now)+'）'):'无',waiting?'warn':'']);
+      rows.push(['连续鉴权失败',(s.identifyFailures||0)+' 次',(s.identifyFailures||0)>=5?'bad':'']);
+    }
+
+    // 最后关闭码与停机原因合并成一行：两者都是「上次为什么停的」，分开看反而割裂
+    (function(){
+      var closeTxt=s.lastClose?('code='+s.lastClose.code+(s.lastClose.meaning?'　'+s.lastClose.meaning:'')+(s.lastClose.reason?'　'+s.lastClose.reason:'')+(s.lastClose.at?'　('+fmtClock(s.lastClose.at)+')':'')):'';
+      var parts=[];
+      if(s.fatalStop)parts.push('停机：'+s.fatalStop);
+      if(closeTxt)parts.push('关闭：'+closeTxt);
+      rows.push(['最后关闭 / 停机',parts.length?parts.join('　·　'):'无',(s.fatalStop||s.lastClose)?'bad':'']);
+    })();
     var dh='';
     for(var i=0;i<rows.length;i++){
       dh+='<dt>'+esc(rows[i][0])+'</dt><dd class="'+rows[i][2]+'">'+esc(rows[i][1])+'</dd>';
