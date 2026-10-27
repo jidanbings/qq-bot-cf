@@ -1,4 +1,4 @@
-import { adminPage, homePage, loginPage, setupPage, keyRecoveryPage, recoverGatePage } from './html.js';
+import { adminPage, homePage, loginPage, setupPage, dbMissingPage, keyRecoveryPage, recoverGatePage } from './html.js';
 import { ChatDO } from './chat-do.js';
 import { WorkDO } from './work-do.js';
 import { AiDO } from './ai-sandbox-do.js';
@@ -28,7 +28,6 @@ import {
   normalizeUrl,
   purgeExpiredSessions,
   randomHex,
-  readRawConfig,
   removeGroup,
   resetEncryptedConfig,
   saveAiProviders,
@@ -40,7 +39,6 @@ import {
 import { APP_VERSION, COOKIE_NAME, LOGIN_LIMIT, API_LIMIT } from './constants.js';
 import { hitRateLimit, resetRateLimit } from './utils/rate-limit.js';
 import { maskId } from './utils/crypto.js';
-import { isEncrypted, decryptText } from './utils/crypto.js';
 import { fetchModelList } from './utils/models.js';
 import {
   HttpError,
@@ -936,57 +934,18 @@ async function handle(request, env, ctx) {
 
   const missingSecrets = ['ADMIN_TOKEN', 'CONFIG_ENC_KEY'].filter((k) => !env[k]);
 
-  // 密钥自检页：加密密钥换过 / 恢复流程进不去时，用来确认到底卡在哪一步。
-  // 必须放在所有鉴权之前 —— 它本身就是给「进不了后台」的场景用的。
-  // 只暴露布尔值和数量，不泄露任何密钥或明文。
-  if (path === '/diag' && request.method === 'GET') {
-    const out = { workerVersion: APP_VERSION, checks: {} };
-    try {
-      out.checks.dbBound = !!env.DB;
-      out.checks.encKeySet = !!env.CONFIG_ENC_KEY;
-      out.checks.adminTokenSet = !!env.ADMIN_TOKEN;
-      if (env.DB) {
-        let raw = null;
-        try {
-          raw = await readRawConfig(env);
-          out.checks.readConfigOk = true;
-        } catch (err) {
-          out.checks.readConfigOk = false;
-          out.checks.readConfigError = String(err && err.message ? err.message : err).slice(0, 200);
-        }
-        if (raw) {
-          const encrypted = [];
-          for (const [k, v] of Object.entries(raw)) if (isEncrypted(v)) encrypted.push(k);
-          out.checks.encryptedKeys = encrypted;
-          out.checks.encryptedCount = encrypted.length;
-          const opened = [];
-          const failed = [];
-          for (const k of encrypted) {
-            try {
-              await decryptText(env, raw[k], k);
-              opened.push(k);
-            } catch {
-              failed.push(k);
-            }
-          }
-          out.checks.decryptOk = opened;
-          out.checks.decryptFailed = failed;
-          out.checks.verdict = !failed.length
-            ? 'ok'
-            : (opened.length ? 'partial' : 'mismatch');
-          try {
-            const st = await ensureKey(env);
-            out.checks.ensureKeyAction = st.action;
-          } catch (err) {
-            out.checks.ensureKeyAction = 'threw';
-            out.checks.ensureKeyError = String(err && err.message ? err.message : err).slice(0, 200);
-          }
-        }
-      }
-    } catch (err) {
-      out.checks.unexpected = String(err && err.message ? err.message : err).slice(0, 200);
+  // 没有 D1 绑定：后面所有 env.DB.prepare 都会抛 TypeError，被全局 catch 包成
+  // internal_error，用户只看到「服务器内部错误」，根本猜不到是缺绑定。
+  // 这里提前拦下来，给出能直接照做的说明。
+  if (!env.DB) {
+    const tip =
+      'D1 数据库未绑定（env.DB 不存在）。常见原因：部署命令用了 npx wrangler deploy 而不是 npm run deploy，' +
+      '后者会自动创建 qq-bot-db 并把绑定写进生成的配置。修复后重新部署即可，数据不会丢。';
+    if (path.startsWith('/api/')) {
+      return jsonFail(503, 'db_not_bound', tip);
     }
-    return jsonResult(out);
+    const nonce = randomHex(16);
+    return htmlResponse(dbMissingPage(nonce), nonce);
   }
 
   if (missingSecrets.length) {

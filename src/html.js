@@ -534,6 +534,46 @@ const SECRET_REQUIREMENTS = [
   },
 ];
 
+const DB_BINDING_FLAG = 'D1 数据库绑定（DB）';
+
+/**
+ * 「D1 没绑定」专用页。
+ * 这种情况下 env.DB 整个不存在，任何 env.DB.prepare 都会抛 TypeError，
+ * 所以不能复用 setupPage（那里假设数据库是好的、只差密钥）。
+ */
+export function dbMissingPage(nonce) {
+  return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${FAVICON_LINKS}<title>QQ Bot · 缺少数据库绑定</title><meta name="robots" content="noindex"><style nonce="${nonce}">
+${LOGIN_CSS}
+</style></head><body>
+<div class="setup">
+  <div class="head">
+    <span class="badge"><i></i>缺少数据库绑定</span>
+    <h1>D1 数据库没有绑定</h1>
+    <p class="sub">Worker 已经部署成功，但环境里没有 <code>env.DB</code>。<br>后台、聊天记录、配置全都依赖它，所以现在什么都打不开。</p>
+  </div>
+  <div class="reqs">
+    <div class="req missing">
+      <span class="state">!</span>
+      <div class="body">
+        <code>env.DB</code>
+        <p class="why">绑定缺失。所有 <code>env.DB.prepare(...)</code> 都会直接抛错，表现为「服务器内部错误」。</p>
+        <p class="how"><b>最常见原因：</b>部署命令用的是 <code>npx wrangler deploy</code>（或者 Cloudflare 构建里手填的命令），它不会带 D1 绑定。</p>
+      </div>
+    </div>
+  </div>
+  <div class="step-note">
+    <h2>怎么修</h2>
+    <ol>
+      <li>把部署命令改成 <code>npm run deploy</code>。它会自动查找/创建 <code>qq-bot-db</code>，并把绑定写进生成的配置再部署。</li>
+      <li>如果用 Cloudflare 构建（GitHub 自动部署），去 <b>Settings → Build → Deploy command</b> 改成 <code>npm run deploy</code>，然后重新构建一次。</li>
+      <li>重新部署后刷新本页，应该就能正常进入登录页。</li>
+    </ol>
+    <p class="warn-line">这只是绑定缺失，<b>已有数据不会丢</b>——重新部署会复用同一个数据库。绑好之后，之前加密的配置也照旧能解开（<code>CONFIG_ENC_KEY</code> 没变就不用管）。</p>
+  </div>
+</div>
+</body></html>`;
+}
+
 export function setupPage(nonce, missing) {
   const isMissing = (key) => missing.includes(key);
   const secretItems = SECRET_REQUIREMENTS.map((req) => {
