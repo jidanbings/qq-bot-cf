@@ -197,16 +197,62 @@ export class QQBotDO {
   }
 
   /**
-   * 传输方式判定
-   * - 'ws'      ：强制走网关长连接
-   * - 'webhook' ：强制走 Webhook
-   * - ''/未设   ：自动 —— 平台成功校验过回调地址（webhookVerifiedAt 有值）才走 Webhook，
-   *               否则保持长连接，避免「还没配回调地址就先断了连接」导致机器人在线不了
+   * 传输方式判定：**始终以 QQ 开放平台的设置为准**，后台不再手动覆盖。
+   *
+   * 平台侧才是真正的开关 —— 平台配了 Webhook，消息就 POST 到 /qq/webhook；
+   * 后台选什么都改变不了这件事。所以后台那个选项只应该是「显示同步结果」，
+   * 不能当成开关用（否则会出现「平台已 Webhook、后台还开着长连接」白烧 GB-s）。
+   *
+   * 怎么判断平台已经切到 Webhook：两个信号，任一成立即可
+   *   - webhookVerifiedAt：平台校验过回调地址（op=13 成功）
+   *   - lastEventAt     ：真的从 /event 收到过推送（最硬的证据）
+   *
+   * 都没有就默认走 WebSocket —— 首次接入的人多半是长连接，
+   * 而且这个默认值也保证了「还没配回调地址」时不会把唯一的收消息途径关掉。
    */
   transportName() {
-    const explicit = this.config && this.config.transport;
-    if (explicit === 'ws' || explicit === 'webhook') return explicit;
-    return this.config && this.config.webhookVerifiedAt ? 'webhook' : 'ws';
+    if (!this.config) return 'ws';
+    return this.platformUsesWebhook() ? 'webhook' : 'ws';
+  }
+
+  /** 平台是否已经切到 Webhook */
+  platformUsesWebhook() {
+    const cfg = this.config || {};
+    if (cfg.webhookVerifiedAt) return true;
+    if (this.lastEventAt) return true;
+    return false;
+  }
+
+  /**
+   * 把「平台已切 Webhook」这个事实落盘，并立刻停掉多余的长连接。
+   *
+   * 注意顺序：**先切内存状态、先断连接，再尝试落盘**。
+   * 落盘只是为了跨实例记住，不该成为「能不能切换」的前提 ——
+   * 否则一旦 D1 抖动或写入失败，就白留着一条正在烧 GB-s 的长连接。
+   */
+  async markPlatformWebhook(reason) {
+    if (!this.config) return false;
+    if (this.config.webhookVerifiedAt) return false;
+
+    const now = String(Date.now());
+    this.config.webhookVerifiedAt = now;
+
+    // 1) 立刻生效：模式已变，长连接没用了
+    if (this.ws || this.heartbeatTimer || this.reconnectTimer) {
+      this.logger.info('断开多余的长连接（平台已走 Webhook）');
+      this.teardown();
+      this.running = this.desiredRunning;
+    }
+
+    // 2) 再尝试落盘，失败也不影响本次切换
+    try {
+      const { saveConfig } = await import('./db.js');
+      await saveConfig(this.env, { webhookVerifiedAt: now });
+      this.logger.info(`平台已切到 Webhook（${reason}），已同步`);
+    } catch (e) {
+      this.logger.warn(`markPlatformWebhook 落盘失败（本次仍已切换）: ${e.message}`);
+    }
+    return true;
   }
 
   isWsTransport() {
@@ -257,6 +303,9 @@ export class QQBotDO {
         // 记下「最近一次收到真实事件」的时间：后台据此判断 Webhook 通道是否真的通
         // （只写内存 + 低频落盘，避免每条消息都多一次写操作）
         this.lastEventAt = Date.now();
+        // 能收到真实推送 = 平台侧确实配了 Webhook。这是最硬的证据，
+        // 立刻把本地模式同步过去，并把多余的长连接断掉（否则白烧 GB-s）
+        await this.markPlatformWebhook('收到平台推送').catch(() => {});
         if (!this._eventAtSaved || this.lastEventAt - this._eventAtSaved > 60000) {
           this._eventAtSaved = this.lastEventAt;
           this.state.storage.put('last_event_at', this.lastEventAt).catch(() => {});

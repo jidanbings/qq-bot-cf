@@ -257,12 +257,18 @@ button{font-family:inherit}
   background-position:calc(100% - 17px) 15px,calc(100% - 12px) 15px;background-size:5px 5px;background-repeat:no-repeat}
 .field .hint{font-size:.7rem;color:var(--muted);margin-top:.25rem;line-height:1.6}
 
-/* 事件接收方式：两张对比卡（Webhook / WebSocket） */
+/* 事件接收方式：两张对比卡（只读展示，跟随 QQ 平台自动判定） */
+.tp-banner{display:flex;flex-direction:column;gap:5px;padding:12px 14px;border-radius:12px;
+  margin-bottom:1rem;border:1px solid var(--border-strong);background:var(--field)}
+.tp-banner b{font-size:13px;font-weight:650}
+.tp-banner span{font-size:.72rem;color:var(--muted);line-height:1.7}
+.tp-banner.ok{border-color:color-mix(in srgb,var(--green) 42%,var(--border-strong));
+  background:color-mix(in srgb,var(--green) 8%,transparent)}
+.tp-banner.ok b{color:var(--green)}
 .tp-wrap{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1rem;margin-bottom:1.1rem}
-.tp-card{border:1.5px solid var(--border-strong);border-radius:14px;padding:1rem 1.1rem;cursor:pointer;
-  background:var(--surface);transition:border-color .18s,box-shadow .18s;outline:none}
-.tp-card:hover{border-color:var(--accent)}
-.tp-card:focus-visible{box-shadow:0 0 0 4px var(--primary-ring)}
+.tp-card{border:1.5px solid var(--border-strong);border-radius:14px;padding:1rem 1.1rem;
+  background:var(--surface);transition:border-color .18s,box-shadow .18s}
+.tp-card.ro{cursor:default}
 .tp-card.on{border-color:var(--accent);box-shadow:0 0 0 3px var(--primary-ring)}
 .tp-head{display:flex;align-items:center;gap:9px;margin-bottom:.7rem;flex-wrap:wrap}
 .tp-head b{font-size:13.5px;font-weight:650}
@@ -273,7 +279,7 @@ button{font-family:inherit}
 .tp-card.on .tp-radio i{background:var(--accent)}
 .tp-tag{font-size:10.5px;font-weight:600;padding:2px 7px;border-radius:6px;margin-left:auto}
 .tp-tag.ok{color:var(--green);background:color-mix(in srgb,var(--green) 12%,transparent)}
-.tp-tag.warn{color:var(--amber,#b45309);background:color-mix(in srgb,var(--amber,#b45309) 12%,transparent)}
+.tp-tag.dim{color:var(--muted);background:var(--field-deep)}
 .tp-list{margin:0 0 .5rem;padding:0;list-style:none}
 .tp-list li{font-size:.72rem;line-height:1.75;color:var(--muted);padding-left:14px;position:relative}
 .tp-list.pros li::before{content:'+';position:absolute;left:2px;color:var(--green);font-weight:700}

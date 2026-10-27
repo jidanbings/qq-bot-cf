@@ -20,10 +20,10 @@ export const CONFIG_FIELDS = {
   toolCalling: { type: 'flag' },
   voiceLang: { type: 'string', max: 8 },
   voiceGain: { type: 'string', max: 4 },
-  // 事件接收方式：''（自动）/ 'webhook' / 'ws'
-  // 自动 = 平台回调地址验证通过过（webhookVerifiedAt 有值）就走 Webhook，否则保持旧的长连接
+  // 事件接收方式**只读**：由程序根据 QQ 开放平台的实际配置自动判定，不再作为开关。
+  // 保留这个字段是为了让 /api/config 能把当前结果回传给后台展示（保留历史值以防万一）。
   transport: { type: 'string', max: 8 },
-  // QQ 开放平台校验回调地址成功的时间戳（由 Worker 在 op=13 时写入，后台不展示）
+  // 平台已切 Webhook 的证据：op=13 校验通过的时间戳，或首次收到 /event 推送的时间
   webhookVerifiedAt: { type: 'string', max: 32 },
   doVersion: { type: 'string', max: 32 },
 };

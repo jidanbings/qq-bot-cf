@@ -376,6 +376,21 @@ async function handleQqWebhook(request, env, ctx) {
   return qqAck();
 }
 
+/**
+ * 后台配置读取：在库里的配置之外，补上「事件接收方式」的实时判定结果。
+ * transport 是只读的 —— 由 DO 根据 QQ 开放平台的实际状态算出，后台只负责展示。
+ */
+async function readPublicConfig(env) {
+  const cfg = await getConfig(env, { decrypt: false });
+  const pub = toPublicConfig(cfg);
+  try {
+    const st = await callBot(env, 'status');
+    pub.config.transport = (st && st.transport) || '';
+    pub.config.lastEventAt = st && st.lastEventAt ? String(st.lastEventAt) : '';
+  } catch {}
+  return pub;
+}
+
 async function handleApi(request, env, url) {
   const path = url.pathname;
   const method = request.method;
@@ -445,11 +460,9 @@ async function handleApi(request, env, url) {
       break;
 
     case '/api/config': {
-      if (method === 'GET') {
-        const cfg = await getConfig(env, { decrypt: false });
-        return jsonResult(toPublicConfig(cfg));
-      }
+      if (method === 'GET') return jsonResult(await readPublicConfig(env));
       const body = await readJson(request);
+      delete body.transport; // 只读字段，忽略前端误传
       const result = await saveConfig(env, body);
       if (!result.ok) throw new HttpError(400, 'invalid_config', result.error);
       let botReloaded = false;

@@ -193,6 +193,7 @@ var rendered=false;   // 状态页是否已经渲染过骨架
 var TRANSPORT_MODE='';// 配置页里显式保存的事件接收方式（webhook / ws，空=自动）
 var CUR_APPID='';     // 配置页里当前的 QQ AppID，用来拼开放平台跳转链接
 var CUR_WEBHOOK_VERIFIED=false; // 平台是否校验过回调地址（决定自动模式实际走哪条）
+var CUR_LAST_EVENT_AT=0;       // 最近一次从 /event 收到真实推送的时间（平台已走 Webhook 的硬证据）
 
 function stateOf(s){
   if(!s)return {text:'读取中',kind:''};
@@ -617,36 +618,49 @@ function qqDevSettingsUrl(appId){
 }
 
 /**
- * 事件接收方式选择卡：两种方式各一张，点了就选中。
- * 不用 <select> 是因为两者的差别（计费、要不要配回调、断线行为）
- * 塞进下拉选项里根本讲不清楚，而选错方向直接影响账单。
+ * 事件接收方式：**只读展示**，跟随 QQ 开放平台的实际配置，不再让用户手选。
+ *
+ * 为什么改成只读：平台侧才是真正的开关。平台配了 Webhook，消息就直接 POST 到
+ * /qq/webhook，后台选什么都改变不了；反过来平台还是长连接时，后台选 Webhook 也收不到东西。
+ * 之前允许手选，最坏的结果是「平台已 Webhook + 后台还开着长连接」：
+ * 消息能收到，但 DO 24 小时白烧 GB-s。
+ *
+ * 现在的规则：
+ *   - 首次接入（平台还没配回调地址）→ WebSocket，直接能用
+ *   - 平台一旦改成 Webhook（校验通过或收到过推送）→ 自动切过来，长连接自动断开
  */
 function transportCards(){
-  // 实际生效的方式：老配置可能没存过 transport（自动模式），
-  // 这时按「平台是否校验过回调地址」推断，否则会出现一张卡都没选中的怪状态
-  var cur=TRANSPORT_MODE||(CUR_WEBHOOK_VERIFIED?'webhook':'ws');
+  var isWebhook=!!(CUR_WEBHOOK_VERIFIED||CUR_LAST_EVENT_AT);
   var appId=CUR_APPID||'';
   var webhookUrl=(location.origin||'')+'/qq/webhook';
   var devUrl=qqDevSettingsUrl(appId);
   var h='<div class="tp-wrap">';
 
   var modes=[
-    {key:'webhook',name:'Webhook（推荐）',tag:'不计持续时间',
+    {key:'webhook',name:'Webhook',tag:'当前生效 / 不计持续时间',
      pros:['机器人只在你发消息时才醒，空闲不产生 GB-s','不登录网关，不消耗会话配额','没有长连接，也就没有心跳超时、重连风暴这类问题'],
-     cons:['需要在 QQ 开放平台填回调地址，且域名要能被 QQ 访问到','回调地址配错或域名不通就收不到消息（后台会告警提示）'],
-     need:'idle'},
-    {key:'ws',name:'WebSocket 网关长连接',tag:'24 小时常驻',
-     pros:['不需要公网回调地址，配好 AppID / Secret 就能用','平台侧不支持 Webhook 时可以退回这个','断线、心跳超时、配额到点都会自动恢复：每 60 秒自检一次，无需人工介入'],
-     cons:['Durable Object 必须 24 小时常驻，约 10,800 GB-s/天，占免费额度（13,000/天）的 83%','会话失效后需要重新鉴权（IDENTIFY），每次都会扣一次当日会话配额','断线期间靠 RESUME 补发；若会话已失效只能重新鉴权，中间那几秒的消息补不回来'],
-     need:'always'}
+     cons:['需要在 QQ 开放平台填回调地址，且域名要能被 QQ 访问到','回调地址配错或域名不通就收不到消息（后台会告警提示）']},
+    {key:'ws',name:'WebSocket 网关长连接',tag:'当前生效 / 24 小时常驻',
+     pros:['不需要公网回调地址，配好 AppID / Secret 就能用','平台侧不支持 Webhook 时可以继续用这个','断线、心跳超时、配额到点都会自动恢复：每 60 秒自检一次，无需人工介入'],
+     cons:['Durable Object 必须 24 小时常驻，约 10,800 GB-s/天，占免费额度（13,000/天）的 83%','会话失效后需要重新鉴权（IDENTIFY），每次都会扣一次当日会话配额','断线期间靠 RESUME 补发；若会话已失效只能重新鉴权，中间那几秒的消息补不回来']}
   ];
+
+  h+='<div class="tp-banner '+(isWebhook?'ok':'info')+'">'
+    +'<b>当前生效：'+(isWebhook?'Webhook':'WebSocket 网关长连接')+'</b>'
+    +'<span>'+(isWebhook
+        ? '本面板与 QQ 开放平台已同步（'+(CUR_LAST_EVENT_AT?'最近收到推送':'回调地址已校验')+'）。想换回长连接，请先去 QQ 开放平台改回 WebSocket 推送，这里会自动跟随。'
+        : '首次接入默认走长连接，配好 AppID / Secret 就能用。想让空闲不计费，去 QQ 开放平台把事件推送改成 Webhook，这里会自动跟随。')
+    +'</span></div>';
 
   for(var i=0;i<modes.length;i++){
     var m=modes[i];
-    var on=cur===m.key;
-    h+='<div class="tp-card'+(on?' on':'')+'" data-tp="'+esc(m.key)+'" role="button" tabindex="0">';
+    var on=(isWebhook?'webhook':'ws')===m.key;
+    // 没有 data-tp / tabindex：这里不可点选，只是展示
+    h+='<div class="tp-card ro'+(on?' on':'')+'">';
     h+='<div class="tp-head"><span class="tp-radio"><i></i></span>'
-      +'<b>'+esc(m.name)+'</b><span class="tp-tag'+(m.need==='idle'?' ok':' warn')+'">'+esc(m.tag)+'</span></div>';
+      +'<b>'+esc(m.name)+'</b>'
+      +(on?'<span class="tp-tag ok">生效中</span>':'<span class="tp-tag dim">未启用</span>')
+      +'</div>';
     h+='<ul class="tp-list pros">';
     for(var p=0;p<m.pros.length;p++)h+='<li>'+esc(m.pros[p])+'</li>';
     h+='</ul><ul class="tp-list cons">';
@@ -661,17 +675,16 @@ function transportCards(){
   }
   h+='</div>';
 
-  // 跳转到 QQ 开放平台配置回调：AppID 从后台配置读取，未填则提示先填
+  // 跳转到 QQ 开放平台：AppID 从后台配置读取，未填则提示先填
   h+='<div class="tp-actions">';
   if(appId){
     h+='<a class="btn primary" href="'+esc(devUrl)+'" target="_blank" rel="noopener noreferrer">'
-      +IX.link+'<span>去 QQ 开放平台配置</span></a>';
-    h+='<span class="tp-note">打开后到「开发设置 → 事件订阅」，把上面的回调地址贴进去并保存</span>';
+      +IX.link+'<span>去 QQ 开放平台修改</span></a>';
+    h+='<span class="tp-note">在「开发设置 → 事件订阅」切换推送方式；改成 Webhook 时把上面的回调地址贴进去并保存，本页面会自动同步</span>';
   }else{
     h+='<span class="tp-note warn">先在上面填好 <b>QQ AppID</b> 并保存，这里才会出现跳转按钮</span>';
   }
   h+='</div>';
-  h+='<input type="hidden" id="cf_transport" value="'+esc(cur)+'">';
   return h;
 }
 
@@ -758,6 +771,7 @@ function renderConfig(d){
   TRANSPORT_MODE=cfg.transport||'';
   CUR_APPID=cfg.appId||'';
   CUR_WEBHOOK_VERIFIED=!!cfg.webhookVerifiedAt;
+  CUR_LAST_EVENT_AT=Number(cfg.lastEventAt)||0;
   var h='';
   for(var s=0;s<FIELDS.length;s++){
     var sec=FIELDS[s];
@@ -809,27 +823,8 @@ function markDirty(){
   updateSectionStates();
 }
 
-/** 事件接收方式：两张卡片单选，选中值写进隐藏字段 cf_transport */
+/** 事件接收方式：只读展示，只绑定「复制回调地址」 */
 function bindTransportCards(){
-  var cards=document.querySelectorAll('.tp-card');
-  for(var i=0;i<cards.length;i++){
-    (function(card){
-      var pick=function(){
-        var v=card.getAttribute('data-tp');
-        TRANSPORT_MODE=v;
-        var hidden=$('cf_transport');
-        if(hidden)hidden.value=v;
-        for(var k=0;k<cards.length;k++){
-          cards[k].className='tp-card'+(cards[k].getAttribute('data-tp')===v?' on':'');
-        }
-        updateSectionStates();
-      };
-      card.addEventListener('click',pick);
-      card.addEventListener('keydown',function(e){
-        if(e.key==='Enter'||e.key===' '){e.preventDefault();pick();}
-      });
-    })(cards[i]);
-  }
   var copy=$('tp-copy');
   if(copy){
     copy.addEventListener('click',function(e){
@@ -850,12 +845,11 @@ function updateSectionStates(){
   for(var s=0;s<FIELDS.length;s++){
     var sec=FIELDS[s];
     if(sec.custom){
-      // 自定义区块：选了一种方式就算填好
+      // 自定义区块：只读展示，始终算「已同步」
       var st=$('fs-'+sec.id);
       if(st){
-        var ok=!!(TRANSPORT_MODE||CUR_WEBHOOK_VERIFIED);
-        st.className='fs-state'+(ok?' ok':'');
-        st.innerHTML='<i></i>'+(ok?'已选择':'未选择');
+        st.className='fs-state ok';
+        st.innerHTML='<i></i>自动同步';
       }
       continue;
     }
@@ -907,9 +901,7 @@ function saveConfig(restart){
     var el=$('cf_'+keys[k]);
     if(el)patch[keys[k]]=el.value;
   }
-  // 事件接收方式是自定义卡片，值在隐藏字段里
-  var tp=$('cf_transport');
-  if(tp)patch.transport=tp.value;
+  // 事件接收方式是只读展示，跟随 QQ 平台自动判定，不提交
   var b1=$('b-save'),b2=$('b-save-restart');
   busy(b1,true);
   busy(b2,true);
