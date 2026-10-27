@@ -28,7 +28,7 @@
 
 ### 3. 绑定自定义域名（必须）
 
-**workers.dev 域名已全部禁用**（`preview_urls = false` + `workers_dev = false`）：每次部署的临时预览链接和 `qq-bot-cf.<你的子域>.workers.dev` 主地址都不会再开启。原因：workers.dev 在国内大部分网络环境访问不稳定，而且等于一个额外的公网入口。所以**访问后台必须绑定自己的域名**；部署本身照常成功，先绑域名再打开即可。**机器人不回调公网**（走 WebSocket 出站连接网关），对域名没有任何额外要求，能打开网页就行。
+**workers.dev 域名已全部禁用**（`preview_urls = false` + `workers_dev = false`）：每次部署的临时预览链接和 `qq-bot-cf.<你的子域>.workers.dev` 主地址都不会再开启。原因：workers.dev 在国内大部分网络环境访问不稳定，而且等于一个额外的公网入口。所以**访问后台必须绑定自己的域名**；部署本身照常成功，先绑域名再打开即可。域名同时也是 Webhook 模式下的回调入口（`https://你的域名/qq/webhook`）；如果继续用 WebSocket 网关模式，则机器人不回调公网，对域名没有额外要求。
 
 **前提**：域名已经托管在**同一个 Cloudflare 账号**里（NS 已切到 Cloudflare）。
 
@@ -62,6 +62,20 @@ routes = [
 2. 打开 `https://你的域名/login`，用 `ADMIN_TOKEN` 登录
 3. 后台填 QQ AppID / Secret（未上线机器人开「沙箱环境」）和 AI Base URL / API Key，点「保存并重启」
 
+### 5.（推荐）把事件接收方式改成 Webhook
+
+默认走 QQ 网关 WebSocket 长连接，那意味着 `QQBotDO` 必须 24 小时待命——Cloudflare 对 `ws.accept()` 的连接**整段时长计费**，一天约 10,800 GB-s（免费额度 13,000/天，占掉 83%）。改成 Webhook 后这个对象不再持有任何长连接，处理完事件就休眠，**持续时间≈0**。
+
+配置步骤：
+
+1. QQ 开放平台 → 你的机器人 → **开发设置 → 事件订阅**，回调地址填 `https://你的域名/qq/webhook`（端口 80 / 443 / 8080 / 8443 均可）
+2. 点保存，平台会发一次 `op=13` 校验请求，本项目会自动用 Ed25519 私钥签名后返回，校验应立刻通过
+3. 校验通过后 `QQBotDO` 会自动停掉网关连接改走 Webhook（后台「状态」页的「事件接收方式」会显示 Webhook）。想手动指定，到后台「机器人配置」把「事件接收方式」改成「强制 Webhook」或「WebSocket 网关长连接」
+
+> 自动模式的判定逻辑：**只有平台成功校验过一次回调地址**才会切到 Webhook，避免「还没配回调地址就先断掉连接」导致机器人临时收不到消息。
+>
+> 注意：Webhook 依赖你的自定义域名能正常访问（QQ 侧要能 POST 进来）；如果域名被墙或没绑好，就继续用 WebSocket 模式。
+
 ---
 
 ## 🔄 更新
@@ -76,8 +90,8 @@ routes = [
 
 ## ✨ 特性
 
-- **零服务器**：一个 Worker + 多个 Durable Object（QQ 网关 / ChatDO 对话 / WorkDO 工具+工作区 / AiDO 沙箱 / 限流）+ 一张 D1 表，全程免费额度内
-- **官方网关**：WebSocket 长连接，断线自动重连，每分钟巡检一次；部署后新版本会自己接管，无需手动重启
+- **零服务器**：一个 Worker + 多个 Durable Object（QQBotDO 事件分发 / ChatDO 对话 / WorkDO 工具+工作区 / AiDO 沙箱 / 限流）+ 一张 D1 表，全程免费额度内
+- **两种事件接收方式**：Webhook（推荐，请求驱动、处理完就休眠，DO 持续时间≈0）或 QQ 网关 WebSocket 长连接（兼容旧部署；会 24 小时占用一个 DO 持续计费）。Webhook 模式自带 Ed25519 验签，会话配额、断线重连、心跳那些麻烦事一并消失
 - **多 AI 容错**：后台「AI 对话」可加多套 Base URL / Key / 模型（添加/编辑/测试都在弹窗里完成），按顺序尝试，前一个超时或报错自动切下一个；内置 19 家一键预填配置——国外 OpenAI、Google Gemini、xAI Grok、Groq、OpenRouter、Mistral，国内 DeepSeek、通义千问、智谱 GLM、Kimi、豆包、硅基流动、腾讯混元（TokenHub）、讯飞星火、MiniMax、零一万物、阶跃星辰、百川智能、魔搭（免费额度）。列表上的开关一点就能启用/停用
 - **生图模型预设**：后台「生图模型」页配置（同样收进弹窗，先测试通过才能保存），内置 qwen-image、wanx、seedream、cogview、dall-e-3、gpt-image-1.5、flux、nano-banana 等主流模型一键填入
 - **Markdown 回复**：AI 回复含标题、列表、加粗、链接时按官方 Markdown 消息发送，排版更好（后台可开关）
@@ -147,7 +161,11 @@ routes = [
 
 **网关一直连不上，关闭码 4914**
 
-机器人未上线，只能连沙箱。到后台打开「沙箱环境」。
+机器人未上线，只能连沙箱。到后台打开「沙箱环境」。（Webhook 模式不登录网关，不会出现这个错误。）
+
+**Durable Object 一直占用 GB-s 怎么办？**
+
+`QQBotDO` 走 WebSocket 网关长连接时会被整段连接时长计费（约 10,800 GB-s/天）。按上面「把事件接收方式改成 Webhook」把连接换掉即可，之后这个对象只在收到消息时短暂运行，空闲时不产生持续时间。
 
 **多个 AI 是怎么切换的？**
 

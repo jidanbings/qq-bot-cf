@@ -152,8 +152,13 @@ export class QQBotDO {
         await this.loadConfig();
         const storedRun = await state.storage.get('desired_running');
         this.desiredRunning = storedRun !== false;
-        this.logger.info(`DO init: desiredRunning=${this.desiredRunning}`);
-        if (this.desiredRunning) await this.startBot();
+        this.logger.info(
+          `DO init: desiredRunning=${this.desiredRunning} transport=${this.transportName()}`
+        );
+        // Webhook 模式不建长连接（不计持续时间）。running 语义退化为「是否接收事件」，
+        // 让后台「运行中/已停止」的展示保持不变。
+        if (!this.isWsTransport()) this.running = this.desiredRunning;
+        if (this.desiredRunning && this.isWsTransport()) await this.startBot();
       } catch (e) {
         this.lastError = `Init: ${e.message}`;
         this.logger.error(`DO init failed: ${e.message}`);
@@ -161,9 +166,34 @@ export class QQBotDO {
     });
   }
 
+  /**
+   * 传输方式判定
+   * - 'ws'      ：强制走网关长连接
+   * - 'webhook' ：强制走 Webhook
+   * - ''/未设   ：自动 —— 平台成功校验过回调地址（webhookVerifiedAt 有值）才走 Webhook，
+   *               否则保持长连接，避免「还没配回调地址就先断了连接」导致机器人在线不了
+   */
+  transportName() {
+    const explicit = this.config && this.config.transport;
+    if (explicit === 'ws' || explicit === 'webhook') return explicit;
+    return this.config && this.config.webhookVerifiedAt ? 'webhook' : 'ws';
+  }
+
+  isWsTransport() {
+    return this.transportName() === 'ws';
+  }
+
   isAlive() {
+    if (!this.isWsTransport()) return !!this.desiredRunning;
     const s = this.ws && this.ws.readyState;
     return this.running && (s === 0 || s === 1);
+  }
+
+  /** 统一的「接收开关」：不建连接时也要把内存态和持久态一起改掉 */
+  async setDesiredRunning(on) {
+    this.desiredRunning = !!on;
+    await this.state.storage.put('desired_running', !!on);
+    if (!this.isWsTransport()) this.running = this.desiredRunning;
   }
 
   apiBase() {
@@ -184,6 +214,32 @@ export class QQBotDO {
       case '/stop':
         await this.stopBot();
         return Response.json({ ok: true, msg: 'Bot stopped' });
+      case '/event': {
+        // Webhook 模式的事件入口（Worker 已验签）：立即返回 200，处理交给 waitUntil
+        if (!this.desiredRunning) return Response.json({ ok: true, skipped: 'stopped' });
+        let payload = null;
+        try {
+          payload = await request.json();
+        } catch {}
+        if (!payload || typeof payload !== 'object') return Response.json({ ok: false, error: 'bad payload' });
+        const t = String(payload.t || '');
+        const d = payload.d || {};
+        if (t === 'GROUP_AT_MESSAGE_CREATE' || t === 'GROUP_MESSAGE_CREATE' || t === 'C2C_MESSAGE_CREATE') {
+          // handleMessage 返回该会话队列的尾巴；挂到 waitUntil 上防止对象在处理中途被驱逐
+          this.state.waitUntil(
+            Promise.resolve(this.handleMessage(t, d)).catch((e) =>
+              this.logger.error(`Handle error: ${e.message}`)
+            )
+          );
+        } else if (t === 'GROUP_MEMBER_ADD') {
+          this.state.waitUntil(this.handleGroupMemberAdd(d).catch(() => {}));
+        } else if (t === 'GROUP_ADD_ROBOT') {
+          this.state.waitUntil(this.handleGroupAddRobot(d).catch(() => {}));
+        } else if (t === 'C2C_MSG_RECEIVE' || t === 'FRIEND_ADD') {
+          this.touchGroup(`c2c:${d.openid || ''}`);
+        }
+        return Response.json({ ok: true, t });
+      }
       case '/group-manage': {
         // 后台「群管理」：群资料 + 机器人群内状态 + 禁言状态，各自容错（白名单权限可能只有其一）
         const openid = url.searchParams.get('openid') || '';
@@ -239,9 +295,19 @@ export class QQBotDO {
       case '/reload': {
         // 后台改完配置/AI 后调用：立即热更新，不用重启机器人
         const prevWelcome = this.config.welcomeEnabled;
+        const prevTransport = this.transportName();
         await this.loadConfig();
         this.logSystem('后台修改配置，已热更新生效');
-        if (this.running && prevWelcome !== this.config.welcomeEnabled) {
+        // 传输方式被改过：按新方式重建（webhook 停连接，ws 建连接）
+        if (prevTransport !== this.transportName()) {
+          this.logger.info(`传输方式变化 ${prevTransport} → ${this.transportName()}，重建连接`);
+          this.teardown();
+          if (this.isWsTransport()) {
+            this.state.waitUntil(this.startBot());
+          } else {
+            this.running = this.desiredRunning;
+          }
+        } else if (this.isWsTransport() && this.running && prevWelcome !== this.config.welcomeEnabled) {
           this.logger.info('welcome 开关变化，重启连接以应用新 intents');
           this.teardown();
           this.state.waitUntil(this.startBot());
@@ -257,7 +323,10 @@ export class QQBotDO {
         try { await this.loadConfig(); } catch {}
         // 到点的定时提醒 / 清理长时间不用的会话
         try { await this.fireDueReminders(); } catch (e) { this.logger.warn(`Reminder scan: ${e.message}`); }
-        if (this.state && typeof this.state.waitUntil === 'function') {
+        // 会话清理改成每小时一次：Webhook 模式下每分钟唤醒都会重新计费，
+        // 每分钟 list 一遍存储既费行读取也白白拉长存活时间
+        const minute = new Date().getUTCMinutes();
+        if (minute === 0 && this.state && typeof this.state.waitUntil === 'function') {
           this.state.waitUntil(this.pruneStoredSessions());
         }
         const workerVersion = url.searchParams.get('v') || '';
@@ -279,6 +348,8 @@ export class QQBotDO {
         }
 
         if (!this.desiredRunning) return Response.json({ ok: true, action: 'idle' });
+        // Webhook 模式没有连接要守：接收开关开着就算活着，不要拉起网关
+        if (!this.isWsTransport()) return Response.json({ ok: true, action: 'alive', transport: 'webhook' });
         if (this.fatalStop) return Response.json({ ok: true, action: 'halted', error: this.fatalStop });
         if (Date.now() < this.quotaWaitUntil) {
           return Response.json({ ok: true, action: 'quota-wait', until: new Date(this.quotaWaitUntil).toISOString() });
@@ -303,6 +374,7 @@ export class QQBotDO {
           version: APP_VERSION,
           running: this.running,
           desiredRunning: this.desiredRunning,
+          transport: this.transportName(),
           wsState: this.ws?.readyState,
           sessionCount: this.sessions.size,
           tokenValid: !!(this.token && now < this.tokenExpiry),
@@ -420,8 +492,19 @@ export class QQBotDO {
 
   async getToken() {
     if (this.token && Date.now() < this.tokenExpiry) return this.token;
+    // Webhook 模式每次唤醒都是新实例：token 落盘，避免每条消息都重新换一次凭证
+    if (!this.token) {
+      try {
+        const saved = await this.state.storage.get('token');
+        if (saved && saved.value && Number(saved.expiry) > Date.now() + 60000) {
+          this.token = saved.value;
+          this.tokenExpiry = Number(saved.expiry);
+          return this.token;
+        }
+      } catch {}
+    }
     if (!this.tokenPromise) {
-      const pending = this.refreshToken().then((data) => {
+      const pending = this.refreshToken().then(async (data) => {
         if (this.tokenPromise !== pending) throw new Error('QQ credentials changed');
         const ttl = Number(data.expires_in) || 7200;
         const ttlMs = Math.max(1, ttl) * 1000;
@@ -435,6 +518,9 @@ export class QQBotDO {
         this.logger.info(
           `Token refreshed successfully (ttl=${ttl}s${unchanged ? '，返回值未变，保留原有效期' : ''})`
         );
+        try {
+          await this.state.storage.put('token', { value: this.token, expiry: this.tokenExpiry });
+        } catch {}
         return this.token;
       }).finally(() => {
         if (this.tokenPromise === pending) this.tokenPromise = null;
@@ -445,6 +531,12 @@ export class QQBotDO {
   }
 
   async startBot() {
+    if (!this.isWsTransport()) {
+      // Webhook 模式：没有连接可建，只把「接收开关」打开
+      await this.setDesiredRunning(true);
+      this.lastStartAt = Date.now();
+      return;
+    }
     if (this.running) return;
     if (this.fatalStop) {
       this.logger.error(`Start blocked: ${this.fatalStop}`);
@@ -520,8 +612,7 @@ export class QQBotDO {
 
   async stopBot() {
     this.teardown();
-    this.desiredRunning = false;
-    await this.state.storage.put('desired_running', false);
+    await this.setDesiredRunning(false);
     this.logger.info('Bot stopped');
   }
 
@@ -861,6 +952,9 @@ export class QQBotDO {
         if (this.messageQueues.get(key) === next) this.messageQueues.delete(key);
       });
     this.messageQueues.set(key, next);
+    // 返回整条队列的尾巴：Webhook 模式下调用方用 waitUntil 挂住它，
+    // 否则对象可能在处理中途被驱逐（长任务会直接断掉）
+    return next;
   }
 
   async processMessage(key, job) {

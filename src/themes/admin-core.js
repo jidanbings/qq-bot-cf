@@ -201,6 +201,7 @@ function stateOf(s){
 
 function banners(s){
   var now=Date.now(),out=[];
+  var isWs=s.transport!=='webhook';
   if(s.fatalStop)out.push(['bad','已停机',s.fatalStop+'　先去 QQ 开放平台处理，再点「启动」重新尝试。']);
   if(s.quotaWaitUntil&&s.quotaWaitUntil>now){
     out.push(['warn','会话配额已用尽',
@@ -208,8 +209,8 @@ function banners(s){
   }
   if(!s.qqReady)out.push(['bad','QQ 凭据不完整','缺少 AppID 或 Secret。到「机器人配置」填好并保存，机器人才能连上网关。']);
   else if(!s.aiReady)out.push(['bad','AI 未配置完整','Base URL / API Key / 模型三者缺一，机器人收到了消息也回不出来。到「机器人配置」补全后保存并重启。']);
-  if(s.running&&!s.tokenExpiry)out.push(['bad','Access Token 未获取','到「机器人配置」确认 AppID / Secret 与开放平台一致。']);
-  else if((s.identifyFailures||0)>=5&&!(s.quotaWaitUntil&&s.quotaWaitUntil>now)){
+  if(isWs&&s.running&&!s.tokenExpiry)out.push(['bad','Access Token 未获取','到「机器人配置」确认 AppID / Secret 与开放平台一致。']);
+  else if(isWs&&(s.identifyFailures||0)>=5&&!(s.quotaWaitUntil&&s.quotaWaitUntil>now)){
     out.push(['warn','连续鉴权失败 '+s.identifyFailures+' 次',
       '网关持续拒绝 IDENTIFY（op9）。机器人还没上线时，到「机器人配置」把「沙箱环境」打开再试。']);
   }
@@ -311,7 +312,7 @@ function statusSkeleton(){
   var h='<div id="banners"></div>';
   h+='<div class="stats">';
   h+=statCard('stat-bot',IX.bot,'机器人','<span class="sk-bar sk-w60"></span>','','');
-  h+=statCard('stat-ws',IX.link,'网关连接','<span class="sk-bar sk-w50"></span>','','');
+  h+=statCard('stat-ws',IX.link,'事件接收','<span class="sk-bar sk-w50"></span>','','');
   h+=statCard('stat-token',IX.key,'Access Token','<span class="sk-bar sk-w70"></span>','','');
   h+=statCard('stat-quota',IX.gauge,'会话配额（24h）','<span class="sk-bar sk-w60"></span>','','');
   h+='</div>';
@@ -333,7 +334,8 @@ function statusSkeleton(){
     +skDetailRows(6)
     +'</dl>'
     +'<div class="do-list" id="dos"></div>'
-    +'<p class="tip"><b>会话配额统计的是登录网关的次数</b>，不是聊天条数：长连接在线、心跳、收发消息都不消耗；只有新建会话（IDENTIFY）才 +1，断线重连走 RESUME 不消耗。</p></div>';
+    +'<p class="tip"><b>会话配额统计的是登录网关的次数</b>，不是聊天条数：长连接在线、心跳、收发消息都不消耗；只有新建会话（IDENTIFY）才 +1，断线重连走 RESUME 不消耗。'
+    +'<b>Webhook 模式不登录网关</b>，因此不消耗会话配额，也不会因为配额耗尽或断线而掉线恢复。</p></div>';
 
   h+='<div class="card"><div class="card-head"><h3>运行日志</h3><span class="hint">最近 30 条 · 本地时间</span></div>'
     +'<div class="console"><div class="console-bar"><span class="live"></span><span>live</span><span class="grow"></span>'
@@ -359,7 +361,10 @@ function paintStatus(s){
   var b=$('banners');
   if(b)b.innerHTML=banners(s);
 
-  var ws=s.wsState==null?'未连接':(WS_STATE[s.wsState]||String(s.wsState));
+  var isWs=s.transport!=='webhook';
+  var ws=isWs
+    ?(s.wsState==null?'未连接':(WS_STATE[s.wsState]||String(s.wsState)))
+    :(s.desiredRunning?'接收中':'已关闭');
   var lim=s.sessionLimit;
   var left=lim?(Number(lim.remaining)||0):null;
   var total=lim?(Number(lim.total)||0):null;
@@ -375,9 +380,10 @@ function paintStatus(s){
   el=$('stat-ws');
   if(el){
     el.querySelector('.stat-value').innerHTML=esc(ws);
-    el.querySelector('.stat-value').className='stat-value '+((s.wsState===1)?'ok':'');
-    el.querySelector('.stat-sub').textContent=(s.sessionId?'会话已建立':'会话未建立')
-      +' · 内存会话 '+esc(s.sessionCount==null?0:s.sessionCount)+' 个';
+    el.querySelector('.stat-value').className='stat-value '+((isWs?(s.wsState===1):s.desiredRunning)?'ok':'');
+    el.querySelector('.stat-sub').textContent=(isWs
+        ?((s.sessionId?'会话已建立':'会话未建立')+' · 内存会话 '+esc(s.sessionCount==null?0:s.sessionCount)+' 个')
+        :('Webhook 接收 · 内存会话 '+esc(s.sessionCount==null?0:s.sessionCount)+' 个'));
   }
   el=$('stat-token');
   if(el){
@@ -412,8 +418,9 @@ function paintStatus(s){
     if(!sameVer&&wv&&dv)verTxt+='（点「立即切换版本」可马上生效）';
     var rows=[
       ['运行环境与版本',verTxt,sameVer?'ok':'warn'],
+      ['事件接收方式',isWs?'WebSocket 网关长连接（DO 常驻计费）':'Webhook（请求驱动，空闲不计持续时间）',isWs?'warn':'ok'],
       ['API 域名',s.apiBase||'—',''],
-      ['会话 ID',s.sessionId||'尚未建立（还没成功登录过）',''],
+      ['会话 ID',s.sessionId||(isWs?'尚未建立（还没成功登录过）':'不适用（Webhook 模式无会话）'),''],
       ['活跃模型',s.aiModel||'未选择',s.aiModel?'ok':'bad'],
       ['并发上限',lim&&lim.max_concurrency?('每 5 秒 '+lim.max_concurrency+' 个会话'):'—',''],
       ['配额等待至',waiting?(fmtClock(s.quotaWaitUntil)+'（还有 '+fmtDur(s.quotaWaitUntil-now)+'）'):'无',waiting?'warn':''],
@@ -594,7 +601,9 @@ var FIELDS=[
     {key:'appId',label:'QQ AppID',type:'text',ph:'机器人 AppID',required:true},
     {key:'secret',label:'QQ Secret',type:'password',ph:'机器人密钥',secret:true,required:true},
     {key:'sandbox',label:'沙箱环境',type:'select',options:[['0','否（正式环境）'],['1','是（沙箱环境）']],
-      hint:'机器人未上线或已下架时只能连沙箱，正式环境会拒绝鉴权（关闭码 4914）'}
+      hint:'机器人未上线或已下架时只能连沙箱，正式环境会拒绝鉴权（关闭码 4914）'},
+    {key:'transport',label:'事件接收方式',type:'select',options:[['','自动（回调验证通过后走 Webhook）'],['webhook','强制 Webhook'],['ws','WebSocket 网关长连接（旧）']],
+      hint:'Webhook 不回连网关，处理完就休眠，Durable Object 持续时间≈0；选它要先去 QQ 开放平台把「事件订阅」改成 Webhook，地址填 https://你的域名/qq/webhook。自动模式下平台校验通过一次后会自动切过来。WebSocket 会 24 小时占用一个 DO，持续计费'}
   ]},
   {id:'behavior',icon:IX.chat,title:'对话行为',desc:'回复方式与上下文长度',items:[
     {key:'systemPrompt',label:'系统提示词',type:'textarea',ph:'你是一个友好、靠谱的 QQ 机器人助手……',wide:true},

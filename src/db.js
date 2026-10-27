@@ -20,6 +20,11 @@ export const CONFIG_FIELDS = {
   toolCalling: { type: 'flag' },
   voiceLang: { type: 'string', max: 8 },
   voiceGain: { type: 'string', max: 4 },
+  // 事件接收方式：''（自动）/ 'webhook' / 'ws'
+  // 自动 = 平台回调地址验证通过过（webhookVerifiedAt 有值）就走 Webhook，否则保持旧的长连接
+  transport: { type: 'string', max: 8 },
+  // QQ 开放平台校验回调地址成功的时间戳（由 Worker 在 op=13 时写入，后台不展示）
+  webhookVerifiedAt: { type: 'string', max: 32 },
   doVersion: { type: 'string', max: 32 },
 };
 
@@ -486,7 +491,7 @@ function validateField(key, spec, raw) {
     }
     default:
       if (value.length > spec.max) return { error: `${key} 长度不能超过 ${spec.max}` };
-      return { value };
+      return { value: String(value) };
   }
 }
 

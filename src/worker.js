@@ -63,6 +63,7 @@ import {
   checkRecoveryToken,
 } from './utils/security.js';
 import { redact } from './utils/redact.js';
+import { signValidation, verifyWebhookSignature } from './utils/qq-sign.js';
 
 export { QQBotDO } from './qq-bot-do.js';
 export { RateLimiter } from './rate-limit-do.js';
@@ -241,6 +242,96 @@ async function handleLogin(request, env, ip) {
     200,
     { 'Set-Cookie': sessionCookie(session.id, session.maxAge) }
   );
+}
+
+/**
+ * QQ 开放平台 Webhook 入口（POST /qq/webhook）
+ *
+ * 为什么走 Webhook 而不是网关长连接：
+ * QQBotDO 用出站 WebSocket 连网关时，Cloudflare 会对 ws.accept() 的对象整段连接时长计费
+ * （官方：Calling accept() on a WebSocket incurs duration charges for the entire time
+ * the WebSocket is connected），而且出站 WebSocket 不支持 Hibernation API。
+ * 改成 Webhook 后 QQBotDO 不再持有任何长连接，处理完事件就能休眠，持续时间≈0。
+ *
+ * 流程：读原始字节 → 验 Ed25519 签名 → op13 回签名 / op0 交给 DO → 立刻 ACK
+ * QQ 要求 3 秒内响应，否则会重试，所以业务一律丢给 DO 的 waitUntil 异步跑。
+ */
+async function handleQqWebhook(request, env) {
+  if (request.method !== 'POST') {
+    return new Response('Method Not Allowed', { status: 405, headers: { Allow: 'POST' } });
+  }
+  // 必须拿原始字节验签，先 clone 一份给后面解析用
+  const body = new Uint8Array(await request.arrayBuffer());
+
+  let cfg;
+  try {
+    cfg = await getConfig(env);
+  } catch (err) {
+    console.error('webhook: getConfig failed:', redact(err && err.stack ? err.stack : err));
+    return jsonFail(503, 'config_unavailable', '配置读取失败');
+  }
+  const secret = cfg.secret || '';
+
+  let payload = null;
+  try {
+    payload = JSON.parse(new TextDecoder().decode(body));
+  } catch {
+    return jsonFail(400, 'bad_payload', '请求体不是合法 JSON');
+  }
+  const op = Number(payload && payload.op);
+
+  // op=13：开放平台校验回调地址，必须用私钥对 event_ts + plain_token 签名后原样返回
+  if (op === 13) {
+    const d = payload.d || {};
+    if (!secret) return jsonFail(503, 'no_secret', '尚未配置 Secret');
+    try {
+      const signature = await signValidation(secret, d.event_ts, d.plain_token);
+      // 记下「平台已校验通过」：DO 的自动模式据此把长连接停掉，改走 Webhook
+      Promise.resolve()
+        .then(() => saveConfig(env, { webhookVerifiedAt: String(Date.now()) }))
+        .then(() => callBot(env, 'reload').catch(() => {}))
+        .catch((err) => console.warn('webhook: 记录校验时间失败', redact(String(err && err.message))));
+      return jsonResult({ plain_token: d.plain_token, signature });
+    } catch (err) {
+      console.error('webhook: signValidation failed:', redact(err && err.stack ? err.stack : err));
+      return jsonFail(500, 'sign_failed', '回调地址验证签名失败');
+    }
+  }
+
+  if (!secret) return jsonFail(503, 'no_secret', '尚未配置 Secret');
+
+  // 其余事件一律验签，防止伪造推送
+  const ok = await verifyWebhookSignature({
+    secret,
+    signature: request.headers.get('X-Signature-Ed25519') || '',
+    timestamp: request.headers.get('X-Signature-Timestamp') || '',
+    body,
+  }).catch(() => false);
+  if (!ok) {
+    console.warn('webhook: 签名校验失败，已丢弃');
+    return jsonFail(401, 'bad_signature', '签名校验失败');
+  }
+
+  if (op !== 0) {
+    // 心跳/鉴权类 opcode 在 Webhook 模式下没有意义，直接 ACK 掉
+    return jsonResult({ op: 12, d: {} });
+  }
+
+  // 转给 QQBotDO；DO 内部 waitUntil 异步处理，这里不等结果，保证 3 秒内回 ACK
+  try {
+    const stub = botStub(env);
+    const res = await stub.fetch('https://qqbot/event', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: new TextDecoder().decode(body),
+      signal: AbortSignal.timeout(2500),
+    });
+    if (!res.ok) console.error('webhook: DO /event HTTP', res.status);
+  } catch (err) {
+    // 超时或 DO 抖动都不影响 ACK：QQ 只关心我们有没有收下
+    console.error('webhook: 转发 DO 失败:', redact(String(err && err.message ? err.message : err)));
+  }
+  return jsonResult({ op: 12, d: {} });
 }
 
 async function handleApi(request, env, url) {
@@ -761,8 +852,9 @@ async function doStatuses(env, data) {
   const chatN = await count('SELECT COUNT(DISTINCT scope_id) AS n FROM chat_log');
   const bound = (ns) => !!(ns && typeof ns.idFromName === 'function');
   const running = !!(data && data.running);
+  const byWebhook = !!(data && data.transport === 'webhook');
   return [
-    { name: 'QQ_BOT', cls: 'QQBotDO', unit: '每版本 1 个', instances: 1, state: running ? '运行中' : '已停止', ok: running, note: '网关连接 / 消息分发' },
+    { name: 'QQ_BOT', cls: 'QQBotDO', unit: '每版本 1 个', instances: 1, state: running ? '运行中' : '已停止', ok: running, note: byWebhook ? 'Webhook 事件分发（空闲休眠）' : '网关连接 / 消息分发' },
     { name: 'RATE_LIMITER', cls: 'RateLimiter', unit: '按 IP 创建', instances: null, state: bound(env.RATE_LIMITER) ? '已绑定' : '未绑定', ok: bound(env.RATE_LIMITER), note: '登录 / 接口限流' },
     { name: 'CHAT', cls: 'ChatDO', unit: '每会话 1 个', instances: chatN, state: bound(env.CHAT) ? '已绑定' : '未绑定', ok: bound(env.CHAT), note: '对话历史 + 模型调用' },
     { name: 'WORK', cls: 'WorkDO', unit: '每会话 1 个', instances: workN, state: bound(env.WORK) ? '已绑定' : '未绑定', ok: bound(env.WORK), note: '工具执行 + /工作 任务清单' },
@@ -773,6 +865,17 @@ async function doStatuses(env, data) {
 async function handle(request, env) {
   const url = new URL(request.url);
   const path = url.pathname;
+
+  // QQ 开放平台的事件推送：必须在所有鉴权/建表逻辑之前处理
+  // （QQ 不带任何 Cookie，也要尽快 ACK，3 秒内不响应会被重试）
+  if (path === '/qq/webhook') {
+    try {
+      return await handleQqWebhook(request, env);
+    } catch (err) {
+      console.error('webhook unhandled:', redact(err && err.stack ? err.stack : err));
+      return jsonFail(500, 'internal_error', '服务器内部错误');
+    }
+  }
 
   const icon = ICON_ROUTES[path];
   if (icon) {
