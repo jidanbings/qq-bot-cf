@@ -289,14 +289,100 @@ export class QQBotDO {
   }
 
   /**
-   * 探测平台当前用的是哪种推送方式。
+   * 真正去探测平台当前的推送方式。
    *
-   * 只在 Webhook 模式下有意义（长连接模式靠收到 WS 事件就能自证）。
-   * 做法：向 /gateway/bot 取网关地址，看能否拿到 —— 但这并不能区分平台配置，
-   * 所以真正可靠的判据是「最近有没有收到 /event 推送」：
-   *   - 近期有推送 → 平台是 Webhook
-   *   - 近期没有   → 很可能已切回 WS（或只是没人说话）
-   * 因此这里只负责给出「建议」，并附带两条证据供后台展示与用户判断。
+   * QQ 开放平台**没有提供查询推送方式的 API**（文档里只有「配置回调地址」的单向操作），
+   * 所以只能靠行为探测：**主动去连一次网关**。
+   *   - 平台是 WebSocket → 连得上，能收到 HELLO/READY
+   *   - 平台已切 Webhook → 网关连接会被拒绝或立刻断开（平台不会往长连接推事件）
+   *
+   * 这是「重新检测」按钮的实现：探到 ws 就真的切回 ws；探不到就保持 webhook 并说明原因。
+   */
+  async probePlatform() {
+    const out = {
+      before: this.transportName(),
+      probed: false,
+      wsReachable: false,
+      transport: this.transportName(),
+      reason: '',
+    };
+    if (!this.config || !this.config.appId || !this.config.secret) {
+      out.reason = 'AppID / Secret 未配置，无法探测';
+      return out;
+    }
+
+    let token;
+    try {
+      token = await this.getToken();
+    } catch (e) {
+      out.reason = `取 token 失败：${e.message}`;
+      return out;
+    }
+
+    // 1) 先问网关要地址 —— 这一步和推送方式无关，仅用来确认凭据可用
+    let gwUrl = '';
+    try {
+      const res = await fetch(`${this.apiBase()}/gateway/bot`, {
+        headers: { Authorization: `QQBot ${token}`, 'User-Agent': 'qq-bot-cf/1.0' },
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!res.ok) {
+        out.reason = `取网关地址失败：HTTP ${res.status}`;
+        return out;
+      }
+      const data = await res.json();
+      gwUrl = data.url || '';
+      if (!gwUrl) {
+        out.reason = '网关返回空地址';
+        return out;
+      }
+      out.sessionLeft = data?.session_start_limit?.remaining ?? null;
+    } catch (e) {
+      out.reason = `取网关地址异常：${e.message}`;
+      return out;
+    }
+
+    // 2) 真连一次，看能否握手成功
+    out.probed = true;
+    try {
+      const httpUrl = gwUrl.replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:');
+      const ac = new AbortController();
+      const timer = setTimeout(() => ac.abort(), 10000);
+      let resp;
+      try {
+        resp = await fetch(httpUrl, { headers: { Upgrade: 'websocket' }, signal: ac.signal });
+      } finally {
+        clearTimeout(timer);
+      }
+      const ws = resp.webSocket;
+      if (ws) {
+        // 能拿到 webSocket 就说明网关接受连接 → 平台此刻在用 WebSocket
+        out.wsReachable = true;
+        try {
+          ws.accept();
+          ws.close(1000, 'Probe');
+        } catch {}
+      } else {
+        await resp.body?.cancel();
+        out.reason = `网关拒绝升级：HTTP ${resp.status}`;
+      }
+    } catch (e) {
+      out.reason = `连接网关异常：${e.message}`;
+    }
+
+    // 3) 按探测结果落定
+    if (out.wsReachable) {
+      await this.markPlatformWs('探测到网关可连');
+      out.transport = 'ws';
+      out.reason = '网关可连，判定平台在用 WebSocket';
+    } else {
+      out.transport = this.transportName();
+    }
+    return out;
+  }
+
+  /**
+   * 仅报告当前状态（不探测）。给不需要真连网关的场景用。
    */
   async detectPlatform() {
     const now = Date.now();
@@ -307,7 +393,6 @@ export class QQBotDO {
       platformMode: this.config.platformMode || '(未设置)',
       lastEventAt: lastEvent || null,
       sinceEventMs: sinceEvent,
-      // 24 小时内没有任何推送，且本对象没在跑长连接 → 提示可能已切回
       suggestion:
         this.transportName() === 'webhook' && sinceEvent !== null && sinceEvent > 24 * 60 * 60 * 1000
           ? 'ws'
@@ -392,10 +477,10 @@ export class QQBotDO {
         return Response.json({ ok: true, t });
       }
       case '/detect-platform': {
-        // 后台「重新检测」：探测平台当前推送方式，并在用户确认后切换
-        // 为什么需要手动触发：Webhook 模式下本对象不连网关，收不到 WS 事件，
-        // 平台切回 WebSocket 时没有任何信号能自动发现。
-        const action = url.searchParams.get('action') || 'detect';
+        // 后台「重新检测」：真的去连一次网关，探测平台当前推送方式。
+        // 为什么必须手动触发：Webhook 模式下本对象不连网关、收不到 WS 事件，
+        // 平台切回 WebSocket 时没有任何被动信号能自动发现。
+        const action = url.searchParams.get('action') || 'probe';
         if (action === 'to-ws') {
           await this.markPlatformWs('后台手动切回');
           return Response.json({ ok: true, transport: this.transportName(), switched: 'ws' });
@@ -404,8 +489,13 @@ export class QQBotDO {
           await this.markPlatformWebhook('后台手动切换');
           return Response.json({ ok: true, transport: this.transportName(), switched: 'webhook' });
         }
-        const info = await this.detectPlatform();
-        return Response.json({ ok: true, ...info });
+        if (action === 'status') {
+          // 只读当前状态，不连网关
+          return Response.json({ ok: true, ...(await this.detectPlatform()) });
+        }
+        // 默认：真探测（会尝试连一次网关）
+        const probe = await this.probePlatform();
+        return Response.json({ ok: true, ...probe });
       }
       case '/group-manage': {
         // 后台「群管理」：群资料 + 机器人群内状态 + 禁言状态，各自容错（白名单权限可能只有其一）

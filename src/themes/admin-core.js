@@ -845,11 +845,16 @@ function bindTransportCards(){
   if(det){
     det.addEventListener('click',function(){
       busy(det,true);
+      // 真的去连一次网关：连得上 = 平台在用 WebSocket，连不上 = 仍是 Webhook
       api('POST','/api/detect-platform',{}).then(function(d){
         if(!d)return;
-        var tip='当前：'+(d.transport==='webhook'?'Webhook':'WebSocket 长连接');
-        if(d.suggestion==='ws')tip+='　平台可能已切回 WebSocket，点「强制切回长连接」';
-        toast(tip,'ok');
+        if(d.wsReachable){
+          toast('检测到网关可连，已切回 WebSocket 长连接','ok');
+        }else if(d.transport==='webhook'){
+          toast('网关连不上，判定平台仍是 Webhook'+(d.reason?'（'+d.reason+'）':''),'');
+        }else{
+          toast('检测完成：当前 '+(d.transport==='webhook'?'Webhook':'WebSocket'),'ok');
+        }
         return api('GET','/api/config').then(function(c){ if(c)renderConfig(c); });
       }).catch(function(e){toast(e.message,'bad');})
         .then(function(){busy(det,false);});
