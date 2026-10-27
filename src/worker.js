@@ -282,7 +282,7 @@ export async function qqValidationResponse(secret, d) {
  * 流程：读原始字节 → 验 Ed25519 签名 → op13 回签名 / op0 交给 DO → 立刻 ACK
  * QQ 要求 3 秒内响应，否则会重试，所以业务一律丢给 DO 的 waitUntil 异步跑。
  */
-async function handleQqWebhook(request, env) {
+async function handleQqWebhook(request, env, ctx) {
   if (request.method !== 'POST') {
     return new Response('Method Not Allowed', { status: 405, headers: { Allow: 'POST' } });
   }
@@ -321,11 +321,18 @@ async function handleQqWebhook(request, env) {
     if (!secret) return jsonFail(503, 'no_secret', '尚未配置 Secret');
     try {
       const res = await qqValidationResponse(secret, d);
-      // 记下「平台已校验通过」：DO 的自动模式据此把长连接停掉，改走 Webhook
-      Promise.resolve()
-        .then(() => saveConfig(env, { webhookVerifiedAt: String(Date.now()) }))
-        .then(() => callBot(env, 'reload').catch(() => {}))
-        .catch((err) => console.warn('webhook: 记录校验时间失败', redact(String(err && err.message))));
+      // 记下「平台已校验通过」：DO 的自动模式据此把长连接停掉，改走 Webhook。
+      // ⚠ 必须挂 ctx.waitUntil：响应一返回 Worker 就会被冻结，
+      // 单纯 Promise.resolve().then(...) 这样的「发后不管」不会被调度，写库会丢，
+      // 于是平台明明校验通过了、后台却一直显示「尚未验证」。
+      const markVerified = (async () => {
+        await saveConfig(env, { webhookVerifiedAt: String(Date.now()) });
+        await callBot(env, 'reload').catch(() => {});
+      })().catch((err) =>
+        console.warn('webhook: 记录校验时间失败', redact(String(err && err.message)))
+      );
+      if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(markVerified);
+      else await markVerified;
       return res;
     } catch (err) {
       console.error('webhook: signValidation failed:', redact(err && err.stack ? err.stack : err));
@@ -897,7 +904,7 @@ async function doStatuses(env, data) {
   ];
 }
 
-async function handle(request, env) {
+async function handle(request, env, ctx) {
   const url = new URL(request.url);
   const path = url.pathname;
 
@@ -905,7 +912,7 @@ async function handle(request, env) {
   // （QQ 不带任何 Cookie，也要尽快 ACK，3 秒内不响应会被重试）
   if (path === '/qq/webhook') {
     try {
-      return await handleQqWebhook(request, env);
+      return await handleQqWebhook(request, env, ctx);
     } catch (err) {
       console.error('webhook unhandled:', redact(err && err.stack ? err.stack : err));
       return jsonFail(500, 'internal_error', '服务器内部错误');
@@ -996,9 +1003,9 @@ async function handle(request, env) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     try {
-      return await handle(request, env);
+      return await handle(request, env, ctx);
     } catch (err) {
       if (err instanceof HttpError) return jsonFail(err.status, err.code, err.message);
       console.error('Unhandled error:', err && err.stack ? err.stack : err);
