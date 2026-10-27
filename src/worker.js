@@ -1013,6 +1013,10 @@ export default {
     }
   },
 
+  /**
+   * cron 触发器已移除（见 wrangler.toml 注释），保活与提醒全部由 DO 的 alarm 驱动。
+   * 保留这个 handler 是为了「有人在 Cloudflare 后台手动加回 cron」时不至于报错。
+   */
   async scheduled(event, env, ctx) {
     ctx.waitUntil(ensureBot(env));
   },

@@ -165,12 +165,35 @@ export class QQBotDO {
         // Webhook 模式不建长连接（不计持续时间）。running 语义退化为「是否接收事件」，
         // 让后台「运行中/已停止」的展示保持不变。
         if (!this.isWsTransport()) this.running = this.desiredRunning;
+        // 构造函数是所有唤醒的必经之路（Webhook 每次事件、后台查状态、WS 首次拉起、
+        // alarm 到点），在这里补排 alarm 就能摆脱对「每分钟 cron 排期」的依赖。
+        //
+        // ⚠ 但必须先看有没有已排的 alarm：官方文档明确提醒，被 alarm 唤醒时
+        // 构造函数先于 alarm() 执行，此时若直接 setAlarm 会覆盖掉正要触发的那一个。
+        // 只在「当前没有 alarm」时补排，才安全。
+        await this.ensureAlarmScheduled().catch(() => {});
+        // 存储清理：没有 cron 兜底了，改成「距上次清理超过 24 小时才做」，
+        // 避免每次唤醒都扫一遍存储
+        if (state && typeof state.waitUntil === 'function') {
+          state.waitUntil(this.pruneDaily());
+        }
         if (this.desiredRunning && this.isWsTransport()) await this.startBot();
       } catch (e) {
         this.lastError = `Init: ${e.message}`;
         this.logger.error(`DO init failed: ${e.message}`);
       }
     });
+  }
+
+  /** 每天最多清理一次过期会话（替代原来每分钟 cron 里的清扫） */
+  async pruneDaily() {    try {
+      const last = Number(await this.state.storage.get('pruned_at')) || 0;
+      if (Date.now() - last < 24 * 60 * 60 * 1000) return;
+      await this.pruneStoredSessions();
+      await this.state.storage.put('pruned_at', Date.now());
+    } catch (e) {
+      this.logger.warn(`pruneDaily failed: ${e.message}`);
+    }
   }
 
   /**
@@ -237,6 +260,9 @@ export class QQBotDO {
         if (!this._eventAtSaved || this.lastEventAt - this._eventAtSaved > 60000) {
           this._eventAtSaved = this.lastEventAt;
           this.state.storage.put('last_event_at', this.lastEventAt).catch(() => {});
+          // 顺带补排 alarm：每 60 秒最多一次，成本可忽略，
+          // 但能保证「只要有人在用，alarm 一定不会被漏排」
+          this.scheduleNextAlarm().catch(() => {});
         }
         const t = String(payload.t || '');
         const d = payload.d || {};
@@ -2805,6 +2831,22 @@ export class QQBotDO {
       return when;
     } catch (e) {
       this.logger.warn(`scheduleNextAlarm failed: ${e.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * 只在「当前没有 alarm」时补排一个。
+   * 构造函数里必须走这个而不是 scheduleNextAlarm()：被 alarm 唤醒时构造函数先跑，
+   * 直接 setAlarm 会覆盖掉正要触发的那条，等于把它往后推。
+   */
+  async ensureAlarmScheduled() {
+    try {
+      const existing = await this.state.storage.getAlarm();
+      if (existing != null) return existing;
+      return await this.scheduleNextAlarm();
+    } catch (e) {
+      this.logger.warn(`ensureAlarmScheduled failed: ${e.message}`);
       return null;
     }
   }

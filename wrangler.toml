@@ -48,18 +48,21 @@ keep_vars = true
 preview_urls = false
 workers_dev = false
 
-# 兜底巡检：每 6 小时一次（每天 4 次）。
+# 不需要 cron 触发器。
 #
-# 早期是每分钟一次，因为机器人靠 WebSocket 长连接在线，掉线要立刻拉起。
-# 改走 Webhook 之后没有连接可守，这个 cron 只剩两个兜底职责：
-#   1. 部署新版本后，给新 DO 重新排一次定时提醒的 alarm
-#      （alarm 是挂在 DO 实例上的，新版本=新实例=没排过）
-#   2. 后台改配置时 /reload 通知万一丢了，靠这里在 6 小时内补上
-# 定时提醒本身由 DO alarm 精确驱动，不再依赖 cron 轮询。
+# 早期靠每分钟 cron 做保活看门狗（WebSocket 掉线要立刻拉起），所以曾经是
+# crons = ["* * * * *"]，每天固定 1,440 次 Worker + DO 请求。
 #
-# 本地调试或不想让它自动巡检时，可以把这段注释掉。
-[triggers]
-crons = ["0 */6 * * *"]
+# 现在两件事都改由 Durable Object 自己驱动：
+#   - 定时提醒：新提醒入库时 setAlarm 到点，精确到秒
+#   - WS 模式自检：ScheduleNextAlarm 保底 60 秒一次（断线/心跳超时/配额恢复）
+#   - 部署后新版本 DO：构造函数里检查并补排 alarm
+#   - 会话清理：构造函数里「距上次超过 24 小时」才扫一次
+# 因此 cron 已无职责，删掉可省下每天 1,440 次请求。
+#
+# 想临时恢复巡检，取消下面这段的注释即可。
+# [triggers]
+# crons = ["0 */6 * * *"]
 
 [durable_objects]
 bindings = [
