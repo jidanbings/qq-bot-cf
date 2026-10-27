@@ -219,7 +219,9 @@ function banners(s){
     out.push(['warn','连续鉴权失败 '+s.identifyFailures+' 次',
       '网关持续拒绝 IDENTIFY（op9）。机器人还没上线时，到「机器人配置」把「沙箱环境」打开再试。']);
   }
-  if(!s.running&&!out.length)out.push(['info','机器人已停止','点下面「启动」恢复运行。自动保活'+(s.desiredRunning?'仍在等待':'已关闭')+'。']);
+  if(!s.running&&!out.length)out.push(['info',isWs?'机器人已停止':'机器人已停用',
+    isWs?'点下面「启动」恢复运行。自动保活'+(s.desiredRunning?'仍在等待':'已关闭')+'。'
+        :'点下面「启动」恢复接收消息。']);
   // 切到 Webhook 后如果一直收不到事件，说明域名不通 / 回调地址配错，得明确提示
   if(!isWs&&s.desiredRunning&&!s.lastEventAt){
     out.push(['warn','Webhook 还没收到过任何事件',
@@ -382,9 +384,12 @@ function paintStatus(s){
 
   var el=$('stat-bot');
   if(el){
-    el.querySelector('.stat-value').innerHTML=(s.running?'<i class="dot ok"></i>运行中':'<i class="dot bad"></i>已停止');
+    el.querySelector('.stat-value').innerHTML=(s.running
+      ?'<i class="dot ok"></i>'+(isWs?'运行中':'已启用')
+      :'<i class="dot bad"></i>'+(isWs?'已停止':'已停用'));
     el.querySelector('.stat-value').className='stat-value '+(s.running?'ok':'bad');
-    el.querySelector('.stat-sub').textContent='自动保活'+(s.desiredRunning?'已开启':'已关闭')
+    // Webhook 模式没有常驻连接，说「自动保活」会误导，改成「接收开关」
+    el.querySelector('.stat-sub').textContent=(isWs?'自动保活':'接收开关')+(s.desiredRunning?'已开启':'已关闭')
       +(s.lastStartAt?' · 启动于 '+fmtClock(s.lastStartAt):'');
   }
   el=$('stat-ws');
@@ -417,7 +422,9 @@ function paintStatus(s){
   }
 
   var hint=$('start-hint');
-  if(hint)hint.textContent=s.desiredRunning?'自动保活已开启，断了会自己重连':'自动保活已关闭';
+  if(hint)hint.textContent=isWs
+    ?(s.desiredRunning?'自动保活已开启，断了会自己重连':'自动保活已关闭')
+    :(s.desiredRunning?'接收开关已开启，有消息就会处理':'接收开关已关闭，收到消息也不会处理');
 
   var d=$('details');
   if(d){
@@ -657,8 +664,8 @@ function transportCards(){
      pros:['机器人只在你发消息时才醒，空闲不产生 GB-s','不登录网关，不消耗会话配额','没有长连接，也就没有心跳超时、重连风暴这类问题'],
      cons:['需要在 QQ 开放平台填回调地址，且域名要能被 QQ 访问到','回调地址配错或域名不通就收不到消息（后台会告警提示）']},
     {key:'ws',name:'WebSocket 网关长连接',tag:'当前生效 / 24 小时常驻',
-     pros:['不需要公网回调地址，配好 AppID / Secret 就能用','平台侧不支持 Webhook 时可以继续用这个','断线、心跳超时、配额到点都会自动恢复：每 60 秒自检一次，无需人工介入'],
-     cons:['Durable Object 必须 24 小时常驻，约 10,800 GB-s/天，占免费额度（13,000/天）的 83%','会话失效后需要重新鉴权（IDENTIFY），每次都会扣一次当日会话配额','断线期间靠 RESUME 补发；若会话已失效只能重新鉴权，中间那几秒的消息补不回来']}
+     pros:['不需要公网回调地址，配好 AppID / Secret 就能用','平台侧不支持 Webhook 时可以继续用这个','断线、心跳超时、配额到点都会自动恢复：每 60 秒自检一次，无需人工介入','断线重连走 RESUME：会话与 seq 已落盘，重启后仍能续上，漏掉的事件由网关补发'],
+     cons:['Durable Object 必须 24 小时常驻，约 10,800 GB-s/天，占免费额度（13,000/天）的 83%','会话失效（网关判 4006/4007）时才需重新鉴权，每次扣一次当日会话配额']}
   ];
 
   h+='<div class="tp-banner '+(isWebhook?'ok':'info')+'">'

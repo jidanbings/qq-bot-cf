@@ -929,8 +929,13 @@ async function doStatuses(env, data) {
   const bound = (ns) => !!(ns && typeof ns.idFromName === 'function');
   const running = !!(data && data.running);
   const byWebhook = !!(data && data.transport === 'webhook');
+  // Webhook 模式下没有常驻连接，running 只代表「接收开关开着」。
+  // 这时写「运行中」会让人以为还有常驻实例在跑，所以按模式换措辞。
+  const botState = byWebhook
+    ? (running ? '已启用（按需唤醒）' : '已停用')
+    : (running ? '运行中（常驻连接）' : '已停止');
   return [
-    { name: 'QQ_BOT', cls: 'QQBotDO', unit: '每版本 1 个', instances: 1, state: running ? '运行中' : '已停止', ok: running, note: byWebhook ? 'Webhook 事件分发（空闲休眠）' : '网关连接 / 消息分发' },
+    { name: 'QQ_BOT', cls: 'QQBotDO', unit: '每版本 1 个', instances: 1, state: botState, ok: running, note: byWebhook ? 'Webhook 事件分发（空闲休眠）' : '网关连接 / 消息分发' },
     { name: 'RATE_LIMITER', cls: 'RateLimiter', unit: '按 IP 创建', instances: null, state: bound(env.RATE_LIMITER) ? '已绑定' : '未绑定', ok: bound(env.RATE_LIMITER), note: '登录 / 接口限流' },
     { name: 'CHAT', cls: 'ChatDO', unit: '每会话 1 个', instances: chatN, state: bound(env.CHAT) ? '已绑定' : '未绑定', ok: bound(env.CHAT), note: '对话历史 + 模型调用' },
     { name: 'WORK', cls: 'WorkDO', unit: '每会话 1 个', instances: workN, state: bound(env.WORK) ? '已绑定' : '未绑定', ok: bound(env.WORK), note: '工具执行 + /工作 任务清单' },

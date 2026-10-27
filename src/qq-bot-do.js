@@ -408,6 +408,42 @@ export class QQBotDO {
     return this.transportName() === 'ws';
   }
 
+  /**
+   * 网关会话状态（sessionId + seq）落盘。
+   *
+   * 为什么必须持久化：QQ 网关支持 RESUME —— 带上 session_id 和最后收到的 seq，
+   * 网关会自动补发这之后漏掉的事件。但 sessionId / seq 原来只存在内存里，
+   * DO 一旦被驱逐（Webhook 模式频繁休眠、或部署重启），重启后就没有了，
+   * 只能重新 IDENTIFY（新建会话），于是断线期间的消息补不回来，
+   * 还会额外消耗一次会话配额。
+   *
+   * 落盘之后，重启仍能走 RESUME，漏的事件由网关补发 —— 这才是真正的「不丢消息」。
+   * 写操作低频（只在 READY/RESUMED/每收到事件时），成本可忽略。
+   */
+  saveGwState() {
+    try {
+      const payload = { sessionId: this.sessionId || '', seq: this.seq ?? null, at: Date.now() };
+      this.state.storage.put('gw_state', payload).catch(() => {});
+    } catch {}
+  }
+
+  async loadGwState() {
+    if (this.sessionId) return;
+    try {
+      const saved = await this.state.storage.get('gw_state');
+      if (!saved) return;
+      // 会话超过 24 小时基本已失效，没必要再拿它去 RESUME（会被 4006 拒掉）
+      if (saved.at && Date.now() - Number(saved.at) > 24 * 60 * 60 * 1000) return;
+      if (saved.sessionId) {
+        this.sessionId = String(saved.sessionId);
+        this.resumeSeq = saved.seq == null ? null : Number(saved.seq);
+        this.logger.info(`已恢复网关会话 ${this.sessionId.slice(0, 8)}... @ seq=${this.resumeSeq}`);
+      }
+    } catch (e) {
+      this.logger.warn(`loadGwState failed: ${e.message}`);
+    }
+  }
+
   isAlive() {
     if (!this.isWsTransport()) return !!this.desiredRunning;
     const s = this.ws && this.ws.readyState;
@@ -834,6 +870,9 @@ export class QQBotDO {
     this.reconnectAttempt = 0;
     try {
       await this.state.storage.put('desired_running', true);
+      // 先把上次的网关会话捞回来：有就能走 RESUME 续上，不用重新 IDENTIFY，
+      // 断线期间漏掉的事件由网关补发（这是「不丢消息」的关键）
+      await this.loadGwState().catch(() => {});
       const token = await this.getToken();
       if (!this.running || generation !== this.generation) return;
       const gwRes = await fetch(`${this.apiBase()}/gateway/bot`, {
@@ -883,6 +922,8 @@ export class QQBotDO {
   }
 
   teardown() {
+    // 断开前先把 seq 存下来：下次 RESUME 要带上它，网关才会补发这之后漏掉的事件
+    if (this.sessionId && this.seq != null) this.saveGwState();
     this.generation++;
     this.running = false;
     this.connecting = false;
@@ -911,8 +952,11 @@ export class QQBotDO {
     const ws = this.ws;
     this.ws = null;
     this.connecting = false;
-    this.resumeSeq = this.seq;
+    // 记下断线时的位置：优先用内存里的 seq；若内存已丢（对象被驱逐后重建），
+    // 用之前落盘的 resumeSeq 兜住，保证 RESUME 能带上正确的 seq
+    this.resumeSeq = this.seq != null ? this.seq : this.resumeSeq;
     this.seq = null;
+    if (this.sessionId && this.resumeSeq != null) this.saveGwState();
     const nextGeneration = ++this.generation;
     if (ws) { try { ws.close(1000, 'Reconnecting'); } catch {} }
     
@@ -1069,13 +1113,26 @@ export class QQBotDO {
     }
 
     if (op === QQ_OPCODE.DISPATCH) {
-      if (s != null) this.seq = s;
+      if (s != null) {
+        this.seq = s;
+        // seq 是 RESUME 补发的起点，必须尽量新。但每条事件都写存储太浪费，
+        // 所以节流成「最多每 5 秒落一次盘」；真正断线时 teardown/scheduleReconnect
+        // 还会再补一次，所以最坏也只丢几秒的精度。
+        const now = Date.now();
+        if (!this._seqSavedAt || now - this._seqSavedAt > 5000) {
+          this._seqSavedAt = now;
+          this.saveGwState();
+        }
+      }
       if (t === 'READY') {
         this.reconnectAttempt = 0;
         this.identifyFailures = 0;
         this.lastError = null;
         this.sessionId = d?.session_id || null;
         this.logger.info(`Bot ready: ${d?.user?.username} session=${this.sessionId || 'none'}`);
+        // 把会话与 seq 落盘：DO 被驱逐后重启还能用 RESUME 续上，
+        // 不用重新 IDENTIFY，中间漏的事件也能补发
+        this.saveGwState();
         // 能从网关拿到 READY，说明平台此刻用的是 WebSocket 推送。
         // 如果是「平台已切回 WS 但本地还记着 webhook」，这一下就能纠正过来。
         this.markPlatformWs('网关 READY').catch(() => {});
@@ -1084,6 +1141,7 @@ export class QQBotDO {
         this.identifyFailures = 0;
         this.lastError = null;
         this.logger.info('Session resumed');
+        this.saveGwState();
         this.markPlatformWs('网关 RESUMED').catch(() => {});
       } else if (t === 'GROUP_AT_MESSAGE_CREATE' || t === 'GROUP_MESSAGE_CREATE' || t === 'C2C_MESSAGE_CREATE') {
         // 收到真实消息事件 —— 平台确实在用 WebSocket
