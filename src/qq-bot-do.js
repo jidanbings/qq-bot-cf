@@ -988,6 +988,10 @@ export class QQBotDO {
   async processMessage(key, job) {
     const { isC2C, userId, scopeId, content, imageUrl, msgId } = job;
 
+    // Webhook 模式下可能是全新实例：先把这条消息的 msg_seq 计数从存储里捞回来，
+    // 否则第一次回复又会从 1 开始被 QQ 判为重复
+    await this.loadMsgSeq(msgId);
+
     // 梗图缓存（首次读取 D1，之后走内存；失败不阻塞聊天）
     await this.ensureMemes().catch(() => {});
 
@@ -1970,8 +1974,17 @@ export class QQBotDO {
     return `${this.config.systemPrompt || ''}|${this.config.imageGenModel || ''}|${this.config.toolCalling || ''}`;
   }
 
-  /** 同一 msg_id 的被动回复需要递增 msg_seq（不传默认 1，第二条起会被去重/拒绝） */
+  /**
+   * 同一 msg_id 的被动回复需要递增 msg_seq（不传默认 1，第二条起会被去重/拒绝）。
+   *
+   * ⚠ msg_seq 必须跨实例连续：Webhook 模式下每条消息都可能是一个全新的 DO 实例
+   * （处理完就休眠、下一次醒来内存全清），如果计数只在内存里，
+   * 那条消息的第二次回复会重新从 1 开始，被 QQ 当成重复发送直接拒掉。
+   * 所以这里同步写一份到存储，并在新实例里按 msg_id 懒加载。
+   */
   nextMsgSeq(msgId) {
+    if (!msgId) return 1;
+    if (!this.msgSeqMap) this.msgSeqMap = new Map();
     const n = (this.msgSeqMap.get(msgId) || 0) + 1;
     this.msgSeqMap.set(msgId, n);
     // 防胀：只留最近 100 个 msg_id 的计数（被动回复窗口只有几分钟，足够了）
@@ -1981,7 +1994,31 @@ export class QQBotDO {
         if (this.msgSeqMap.size <= 100) break;
       }
     }
+    // 落盘（不 await：sendReply 是热路径，写失败只影响极端场景下的去重，不影响发送）
+    try {
+      const storage = this.state && this.state.storage;
+      if (storage && typeof storage.put === 'function') {
+        storage.put(this.msgSeqKey(msgId), n).catch(() => {});
+      }
+    } catch {}
     return n;
+  }
+
+  msgSeqKey(msgId) {
+    return `seq:${msgId}`;
+  }
+
+  /** 新实例第一次回复某个 msg_id 时，把计数从存储里捞回来 */
+  async loadMsgSeq(msgId) {
+    if (!msgId) return;
+    if (!this.msgSeqMap) this.msgSeqMap = new Map();
+    if (this.msgSeqMap.has(msgId)) return;
+    try {
+      const storage = this.state && this.state.storage;
+      if (!storage) return;
+      const saved = Number(await storage.get(this.msgSeqKey(msgId))) || 0;
+      if (saved > 0) this.msgSeqMap.set(msgId, saved);
+    } catch {}
   }
 
   async sendReply({ isC2C, scopeId, content, msgId }) {
