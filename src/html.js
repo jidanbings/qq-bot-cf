@@ -95,9 +95,9 @@ function escapeAttribute(value) {
 
 function adminAddress(reqUrl) {
   try {
-    return escapeAttribute(new URL(reqUrl).host) + '/admin';
+    return escapeAttribute(new URL(reqUrl).host) + '/status';
   } catch {
-    return '/admin';
+    return '/status';
   }
 }
 
@@ -734,7 +734,7 @@ form.onsubmit=function(ev){
       return r.json().then(function(d){return {status:r.status,body:d,retry:retry};}).catch(function(){return {status:r.status,body:null,retry:retry};});
     })
     .then(function(res){
-      if(res.status===200&&res.body&&res.body.ok){show('登录成功，正在进入...',true);btn.textContent='进入中...';location.replace('/admin');return;}
+      if(res.status===200&&res.body&&res.body.ok){show('登录成功，正在进入...',true);btn.textContent='进入中...';location.replace('/status');return;}
       var text=(res.body&&res.body.error&&res.body.error.message)||'登录失败';
       if(res.status===429){
         locked=true;

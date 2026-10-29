@@ -69,6 +69,25 @@ import { signValidation, verifyWebhookSignature } from './utils/qq-sign.js';
 export { QQBotDO } from './qq-bot-do.js';
 export { RateLimiter } from './rate-limit-do.js';
 
+/**
+ * 校验后台传上来的 ownerKey（scope）。
+ *
+ * 这些值会直接喂给 env.AIDO.idFromName() / env.CHAT.idFromName()：
+ * 一个 DO 实例就是一份存储，任意字符串都能新开一个实例。
+ * 不校验的话，攻击者可以用超长或畸形字符串刷出大量 DO 实例。
+ *
+ * 合法形态：c2c:<用户>、group:<群>:u:<用户>、以及聊天记录用的 8 位十六进制指纹。
+ */
+function assertScope(raw) {
+  const scope = String(raw || '');
+  if (!scope) throw new HttpError(400, 'invalid_scope', '缺少 scope');
+  if (scope.length > 200) throw new HttpError(400, 'invalid_scope', 'scope 过长');
+  if (!/^[0-9a-zA-Z_:\-]{1,200}$/.test(scope)) {
+    throw new HttpError(400, 'invalid_scope', 'scope 格式不对');
+  }
+  return scope;
+}
+
 async function requireSession(request, env) {
   const id = getCookie(request, COOKIE_NAME);
   if (!id) return null;
@@ -746,8 +765,7 @@ async function handleApi(request, env, url) {
     case '/api/sandboxes/detail': {
       if (method !== 'POST') throw new HttpError(405, 'method_not_allowed', '请使用 POST');
       const body = await readJson(request);
-      const scope = String(body?.scope || '');
-      if (!scope) throw new HttpError(400, 'invalid_scope', '缺少 scope');
+      const scope = assertScope(body?.scope);
       if (!env.AIDO) throw new HttpError(503, 'no_aido', 'AiDO 未绑定');
       const stub = env.AIDO.get(env.AIDO.idFromName(scope));
       const res = await stub.fetch('https://aido/state', { method: 'POST', body: '{}' });
@@ -758,14 +776,29 @@ async function handleApi(request, env, url) {
     case '/api/sandboxes/clear': {
       if (method !== 'POST') throw new HttpError(405, 'method_not_allowed', '请使用 POST');
       const body = await readJson(request);
-      const scope = String(body?.scope || '');
-      if (!scope) throw new HttpError(400, 'invalid_scope', '缺少 scope');
+      const scope = assertScope(body?.scope);
       if (env.AIDO) {
         const stub = env.AIDO.get(env.AIDO.idFromName(scope));
         await stub.fetch('https://aido/reset', { method: 'POST', body: '{}' });
       }
       await deleteSandbox(env, scope);
       return jsonResult({ cleared: true });
+    }
+
+    /* -------- 用户记忆（ChatDO 三层：原文/摘要/事实） -------- */
+
+    case '/api/memory': {
+      if (method !== 'POST') throw new HttpError(405, 'method_not_allowed', '请使用 POST');
+      const body = await readJson(request);
+      const scope = assertScope(body?.scope);
+      if (!env.CHAT) throw new HttpError(503, 'no_chat', 'ChatDO 未绑定');
+      const stub = env.CHAT.get(env.CHAT.idFromName(scope));
+      const res = await stub.fetch('https://chat/state', {
+        method: 'POST',
+        body: JSON.stringify({ key: scope }),
+      });
+      const state = await res.json();
+      return jsonResult({ scope, scopeMasked: await maskId(scope), ...state });
     }
 
     /* -------- AI 工作区 -------- */
@@ -792,8 +825,7 @@ async function handleApi(request, env, url) {
     case '/api/workspaces/detail': {
       if (method !== 'POST') throw new HttpError(405, 'method_not_allowed', '请使用 POST');
       const body = await readJson(request);
-      const scope = String(body?.scope || '');
-      if (!scope) throw new HttpError(400, 'invalid_scope', '缺少 scope');
+      const scope = assertScope(body?.scope);
       if (!(env.WORK || env.WORKSPACE)) throw new HttpError(503, 'no_workspace', '工作区未绑定（需要 WORKSPACE 绑定）');
       const stub = (env.WORK || env.WORKSPACE).get((env.WORK || env.WORKSPACE).idFromName(scope));
       const res = await stub.fetch('https://ws/state', { method: 'POST', body: '{}' });
@@ -804,8 +836,7 @@ async function handleApi(request, env, url) {
     case '/api/workspaces/clear': {
       if (method !== 'POST') throw new HttpError(405, 'method_not_allowed', '请使用 POST');
       const body = await readJson(request);
-      const scope = String(body?.scope || '');
-      if (!scope) throw new HttpError(400, 'invalid_scope', '缺少 scope');
+      const scope = assertScope(body?.scope);
       if ((env.WORK || env.WORKSPACE)) {
         const stub = (env.WORK || env.WORKSPACE).get((env.WORK || env.WORKSPACE).idFromName(scope));
         await stub.fetch('https://ws/reset', { method: 'POST', body: '{}' });
@@ -1037,12 +1068,19 @@ async function handle(request, env, ctx) {
   }
 
   if (path === '/login' && request.method === 'GET') {
-    if (await requireSession(request, env)) return redirect('/admin');
+    // 已登录直接进后台首页，不用再看登录表单
+    if (await requireSession(request, env)) return redirect('/status');
     const nonce = randomHex(16);
     return htmlResponse(loginPage(nonce), nonce);
   }
 
-  if (path === '/admin' && request.method === 'GET') {
+  // 后台页面：/status、/config、/ai、/imagegen、/groups、/workspace、/logs
+  // 必须登录才能访问，未登录一律跳 /login（不带任何参数）。
+  const ADMIN_PATHS = new Set(['status', 'config', 'ai', 'imagegen', 'groups', 'workspace', 'logs']);
+  const seg = path.slice(1);
+  const isAdminPage =
+    request.method === 'GET' && path !== '/' && ADMIN_PATHS.has(seg) && !path.includes('/', 1);
+  if (isAdminPage) {
     if (!(await requireSession(request, env))) return redirect('/login');
     const nonce = randomHex(16);
     return htmlResponse(adminPage(nonce), nonce);

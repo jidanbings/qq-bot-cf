@@ -1,21 +1,6 @@
 # QQ Bot CF
 
-**一个不需要服务器的 QQ 机器人。**
-
-接入 QQ 开放平台，用任意 OpenAI 兼容模型在群聊和单聊里自然对话，自带可视化管理后台。全部代码跑在 Cloudflare 边缘网络上——**零服务器、零运行时依赖**：一个 Worker、五个 Durable Object、一张 D1 表，没有 VPS、没有 Docker、没有常驻进程、没有 `node_modules` 要装。
-
-```json
-"dependencies": {}
-```
-
-**没有任何运行时依赖**。生产环境只加载 Cloudflare 的 `workerd` 运行时，唯一的开发依赖是部署工具 `wrangler`。不用 Node、不用 Python、不用 Redis、不用数据库服务器——数据库是 D1（Serverless SQLite），状态是 Durable Object（自带 SQLite），语音合成是 Workers AI。
-
-**零服务器**，意味着：
-
-- 不用租 VPS，不用开端口，不用配 Nginx / 反代 / 证书
-- 不用 24 小时挂进程，不用守护脚本、不用 systemd、不用 pm2
-- 不用操心扩缩容：没人用的时候它在睡觉，**不产生费用**
-- 部署是一条命令或一次 Git push，回滚是点一下按钮
+接入 QQ 开放平台，用任意 OpenAI 兼容模型在群聊和单聊里自然对话，自带可视化管理后台。整个项目跑在 Cloudflare Workers + Durable Objects 上，`dependencies` 为空。
 
 > 🔄 **请及时 Sync fork**：上游会持续修复问题、补充配置项。在 GitHub 打开你的 fork 点 **Sync fork** 即可合并最新代码，Cloudflare 会自动重新构建部署，**密钥与数据都不会丢**。
 
@@ -192,7 +177,7 @@ GitHub 上打开你的 fork → **Sync fork** → 合并上游，Cloudflare 会�
 - **日志脱敏**：写日志前统一抹掉 `sk-` 开头的 Key、Bearer 令牌、32 位十六进制串和 JSON 里的 secret 字段
 - **标识脱敏**：会话 openid 入库前先做 SHA-256 指纹，只留 8 位十六进制，原始 openid 不落库、不入日志
 - **Webhook 验签**：回调请求走 Ed25519 验签（`X-Signature-Ed25519` + `X-Signature-Timestamp` + 原始 body），伪造推送会被 401 拒绝
-- **零运行时依赖**：`dependencies` 是空的，只有 `wrangler` 一个开发依赖。没有第三方包可被投毒，也没有需要定期升级的依赖树
+- **运行时依赖**：`dependencies` 为空，只有 `wrangler` 一个开发依赖
 
 ---
 
@@ -215,18 +200,6 @@ Worker ── 登录 / 会话 / 限流 / Webhook 验签
 ```
 
 **为什么拆这么多 DO**：慢请求（带图最长 180 秒）不会阻塞其他会话，多个会话可并行。`QQBotDO` 只管收发和调度，实际的重活分散到各个 DO 里，互不干扰。
-
-### 这套架构为什么没有服务器
-
-| 传统部署 | 本项目 |
-|---|---|
-| 租一台 VPS，装 Node / Python | 没有机器可租，代码直接在边缘节点跑 |
-| 进程必须 24 小时活着，挂了要重启 | 没有进程。收到事件才醒，处理完就睡 |
-| 自己装 PostgreSQL / Redis | D1 是 Serverless SQLite，DO 自带 SQLite |
-| Nginx 反代 + Let's Encrypt 证书 | 绑自定义域名，Cloudflare 自动签证书 |
-| 手动扩缩容 | 自动。0 请求 = 0 成本 |
-| 部署靠 SSH / Docker / CI 自建 | `git push` 或一条命令，全球 300+ 节点同步上线 |
-| 依赖树几十上百个包 | **`dependencies` 为空** |
 
 ---
 

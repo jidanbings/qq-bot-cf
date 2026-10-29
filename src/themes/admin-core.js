@@ -128,10 +128,8 @@ var META={
   ai:{title:'AI 对话',crumb:'设置 / AI 对话'},
   imagegen:{title:'生图模型',crumb:'设置 / 生图模型'},
   groups:{title:'群管理',crumb:'管理 / 群管理'},
-  reminders:{title:'定时任务',crumb:'管理 / 定时任务'},
   logs:{title:'聊天记录',crumb:'数据 / 聊天记录'},
-  workspace:{title:'任务与工作区',crumb:'管理 / 任务与工作区'},
-  sandbox:{title:'沙箱',crumb:'管理 / 沙箱（AiDO）'}
+  workspace:{title:'工作区',crumb:'管理 / 工作区'}
 };
 var currentTab='status';
 
@@ -1090,7 +1088,11 @@ function exchangeHtml(it){
   var h='<div class="msg-group" data-id="'+esc(String(it.id))+'">'
     +'<div class="msg-stamp">'+esc(fullTime(it.time))+'</div>';
   if(it.userContent)h+='<div class="msg-row me"><span class="msg-av">'+IX.user+'</span><div class="msg-bubble">'+esc(it.userContent)+'</div></div>';
-  if(it.aiReply)h+='<div class="msg-row"><span class="msg-av bot">'+IX.bot+'</span><div class="msg-bubble">'+esc(it.aiReply)+'</div></div>';
+  if(it.aiReply){
+    h+='<div class="msg-row"><span class="msg-av bot">'+IX.bot+'</span><div class="msg-bubble">'+esc(it.aiReply)+'</div></div>';
+    // 这条回复用的模型
+    if(it.model)h+='<div class="msg-model">'+esc(it.model)+'</div>';
+  }
   return h+'</div>';
 }
 
@@ -1613,117 +1615,21 @@ function onPresetClick(e){
   openAiModal(-1,{name:p.name,url:p.url,model:p.model});
 }
 
-/* ------------------------------ AI 工作区 ------------------------------ */
-
-/* ------------------------------ AiDO 沙箱管理 ------------------------------ */
-
-function showSandbox(){
-  stopStatusTimer();
-  rendered=false;
-  setActive('sandbox');
-  setTopActions('');
-  setPill('沙箱','');
-  $('wrap').innerHTML='<div class="card"><div class="card-head"><h3>沙箱（AiDO）</h3>'
-    +'<span class="hint">AI 会在需要时自动使用私有沙箱写文件，这里看每个人的文件（按用户隔离）</span>'
-    +'<button class="btn sm" id="b-sb-refresh" type="button">'+IX.refresh+'<span>刷新</span></button></div>'
-    +'<p class="muted">沙箱是独立 DO：AI 只能读写它自己的虚拟文件（最多 5000 个 / 单文件 1.9MB / 单用户总量 1GB），<b>不能发消息、不能联网、不能碰其他 DO</b>。文件按用户隔离，存在 <code>users/&lt;编号&gt;/</code> 下。</p>'
-    +'<div id="sb-list"><div class="sk-field"><span class="sk-bar sk-w60"></span></div></div></div>';
-  var btn=$('b-sb-refresh');
-  if(btn)btn.addEventListener('click',loadSandboxes);
-  loadSandboxes();
-}
-
-function loadSandboxes(){
-  var box=$('sb-list');
-  if(box)box.innerHTML='<div class="sk-field"><span class="sk-bar sk-w60"></span></div>';
-  api('GET','/api/sandboxes').then(function(d){
-    renderSandboxes((d&&d.items)||[]);
-  }).catch(function(e){
-    if(box)box.innerHTML='<p class="error-text">'+esc(e.message)+'</p>';
-  });
-}
-
-function renderSandboxes(items){
-  var box=$('sb-list');
-  if(!box)return;
-  if(!items.length){
-    box.innerHTML='<p class="muted">还没有沙箱。直接对机器人说「写一篇…保存成 a.md 发我」就会创建。</p>';
-    return;
-  }
-  var h='';
-  for(var i=0;i<items.length;i++){
-    var it=items[i];
-    h+='<div class="ws-row" data-scope="'+esc(it.scope)+'">'
-      +'<div class="ws-main"><b>'+esc(it.scopeMasked||'')+'</b>'
-      +'<small>'+esc(it.lastTask||'（还没执行过任务）')+'</small>'
-      +'<div class="ws-tags"><span class="ws-tag">'+(it.kind==='c2c'?'单聊':'群聊')+'</span>'
-      +'<span class="ws-tag">执行 '+esc(String(it.runs||0))+' 次</span>'
-      +'<span class="ws-tag">文件 '+esc(String(it.files||0))+' 个</span>'
-      +'<span class="ws-tag">'+esc(it.updatedAt?absTime(it.updatedAt):'')+'</span></div></div>'
-      +'<div class="prov-tools"><button class="btn sm" type="button" data-sb="detail">查看</button>'
-      +'<button class="btn sm" type="button" data-sb="clear">清空</button></div></div>';
-  }
-  box.innerHTML=h;
-  if(!box.__sbBound){ box.__sbBound=true; box.addEventListener('click',onSandboxClick); }
-}
-
-function onSandboxClick(e){
-  var btn=e.target&&e.target.closest?e.target.closest('button[data-sb]'):null;
-  if(!btn)return;
-  var row=btn.closest('.ws-row');
-  if(!row)return;
-  var scope=row.getAttribute('data-scope')||'';
-  var act=btn.getAttribute('data-sb');
-  if(act==='clear'){
-    if(!confirm('清空这个沙箱里的文件？'))return;
-    api('POST','/api/sandboxes/clear',{scope:scope}).then(function(){
-      toast('已清空');
-      loadSandboxes();
-    }).catch(function(err){ toast(err.message,'bad'); });
-  } else if(act==='detail'){
-    api('POST','/api/sandboxes/detail',{scope:scope}).then(function(d){
-      openSandboxDetail(d);
-    }).catch(function(err){ toast(err.message,'bad'); });
-  }
-}
-
-function openSandboxDetail(d){
-  var files=(d.files||[]).length?d.files.map(function(f){
-    var t=f.updatedAt?absTime(f.updatedAt):'';
-    return '<li><details><summary>· '+esc(f.path)+'（'+esc(String(f.bytes))+'B'+(t?' · '+esc(t):'')+'）</summary><pre class="file-pre">'+esc(String(f.content||'（无内容）'))+'</pre></details></li>';
-  }).join(''):'<li class="muted">（空）</li>';
-  var m=document.getElementById('sb-modal-mask');
-  if(!m){
-    m=document.createElement('div');
-    m.className='modal-mask';
-    m.id='sb-modal-mask';
-    m.innerHTML='<div class="modal" role="dialog" aria-modal="true"><div class="modal-head"><h3>沙箱文件</h3>'
-      +'<button class="modal-x" type="button" id="sb-modal-x" aria-label="关闭">×</button></div>'
-      +'<div class="modal-body ws-detail" id="sb-detail-body"></div></div>';
-    document.body.appendChild(m);
-    m.addEventListener('click',function(ev){
-      if(ev.target===m||ev.target.id==='sb-modal-x')m.hidden=true;
-    });
-  }
-  $('sb-detail-body').innerHTML='<div class="muted">'+esc(d.scopeMasked||'')+'</div>'
-    +'<h4>文件</h4><ul>'+files+'</ul>'
-    +'<h4>执行次数</h4><div class="muted">'+esc(String(d.runs||0))+' 次</div>';
-  m.hidden=false;
-}
+/* ------------------------------ 工作区（沙箱 + 任务 + 记忆，合并） ------------------------------ */
 
 function showWorkspace(){
   stopStatusTimer();
   rendered=false;
   setActive('workspace');
   setTopActions('');
-  setPill('任务与工作区','');
-  $('wrap').innerHTML='<div class="card"><div class="card-head"><h3>任务与工作区</h3>'
-    +'<span class="hint">/工作 让 AI 在独立 DO 里干活（按用户隔离）；下方是定时任务</span>'
+  setPill('工作区','');
+  $('wrap').innerHTML='<div class="card"><div class="card-head"><h3>工作区</h3>'
+    +'<span class="hint">每个用户一份：文件（AiDO 沙箱）、任务与笔记（/工作）、对话记忆（ChatDO 三层）</span>'
     +'<button class="btn sm" id="b-ws-refresh" type="button">'+IX.refresh+'<span>刷新</span></button></div>'
-    +'<p class="muted">用法：群里 @机器人 发 <b>/工作 帮我整理这周要做的事</b>；AI 会把任务记进工作区，之后可以 <b>/工作 列表</b> 查看。</p>'
+    +'<p class="muted">按「人」隔离：单聊 <code>c2c:&lt;用户&gt;</code>、群聊 <code>group:&lt;群&gt;:u:&lt;用户&gt;</code>。点「查看」能看到这个人的文件、任务/笔记，以及 AI 记住他的三层记忆。</p>'
     +'<div id="ws-list"><div class="sk-field"><span class="sk-bar sk-w60"></span></div></div>'
     +'<div class="card-head" style="margin-top:1.1rem"><h3>定时任务</h3><span class="hint" id="rem-count"></span></div>'
-    +'<p class="muted">群里说「明天 8 点提醒我开会」「10 分钟后提醒我喝水」就会出现在这里；到点由每分钟巡检主动发消息，重复任务自动顺延。</p>'
+    +'<p class="muted">群里说「明天 8 点提醒我开会」「10 分钟后提醒我喝水」就会出现在这里；到点主动发消息，重复任务自动顺延。</p>'
     +'<div class="prov-list" id="rem-list"><p class="muted">加载中…</p></div></div>';
   var btn=$('b-ws-refresh');
   if(btn)btn.addEventListener('click',function(){loadWorkspaces();loadReminders();});
@@ -1734,31 +1640,50 @@ function showWorkspace(){
 function loadWorkspaces(){
   var box=$('ws-list');
   if(box)box.innerHTML='<div class="sk-field"><span class="sk-bar sk-w60"></span></div>';
-  api('GET','/api/workspaces').then(function(d){
-    renderWorkspaces((d&&d.items)||[]);
-  }).catch(function(e){
-    if(box)box.innerHTML='<p class="error-text">'+esc(e.message)+'</p>';
-  });
+  // 同时拉沙箱与工作区两套索引，按 scope 合并成一个用户列表
+  Promise.all([
+    api('GET','/api/sandboxes').then(function(d){return (d&&d.items)||[];}).catch(function(){return [];}),
+    api('GET','/api/workspaces').then(function(d){return (d&&d.items)||[];}).catch(function(){return [];})
+  ]).then(function(r){ renderWorkspaces(r[0],r[1]); })
+    .catch(function(e){ if(box)box.innerHTML='<p class="error-text">'+esc(e.message)+'</p>'; });
 }
 
-function renderWorkspaces(items){
+function renderWorkspaces(sandboxes,workspaces){
   var box=$('ws-list');
   if(!box)return;
+  var byScope={};
+  for(var i=0;i<sandboxes.length;i++){
+    var s=sandboxes[i];
+    byScope[s.scope]={scope:s.scope,scopeMasked:s.scopeMasked,kind:s.kind,updatedAt:s.updatedAt,
+      files:s.files||0,lastTask:s.lastTask||'',hasSandbox:true};
+  }
+  for(var j=0;j<workspaces.length;j++){
+    var w=workspaces[j];
+    var rec=byScope[w.scope]||{scope:w.scope,scopeMasked:w.scopeMasked,kind:w.kind,updatedAt:w.updatedAt,hasSandbox:false};
+    rec.tasks=w.tasks||0; rec.notes=w.notes||0; rec.hasWorkspace=true;
+    if(!rec.lastTask)rec.lastTask=w.lastTask||'';
+    if(!rec.updatedAt||(w.updatedAt&&w.updatedAt>rec.updatedAt))rec.updatedAt=w.updatedAt;
+    if(!rec.scopeMasked)rec.scopeMasked=w.scopeMasked;
+    if(!rec.kind)rec.kind=w.kind;
+    byScope[w.scope]=rec;
+  }
+  var items=Object.keys(byScope).map(function(k){return byScope[k];});
+  items.sort(function(a,b){return (b.updatedAt||0)-(a.updatedAt||0);});
   if(!items.length){
-    box.innerHTML='<p class="muted">还没有工作区。在群里 @机器人 发 <b>/工作 帮我整理一下…</b> 就会创建。</p>';
+    box.innerHTML='<p class="muted">还没有工作区。群里 @机器人 发 <b>/工作 帮我整理一下…</b>，或说「写一篇…保存成 a.md 发我」就会创建。</p>';
     return;
   }
   var h='';
-  for(var i=0;i<items.length;i++){
-    var it=items[i];
+  for(var m=0;m<items.length;m++){
+    var it=items[m];
+    var tags='<span class="ws-tag">'+(it.kind==='c2c'?'单聊':'群聊')+'</span>';
+    if(it.hasSandbox)tags+='<span class="ws-tag">文件 '+esc(String(it.files||0))+' 个</span>';
+    if(it.hasWorkspace)tags+='<span class="ws-tag">任务 '+esc(String(it.tasks||0))+' · 笔记 '+esc(String(it.notes||0))+'</span>';
+    tags+='<span class="ws-tag">'+esc(it.updatedAt?absTime(it.updatedAt):'')+'</span>';
     h+='<div class="ws-row" data-scope="'+esc(it.scope)+'">'
       +'<div class="ws-main"><b>'+esc(it.scopeMasked||'')+'</b>'
       +'<small>'+esc(it.lastTask||'（还没执行过任务）')+'</small>'
-      +'<div class="ws-tags"><span class="ws-tag">'+(it.kind==='c2c'?'单聊':'群聊')+'</span>'
-      +'<span class="ws-tag">执行 '+esc(String(it.runs||0))+' 次</span>'
-      +'<span class="ws-tag">任务 '+esc(String(it.tasks||0))+'</span>'
-      +'<span class="ws-tag">笔记 '+esc(String(it.notes||0))+'</span>'
-      +'<span class="ws-tag">'+esc(it.updatedAt?absTime(it.updatedAt):'')+'</span></div></div>'
+      +'<div class="ws-tags">'+tags+'</div></div>'
       +'<div class="prov-tools"><button class="btn sm" type="button" data-ws="detail">查看</button>'
       +'<button class="btn sm" type="button" data-ws="clear">清空</button></div></div>';
   }
@@ -1774,22 +1699,18 @@ function onWorkspaceClick(e){
   var scope=row.getAttribute('data-scope')||'';
   var act=btn.getAttribute('data-ws');
   if(act==='clear'){
-    if(!confirm('清空这个工作区的任务和笔记？'))return;
-    api('POST','/api/workspaces/clear',{scope:scope}).then(function(){
-      toast('已清空');
-      loadWorkspaces();
-    }).catch(function(err){ toast(err.message,'bad'); });
+    if(!confirm('清空这个用户的工作区（文件、任务、笔记）？'))return;
+    Promise.all([
+      api('POST','/api/sandboxes/clear',{scope:scope}).catch(function(){}),
+      api('POST','/api/workspaces/clear',{scope:scope}).catch(function(){})
+    ]).then(function(){ toast('已清空'); loadWorkspaces(); })
+      .catch(function(err){ toast(err.message,'bad'); });
   } else if(act==='detail'){
-    api('POST','/api/workspaces/detail',{scope:scope}).then(function(d){
-      openWorkspaceDetail(d);
-    }).catch(function(err){ toast(err.message,'bad'); });
+    openWorkspaceDetail(scope);
   }
 }
 
-function openWorkspaceDetail(d){
-  var tasks=(d.tasks||[]).length?d.tasks.map(function(x){return '<li>'+(x.done?'✅':'⬜')+' #'+x.id+' '+esc(x.text)+'</li>';}).join(''):'<li class="muted">（空）</li>';
-  var notes=(d.notes||[]).length?d.notes.slice(-10).map(function(n){return '<li>· '+esc(n.text)+'</li>';}).join(''):'<li class="muted">（空）</li>';
-  var log=(d.log||[]).length?d.log.slice(-8).reverse().map(function(x){return '<li>'+esc(x.at?fullTime(x.at):'')+' · '+esc(x.task)+'</li>';}).join(''):'<li class="muted">（空）</li>';
+function openWorkspaceDetail(scope){
   var m=document.getElementById('ws-modal-mask');
   if(!m){
     m=document.createElement('div');
@@ -1803,11 +1724,64 @@ function openWorkspaceDetail(d){
       if(ev.target===m||ev.target.id==='ws-modal-x')m.hidden=true;
     });
   }
-  $('ws-detail-body').innerHTML='<div class="muted">'+esc(d.scopeMasked||'')+'</div>'
-    +'<h4>任务清单</h4><ul>'+tasks+'</ul>'
-    +'<h4>笔记</h4><ul>'+notes+'</ul>'
-    +'<h4>最近执行</h4><ul>'+log+'</ul>';
+  var body=$('ws-detail-body');
+  body.innerHTML='<p class="muted">加载中…</p>';
   m.hidden=false;
+  // 并行拉三份：沙箱文件、工作区任务/笔记、记忆三层
+  Promise.all([
+    api('POST','/api/sandboxes/detail',{scope:scope}).catch(function(){return {files:[],runs:0};}),
+    api('POST','/api/workspaces/detail',{scope:scope}).catch(function(){return {tasks:[],notes:[],log:[],runs:0};}),
+    api('POST','/api/memory',{scope:scope}).catch(function(){return {messages:0,summary:'',facts:[],recent:[]};})
+  ]).then(function(r){ renderWorkspaceDetail(scope,r[0],r[1],r[2]); })
+    .catch(function(e){ body.innerHTML='<p class="error-text">'+esc(e.message)+'</p>'; });
+}
+
+function renderWorkspaceDetail(scope,sandbox,workspace,memory){
+  var body=$('ws-detail-body');
+  if(!body)return;
+
+  var files=(sandbox.files||[]).length?sandbox.files.map(function(f){
+    var t=f.updatedAt?absTime(f.updatedAt):'';
+    return '<li><details><summary>· '+esc(f.path)+'（'+esc(String(f.bytes))+'B'+(t?' · '+esc(t):'')+'）</summary><pre class="file-pre">'+esc(String(f.content||'（无内容）'))+'</pre></details></li>';
+  }).join(''):'<li class="muted">（空）</li>';
+
+  var tasks=(workspace.tasks||[]).length?workspace.tasks.map(function(x){return '<li>'+(x.done?'✅':'⬜')+' #'+x.id+' '+esc(x.text)+'</li>';}).join(''):'<li class="muted">（空）</li>';
+  var notes=(workspace.notes||[]).length?workspace.notes.slice(-10).map(function(n){return '<li>· '+esc(n.text)+'</li>';}).join(''):'<li class="muted">（空）</li>';
+
+  // 记忆分层图：三层各自的量 + 内容
+  var recentHtml=(memory.recent&&memory.recent.length)
+    ? '<div class="mem-recent">'+memory.recent.map(function(x){
+        var role=x.role==='user'?'用户':'助手';
+        var cls=x.role==='user'?'mem-user':'mem-bot';
+        return '<div class="mem-line '+cls+'"><span class="mem-role">'+role+'</span><span class="mem-text">'+esc(x.content)+'</span></div>';
+      }).join('')+'</div>'
+    : '<p class="muted">（还没有对话）</p>';
+
+  var summaryHtml=memory.summary
+    ? '<p class="mem-summary">'+esc(memory.summary)+'</p>'
+    : '<p class="muted">（还没有摘要，攒够 20 条才会压缩生成）</p>';
+
+  var factList=memory.facts||[];
+  var factsHtml=factList.length
+    ? '<ul class="mem-facts">'+factList.map(function(f){
+        var t=f.at?absTime(f.at):'';
+        return '<li><span>'+esc(f.text)+'</span>'+(t?'<span class="mem-fact-time">'+esc(t)+'</span>':'')+'</li>';
+      }).join('')+'</ul>'
+    : '<p class="muted">（还没有长期事实）</p>';
+
+  body.innerHTML='<div class="muted">'+esc(scope)+'</div>'
+    +'<h4>📂 文件（沙箱 · 写入 '+(sandbox.runs||0)+' 次）</h4><ul>'+files+'</ul>'
+    +'<h4>📋 任务清单（/工作）</h4><ul>'+tasks+'</ul>'
+    +'<h4>📝 笔记（/工作）</h4><ul>'+notes+'</ul>'
+    +'<h4>🧠 记忆分层（ChatDO）</h4>'
+    +'<div class="mem-block">'
+    +'<div class="mem-layer"><b>第一层 · 最近原文</b><span class="hint">'+(memory.messages||0)+' 条</span></div>'
+    +recentHtml
+    +'<div class="mem-layer"><b>第二层 · 滚动摘要</b><span class="hint">'+(memory.summaryLen||0)+' 字</span></div>'
+    +summaryHtml
+    +'<div class="mem-layer"><b>第三层 · 长期事实</b><span class="hint">'+factList.length+' 条</span></div>'
+    +factsHtml
+    +'</div>';
 }
 
 function showImageGen(){
@@ -2547,17 +2521,19 @@ function renderReminders(){
 }
 
 /* ============================== 路由 ============================== */
+// 路径路由：/status、/config、/ai、/imagegen、/groups、/workspace、/logs
+// 不再用 #hash，地址栏就是干净的 /status 这种。
+// 注意：不能用带 \/ 的正则字面量——ADMIN_JS 是模板字符串，\/ 会被吃成 /，
+// 导致正则非法、整段脚本语法错误、页面一行 JS 都不执行（坑过一次）。
 function route(){
-  var tab=(location.hash||'#status').slice(1);
+  var p = String(location.pathname || '/').split('/').filter(function(x){ return x; });
+  var tab = p.length ? p[0] : 'status';
   if(tab==='config')showConfig();
   else if(tab==='ai')showAi();
   else if(tab==='imagegen')showImageGen();
   else if(tab==='workspace')showWorkspace();
-  else if(tab==='sandbox')showSandbox();
-  else if(tab==='reminders')showWorkspace();
   else if(tab==='groups')showGroups();
-  else if(tab==='reminders')showReminders();
-  else if(tab==='logs')showLogs(1);
+  else if(tab==='logs')showLogs();
   else showStatus();
 }
 
@@ -2588,10 +2564,10 @@ if(burger&&side){
     if(mask)mask.classList.toggle('show',open);
   });
   if(mask)mask.addEventListener('click',closeSide);
-  window.addEventListener('hashchange',closeSide);
+  window.addEventListener('popstate',closeSide);
 }
 
-window.addEventListener('hashchange',route);
+window.addEventListener('popstate',route);
 window.addEventListener('beforeunload',stopStatusTimer);
 route();
 `;

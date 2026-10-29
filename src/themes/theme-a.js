@@ -96,6 +96,22 @@ button{font-family:inherit}
 .ws-detail h4{font-size:.78rem;margin:.8rem 0 .3rem}
 .ws-detail ul{list-style:none;display:flex;flex-direction:column;gap:.25rem}
 .ws-detail li{font-size:.75rem;color:var(--text-2);line-height:1.6}
+/* 记忆分层图（ChatDO 三层） */
+.mem-block{display:flex;flex-direction:column;gap:.45rem;margin-top:.4rem}
+.mem-layer{display:flex;align-items:center;gap:.5rem;margin-top:.35rem}
+.mem-layer b{font-size:.76rem}
+.mem-layer .hint{font-size:.68rem}
+.mem-recent{display:flex;flex-direction:column;gap:.3rem;padding-left:.6rem;border-left:2px solid var(--border)}
+.mem-line{display:flex;gap:.5rem;font-size:.72rem;line-height:1.5}
+.mem-role{flex:0 0 auto;font-size:.66rem;color:var(--muted);padding:0 5px;border-radius:4px;
+  background:var(--surface-2);align-self:flex-start;margin-top:2px}
+.mem-line.mem-user .mem-role{background:var(--accent-light);color:var(--accent)}
+.mem-text{color:var(--text-2);word-break:break-word}
+.mem-summary{font-size:.72rem;color:var(--text-2);line-height:1.6;padding:.4rem .6rem;
+  background:var(--surface-2);border-radius:8px}
+.mem-facts{display:flex;flex-direction:column;gap:.3rem}
+.mem-facts li{font-size:.72rem;line-height:1.5;display:flex;justify-content:space-between;gap:.5rem}
+.mem-fact-time{color:var(--muted);font-size:.66rem;flex:0 0 auto}
 /* ============================ 主区（照抄 user.html .main-area） ============================ */
 .scroll{margin-left:240px;height:100vh;height:100dvh;flex:1;display:flex;flex-direction:column;min-width:0;overflow-y:auto;-webkit-overflow-scrolling:touch}
 .topbar{flex:0 0 auto;height:60px;display:flex;align-items:center;gap:14px;padding:0 28px;
@@ -471,6 +487,8 @@ button{font-family:inherit}
 .msg-row.me .msg-bubble{background:var(--accent);color:#fff;border-color:transparent;border-bottom-right-radius:4px}
 .msg-row .msg-bubble{border-bottom-left-radius:4px}
 .msg-bubble.sys{color:var(--text-2);font-style:normal;max-width:min(560px,70%)}
+.msg-model{font-size:10px;color:var(--muted);opacity:.85;margin-left:38px;
+  font-family:ui-monospace,Consolas,monospace}
 .msg-time{align-self:center;font-size:10.5px;color:var(--muted);margin:2px 0}
 
 /* 筛选按钮上的计数 */
@@ -672,23 +690,22 @@ ${CSS_A}
   <nav class="side-nav">
     <div class="nav-label">概览</div>
     <div class="tabs">
-      <a href="#status" data-tab="status">${ICONS_A.status}<span>运行状态</span><span class="nav-tag" id="nav-state">—</span></a>
+      <a href="/status" data-tab="status">${ICONS_A.status}<span>运行状态</span><span class="nav-tag" id="nav-state">—</span></a>
     </div>
     <div class="nav-label">设置</div>
     <div class="tabs">
-      <a href="#config" data-tab="config">${ICONS_A.config}<span>机器人配置</span></a>
-      <a href="#ai" data-tab="ai">${ICONS_A.ai}<span>AI 对话</span></a>
-      <a href="#imagegen" data-tab="imagegen">${ICONS_A.imagegen}<span>生图模型</span></a>
+      <a href="/config" data-tab="config">${ICONS_A.config}<span>机器人配置</span></a>
+      <a href="/ai" data-tab="ai">${ICONS_A.ai}<span>AI 对话</span></a>
+      <a href="/imagegen" data-tab="imagegen">${ICONS_A.imagegen}<span>生图模型</span></a>
     </div>
     <div class="nav-label">群管理</div>
     <div class="tabs">
-      <a href="#groups" data-tab="groups">${ICONS_A.groups}<span>群管理</span></a>
-      <a href="#workspace" data-tab="workspace">${ICONS_A.workspace}<span>任务与工作区</span></a>
-      <a href="#sandbox" data-tab="sandbox">${ICONS_A.sandbox}<span>沙箱（AiDO）</span></a>
+      <a href="/groups" data-tab="groups">${ICONS_A.groups}<span>群管理</span></a>
+      <a href="/workspace" data-tab="workspace">${ICONS_A.workspace}<span>工作区</span></a>
     </div>
     <div class="nav-label">数据</div>
     <div class="tabs">
-      <a href="#logs" data-tab="logs">${ICONS_A.logs}<span>聊天记录</span><span class="nav-tag" id="nav-count">—</span></a>
+      <a href="/logs" data-tab="logs">${ICONS_A.logs}<span>聊天记录</span><span class="nav-tag" id="nav-count">—</span></a>
     </div>
   </nav>
 

@@ -371,12 +371,18 @@ export class ChatDO {
     const key = String(body.key || '').slice(0, 200);
     if (!key) return { error: 'missing key' };
     const s = await this.load(key);
+    // recent：最近几轮原文，供后台「记忆分层图」展示（只给文本）
+    const recent = (s.messages || []).slice(-8).map((m) => ({
+      role: m.role,
+      content: typeof m.content === 'string' ? m.content.slice(0, 200) : '[图片]',
+    }));
     return {
       messages: s.messages.length,
       summaryLen: s.summary.length,
       summary: s.summary,
       facts: s.facts,
       sinceCompress: s.sinceCompress,
+      recent,
     };
   }
 

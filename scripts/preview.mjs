@@ -2,10 +2,64 @@
 import { createServer } from 'node:http';
 import { adminPage, homePage, loginPage, setupPage, recoverGatePage, keyRecoveryPage } from '../src/html.js';
 import { randomHex } from '../src/db.js';
+import { COOKIE_NAME, SESSION_TTL_MS } from '../src/constants.js';
+import { safeEqual } from '../src/utils/security.js';
 
 const PORT = Number(process.argv[2]) || 8788;
-// 固定只监听本机回环：预览服务没有任何鉴权，绑到 0.0.0.0 等于把后台敞开给同网段。
 const HOST = '127.0.0.1';
+
+// 后台登录密码（可用环境变量覆盖）
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || 'preview-admin-2026';
+
+// 本地预览走 http://，cookie 不能带 Secure，否则浏览器在 http 下不保存/不清除。
+// 其余属性（HttpOnly / SameSite=Strict / Max-Age）跟线上一致。
+function sessionCookie(id, maxAge) {
+  return `${COOKIE_NAME}=${id}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}`;
+}
+function clearSessionCookie() {
+  return `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0`;
+}
+
+// 内存会话表（代替线上 D1 的 sessions 表）
+const sessions = new Map();
+
+function getCookie(req, name) {
+  const h = req.headers.cookie || '';
+  for (const part of h.split(';')) {
+    const i = part.indexOf('=');
+    if (i < 0) continue;
+    if (part.slice(0, i).trim() === name) return part.slice(i + 1).trim();
+  }
+  return '';
+}
+
+function hasSession(req) {
+  const id = getCookie(req, COOKIE_NAME);
+  if (!id || !/^[0-9a-f]{64}$/.test(id)) return false;
+  const exp = sessions.get(id);
+  if (!exp) return false;
+  if (exp <= Date.now()) {
+    sessions.delete(id);
+    return false;
+  }
+  return true;
+}
+
+function sendJson(res, status, obj) {
+  res.writeHead(status, { ...SECURITY_HEADERS, 'Content-Type': 'application/json; charset=utf-8' });
+  res.end(JSON.stringify(obj));
+}
+
+function readBody(req) {
+  return new Promise((resolve) => {
+    let raw = '';
+    req.on('data', (c) => (raw += c));
+    req.on('end', () => resolve(raw));
+  });
+}
+
+// 后台页面路径
+const ADMIN_PATHS = new Set(['status', 'config', 'ai', 'imagegen', 'groups', 'workspace', 'logs']);
 
 const SECURITY_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
@@ -29,8 +83,6 @@ function htmlResponse(html, nonce) {
 const ROUTES = {
   '/': homePage,
   '/login': loginPage,
-  '/admin': adminPage,
-  
   '/setup': (nonce, url) => setupPage(nonce, ['ADMIN_TOKEN', 'CONFIG_ENC_KEY']),
   '/recover': (nonce) => recoverGatePage(nonce, {}),
   '/recover/authed': (nonce) => keyRecoveryPage(nonce, { hasKey: true }),
@@ -166,6 +218,9 @@ function demoApi(pathname, search) {
   if (pathname === '/api/sandboxes') {
     return { items: demoSandboxes() };
   }
+  if (pathname === '/api/workspaces') {
+    return { items: demoWorkspaces() };
+  }
   return { ok: true };
 }
 
@@ -231,58 +286,306 @@ function demoSandboxDetail(scope) {
   };
 }
 
+/* ------------------------------ 工作区演示数据 ------------------------------ */
+const WORKSPACE_DATA = {
+  'c2c:OPENID_USER_A': {
+    tasks: [
+      { id: 1, text: '整理 README 的部署说明', done: true },
+      { id: 2, text: '给机器人写一段介绍文案', done: false },
+      { id: 3, text: '准备下周的群活动话题', done: false },
+    ],
+    notes: [{ text: '用户偏好简洁口语，不要长篇大论' }, { text: '喜欢在周末聊技术' }],
+    runs: 7,
+  },
+  'group:OPENGROUPID_B:u:OPENID_USER_B': {
+    tasks: [
+      { id: 1, text: '整理本周群内待办', done: true },
+      { id: 2, text: '汇总大家的提问', done: false },
+    ],
+    notes: [{ text: '群里常问部署问题' }],
+    runs: 4,
+  },
+};
+
+function demoWorkspaces() {
+  return Object.entries(WORKSPACE_DATA).map(([scope, w]) => ({
+    scope,
+    scopeMasked: scope.replace(/^c2c:/, '').replace(/^group:[^:]+:u:/, ''),
+    kind: scope.startsWith('c2c:') ? 'c2c' : 'group',
+    runs: w.runs,
+    tasks: w.tasks.length,
+    notes: w.notes.length,
+    lastTask: w.tasks[0] ? w.tasks[0].text : '整理待办',
+    updatedAt: Date.now() - 30 * 60 * 1000,
+  }));
+}
+
+function demoWorkspaceDetail(scope) {
+  const w = WORKSPACE_DATA[scope] || { tasks: [], notes: [], runs: 0 };
+  return {
+    scopeMasked: scope.replace(/^c2c:/, '').replace(/^group:[^:]+:u:/, ''),
+    tasks: w.tasks,
+    notes: w.notes,
+    log: [],
+    runs: w.runs,
+    updatedAt: Date.now() - 30 * 60 * 1000,
+  };
+}
+
+/* ------------------------------ 记忆分层演示数据 ------------------------------ */
+const MEMORY_DATA = {
+  'c2c:OPENID_USER_A': {
+    messages: 14,
+    summaryLen: 96,
+    summary: '用户叫小王，在杭州做前端开发，主要用 TypeScript；正在做 QQ 机器人项目，跑在 Cloudflare Workers 上；讨厌 Java，养了只橘猫叫年糕。',
+    facts: [
+      { text: '用户叫小王，在杭州做前端开发', at: Date.now() - 2 * 24 * 60 * 60 * 1000 },
+      { text: '技术栈：TypeScript + React', at: Date.now() - 2 * 24 * 60 * 60 * 1000 },
+      { text: '正在做 QQ 机器人项目（Cloudflare Workers）', at: Date.now() - 24 * 60 * 60 * 1000 },
+      { text: '讨厌 Java，觉得太重', at: Date.now() - 24 * 60 * 60 * 1000 },
+      { text: '养了一只橘猫叫年糕', at: Date.now() - 12 * 60 * 60 * 1000 },
+    ],
+    recent: [
+      { role: 'user', content: '帮我看看今天适合写代码吗' },
+      { role: 'assistant', content: '适合呀，状态好就趁热打铁～' },
+      { role: 'user', content: '推荐一个前端框架' },
+      { role: 'assistant', content: '你已经在用 React 了，继续保持就挺好。' },
+    ],
+    sinceCompress: 8,
+  },
+  'group:OPENGROUPID_B:u:OPENID_USER_B': {
+    messages: 6,
+    summaryLen: 0,
+    summary: '',
+    facts: [{ text: '群里常问部署问题', at: Date.now() - 6 * 60 * 60 * 1000 }],
+    recent: [
+      { role: 'user', content: '这个机器人怎么部署？' },
+      { role: 'assistant', content: '用 npm run deploy 一条命令就行。' },
+    ],
+    sinceCompress: 2,
+  },
+};
+
+function demoMemory(scope) {
+  const m = MEMORY_DATA[scope] || { messages: 0, summaryLen: 0, summary: '', facts: [], recent: [], sinceCompress: 0 };
+  return { scope, scopeMasked: scope.replace(/^c2c:/, '').replace(/^group:[^:]+:u:/, ''), ...m };
+}
+
+/* ------------------------------ 聊天记录演示数据 ------------------------------ */
+const DEMO_CONVERSATIONS = [
+  {
+    scopeId: 'a3f2c1d0',
+    kind: 'group',
+    count: 9,
+    lastAt: new Date(Date.now() - 2 * 60 * 1000).toISOString(),
+    lastUser: '@小助手 明天北京天气怎么样',
+    lastReply: '我没有实时天气数据，建议看一下手机自带的天气应用。',
+    lastModel: 'gpt-4o-mini',
+    messages: [
+      { id: 11, kind: 'group', userContent: '@小助手 你好呀', aiReply: '你好呀～有什么可以帮你的？', model: 'qwen3.8-omni-flash', time: new Date(Date.now() - 60 * 60 * 1000).toISOString() },
+      { id: 12, kind: 'group', userContent: '@小助手 帮我把这段话改得更礼貌一点：这方案不行，重做。', aiReply: '当然可以，试试这样说：「这个方案目前和预期还有差距，方便的话我们一起看看怎么调整？」', model: 'deepseek-chat', time: new Date(Date.now() - 30 * 60 * 1000).toISOString() },
+      { id: 13, kind: 'group', userContent: '@小助手 明天北京天气怎么样', aiReply: '我没有实时天气数据，建议看一下手机自带的天气应用。', model: 'gpt-4o-mini', time: new Date(Date.now() - 2 * 60 * 1000).toISOString() },
+    ],
+  },
+  {
+    scopeId: 'b7e9d2a1',
+    kind: 'group',
+    count: 6,
+    lastAt: new Date(Date.now() - 18 * 60 * 1000).toISOString(),
+    lastUser: '@小助手 帮我写一句请假理由',
+    lastReply: '「因个人身体不适，需请假一天，工作已交接给同事，请批准。」',
+    lastModel: 'deepseek-chat',
+    messages: [
+      { id: 21, kind: 'group', userContent: '@小助手 介绍一下你自己', aiReply: '我是一个跑在 Cloudflare Workers 上的 QQ 机器人～', model: 'qwen3.8-omni-flash', time: new Date(Date.now() - 40 * 60 * 1000).toISOString() },
+      { id: 22, kind: 'group', userContent: '@小助手 帮我写一句请假理由', aiReply: '「因个人身体不适，需请假一天，工作已交接给同事，请批准。」', model: 'deepseek-chat', time: new Date(Date.now() - 18 * 60 * 1000).toISOString() },
+    ],
+  },
+  {
+    scopeId: 'c5a8e3f0',
+    kind: 'c2c',
+    count: 5,
+    lastAt: new Date(Date.now() - 6 * 60 * 1000).toISOString(),
+    lastUser: '解释一下什么是递归',
+    lastReply: '递归就是函数在内部调用自己，用更小的同类问题逼近出口。',
+    lastModel: 'qwen-plus',
+    messages: [
+      { id: 31, kind: 'c2c', userContent: '今天适合出门吗？', aiReply: '看你在哪个城市，今天大部分地区多云，出门带把伞更稳妥。', model: 'qwen-plus', time: new Date(Date.now() - 20 * 60 * 1000).toISOString() },
+      { id: 32, kind: 'c2c', userContent: '解释一下什么是递归', aiReply: '递归就是函数在内部调用自己，用更小的同类问题逼近出口。', model: 'qwen-plus', time: new Date(Date.now() - 6 * 60 * 1000).toISOString() },
+    ],
+  },
+];
+
+function demoConversations() {
+  return {
+    items: DEMO_CONVERSATIONS.map((c) => ({
+      scopeId: c.scopeId,
+      kind: c.kind,
+      count: c.count,
+      lastAt: c.lastAt,
+      lastUser: c.lastUser,
+      lastReply: c.lastReply,
+      lastModel: c.lastModel,
+    })),
+    system: {
+      count: 4,
+      lastAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+      lastText: '后台修改配置，已热更新生效',
+    },
+  };
+}
+
+function demoConversationMessages(scope) {
+  const conv = DEMO_CONVERSATIONS.find((c) => c.scopeId === scope);
+  if (!conv) return { items: [], hasMore: false };
+  return {
+    items: conv.messages.map((m) => ({
+      id: m.id,
+      kind: m.kind,
+      scopeId: conv.scopeId,
+      userContent: m.userContent,
+      aiReply: m.aiReply,
+      model: m.model,
+      time: m.time,
+    })),
+    hasMore: false,
+  };
+}
+
+function demoSystemMessages() {
+  const now = Date.now();
+  return {
+    items: [
+      { id: 4, content: '后台修改配置，已热更新生效', time: new Date(now - 10 * 60 * 1000).toISOString() },
+      { id: 3, content: '新增定时提醒：明天 8 点开会', time: new Date(now - 45 * 60 * 1000).toISOString() },
+      { id: 2, content: '新成员加入群聊，已自动发送欢迎语', time: new Date(now - 2 * 60 * 60 * 1000).toISOString() },
+      { id: 1, content: '机器人加入新群，已自动打招呼', time: new Date(now - 5 * 60 * 60 * 1000).toISOString() },
+    ],
+    hasMore: false,
+  };
+}
+
 createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
 
+  /* ---------------- 登录 / 登出 ---------------- */
+  if (url.pathname === '/api/auth/login' && req.method === 'POST') {
+    readBody(req).then(async (raw) => {
+      let password = '';
+      try { password = JSON.parse(raw || '{}').password || ''; } catch { /* ignore */ }
+      if (password && (await safeEqual(password, ADMIN_TOKEN))) {
+        const id = randomHex(32);
+        sessions.set(id, Date.now() + SESSION_TTL_MS);
+        res.setHeader('Set-Cookie', sessionCookie(id, Math.floor(SESSION_TTL_MS / 1000)));
+        sendJson(res, 200, { ok: true, data: { expiresAt: new Date(Date.now() + SESSION_TTL_MS).toISOString() } });
+      } else {
+        sendJson(res, 401, { ok: false, error: { code: 'invalid_credentials', message: '密码错误' } });
+      }
+    });
+    return;
+  }
+
+  if (url.pathname === '/api/auth/logout' && req.method === 'POST') {
+    const id = getCookie(req, COOKIE_NAME);
+    if (id) sessions.delete(id);
+    res.setHeader('Set-Cookie', clearSessionCookie());
+    sendJson(res, 200, { ok: true, data: { loggedOut: true } });
+    return;
+  }
+
+  /* ---------------- API（除登录外都要会话） ---------------- */
   if (url.pathname.startsWith('/api/')) {
-    // 沙箱详情是 POST，要读 body 拿 scope
-    if (url.pathname === '/api/sandboxes/detail' && req.method === 'POST') {
-      let raw = '';
-      req.on('data', (c) => (raw += c));
-      req.on('end', () => {
+    if (!hasSession(req)) {
+      sendJson(res, 401, { ok: false, error: { code: 'unauthorized', message: '未登录或会话已过期' } });
+      return;
+    }
+    if (url.pathname === '/api/memory' && req.method === 'POST') {
+      readBody(req).then((raw) => {
         let scope = '';
-        try {
-          scope = JSON.parse(raw || '{}').scope || '';
-        } catch {
-          /* ignore */
-        }
-        res.writeHead(200, { ...SECURITY_HEADERS, 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ ok: true, data: demoSandboxDetail(scope) }));
+        try { scope = JSON.parse(raw || '{}').scope || ''; } catch { /* ignore */ }
+        sendJson(res, 200, { ok: true, data: demoMemory(scope) });
+      });
+      return;
+    }
+    if (url.pathname === '/api/sandboxes/detail' && req.method === 'POST') {
+      readBody(req).then((raw) => {
+        let scope = '';
+        try { scope = JSON.parse(raw || '{}').scope || ''; } catch { /* ignore */ }
+        sendJson(res, 200, { ok: true, data: demoSandboxDetail(scope) });
       });
       return;
     }
     if (url.pathname === '/api/sandboxes/clear' && req.method === 'POST') {
       req.resume();
-      req.on('end', () => {
-        res.writeHead(200, { ...SECURITY_HEADERS, 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ ok: true, data: { cleared: true } }));
+      req.on('end', () => sendJson(res, 200, { ok: true, data: { cleared: true } }));
+      return;
+    }
+    if (url.pathname === '/api/workspaces/detail' && req.method === 'POST') {
+      readBody(req).then((raw) => {
+        let scope = '';
+        try { scope = JSON.parse(raw || '{}').scope || ''; } catch { /* ignore */ }
+        sendJson(res, 200, { ok: true, data: demoWorkspaceDetail(scope) });
       });
       return;
     }
+    if (url.pathname === '/api/workspaces/clear' && req.method === 'POST') {
+      req.resume();
+      req.on('end', () => sendJson(res, 200, { ok: true, data: { cleared: true } }));
+      return;
+    }
     if (url.pathname === '/api/status') {
-      const status = url.searchParams.get('empty') ? withFakeBotVolume() : DEMO_STATUS;
-      res.writeHead(200, { ...SECURITY_HEADERS, 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ ok: true, data: status }));
+      sendJson(res, 200, { ok: true, data: url.searchParams.get('empty') ? withFakeBotVolume() : DEMO_STATUS });
+      return;
+    }
+    if (url.pathname === '/api/conversations') {
+      sendJson(res, 200, { ok: true, data: demoConversations() });
+      return;
+    }
+    if (url.pathname === '/api/conversations/messages') {
+      sendJson(res, 200, { ok: true, data: demoConversationMessages(url.searchParams.get('scope') || '') });
+      return;
+    }
+    if (url.pathname === '/api/system-messages') {
+      sendJson(res, 200, { ok: true, data: demoSystemMessages() });
       return;
     }
     if (url.pathname === '/api/logs' && url.searchParams.get('empty')) {
-      res.writeHead(200, { ...SECURITY_HEADERS, 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({ ok: true, data: { items: [], page: 1, pageSize: 20, total: 0, totalPages: 1, kind: 'all' } }));
+      sendJson(res, 200, { ok: true, data: { items: [], page: 1, pageSize: 20, total: 0, totalPages: 1, kind: 'all' } });
       return;
     }
-    res.writeHead(200, { ...SECURITY_HEADERS, 'Content-Type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({ ok: true, data: demoApi(url.pathname, url.searchParams) }));
+    sendJson(res, 200, { ok: true, data: demoApi(url.pathname, url.searchParams) });
+    return;
+  }
+
+  /* ---------------- 页面 ---------------- */
+  // 已登录访问 /login → 直接进后台
+  if (url.pathname === '/login' && req.method === 'GET' && hasSession(req)) {
+    res.writeHead(302, { Location: '/status' });
+    res.end();
+    return;
+  }
+
+  // 后台页面：未登录跳登录页
+  const seg = url.pathname.slice(1);
+  if (req.method === 'GET' && ADMIN_PATHS.has(seg) && !url.pathname.includes('/', 1)) {
+    if (!hasSession(req)) {
+      res.writeHead(302, { Location: '/login' });
+      res.end();
+      return;
+    }
+    const nonce = randomHex(16);
+    const html = adminPage(nonce);
+    res.writeHead(200, htmlResponse(html, nonce));
+    res.end(html);
     return;
   }
 
   const render = ROUTES[url.pathname];
   if (!render) {
     res.writeHead(404, { ...SECURITY_HEADERS, 'Content-Type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({ ok: false, error: { code: 'not_found', message: '预览服务只有 / /login /admin' } }));
+    res.end(JSON.stringify({ ok: false, error: { code: 'not_found', message: 'Not Found' } }));
     return;
   }
   const nonce = randomHex(16);
-  
   const html = render(nonce, url.href);
   res.writeHead(200, htmlResponse(html, nonce));
   res.end(html);
@@ -290,7 +593,6 @@ createServer((req, res) => {
   console.log(`预览服务已启动（仅本机）：`);
   console.log(`  首页       http://127.0.0.1:${PORT}/`);
   console.log(`  登录页     http://127.0.0.1:${PORT}/login`);
-  console.log(`  后台页     http://127.0.0.1:${PORT}/admin   （本地预览，未校验登录）`);
-  console.log(`  后台空态   http://127.0.0.1:${PORT}/admin?empty=1`);
-  console.log(`  未配置页   http://127.0.0.1:${PORT}/setup   （模拟缺 Secrets）`);
+  console.log(`  后台首页   http://127.0.0.1:${PORT}/status   （需登录，密码：${ADMIN_TOKEN}）`);
+  console.log(`  未配置页   http://127.0.0.1:${PORT}/setup`);
 });
