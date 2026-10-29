@@ -34,6 +34,11 @@ const MENTION_RE = /<@[!&]?[^>\s]{0,64}>/g;
 const MAX_SESSIONS = 300;
 const SESSION_IDLE_MS = 60 * 60 * 1000;
 const MAX_PENDING_MESSAGES = 200;
+// WebSocket ↔ Webhook 切换的宽限期（毫秒）。
+// 平台侧切换事件订阅后，两条通道可能短暂同时推送（平台侧生效有延迟、或两边各推一半）。
+// 宽限期内：不立即断开旧通道、也不因反向的自动信号来回改模式，靠 msg_id 去重兜底，
+// 这样才能做到「切换不丢消息、不来回震荡」。
+const SWITCH_GRACE_MS = 60 * 1000;
 // 「原生表情」在群聊/单聊官方 API 里发不了（表情表态仅频道支持），
 // 这里用 Unicode emoji 代替：QQ 客户端会按表情样式渲染。
 const EMOJIS = [
@@ -149,6 +154,11 @@ export class QQBotDO {
     this.retiredAt = 0;
     this.lastEventAt = 0;
     this._eventAtSaved = 0;
+    // 平台切换宽限期：记录「最近一次切换方向 + 时间」，用于抑制宽限期内的反向自动切换。
+    // 只有「后台显式点按钮」会立即生效，自动信号（收到推送/网关 READY）在宽限期内不来回改。
+    this._switchMark = null;
+    this._switchAt = 0;
+    this._retireTimer = null;
 
     state.blockConcurrencyWhile(async () => {
       try {
@@ -226,31 +236,45 @@ export class QQBotDO {
   }
 
   /**
-   * 把「平台已切 Webhook」写进显式模式，并立刻停掉多余的长连接。
+   * 把「平台已切 Webhook」写进显式模式，并在宽限期后停掉多余的长连接。
    *
-   * 顺序：先切内存状态、先断连接，再尝试落盘。
-   * 落盘只是为了跨实例记住，不该成为「能不能切换」的前提 ——
-   * 否则一旦 D1 抖动或写入失败，就白留着一条正在烧 GB-s 的长连接。
+   * 为什么不能一收到推送就立刻 teardown：
+   * 平台侧把事件订阅改成 Webhook 后，网关长连接往往不会立刻断（服务端有延迟），
+   * 反而可能出现「两条通道同时推送」的窗口。立刻断掉长连接，等于主动放弃
+   * 网关那边还能补发的事件，切换瞬间就容易丢消息。
+   *
+   * 所以改成「先切内存模式、宽限期后回收连接」：
+   *   - 立即更新 platformMode，新收到的推送按 Webhook 处理；
+   *   - 长连接不急着断，让它在宽限期内继续接收（可能还有事件），靠 msg_id 去重；
+   *   - 宽限期结束后再 teardown，避免一直烧 GB-s。
+   * 落盘仍不阻塞切换（见下）。
+   *
+   * force=true 时（后台显式点按钮）跳过宽限期，立即断连接。
    */
-  async markPlatformWebhook(reason) {
+  async markPlatformWebhook(reason, { force = false } = {}) {
     if (!this.config) return false;
-    if (this.transportName() === 'webhook' && this.config.platformMode === 'webhook') return false;
+    const already = this.transportName() === 'webhook' && this.config.platformMode === 'webhook';
+    if (already) return false;
 
-    const now = String(Date.now());
+    const now = Date.now();
     this.config.platformMode = 'webhook';
-    this.config.webhookVerifiedAt = now;
+    this.config.webhookVerifiedAt = String(now);
+    this._switchMark = 'webhook';
+    this._switchAt = now;
+    this.running = this.desiredRunning;
 
-    // 1) 立刻生效：模式已变，长连接没用了
-    if (this.ws || this.heartbeatTimer || this.reconnectTimer) {
-      this.logger.info('断开多余的长连接（平台已走 Webhook）');
-      this.teardown();
-      this.running = this.desiredRunning;
+    // 1) 宽限期：不立刻断连接；force 或已有连接才立即回收
+    if (force) {
+      this._retireWs('平台已切 Webhook（手动）');
+    } else if (this.ws || this.heartbeatTimer || this.reconnectTimer) {
+      this.logger.info('平台已切 Webhook，进入宽限期：长连接暂留以接住网关补发的事件');
+      this._scheduleWsRetire(now);
     }
 
     // 2) 再尝试落盘，失败也不影响本次切换
     try {
       const { saveConfig } = await import('./db.js');
-      await saveConfig(this.env, { platformMode: 'webhook', webhookVerifiedAt: now });
+      await saveConfig(this.env, { platformMode: 'webhook', webhookVerifiedAt: String(now) });
       this.logger.info(`平台已切到 Webhook（${reason}），已同步`);
     } catch (e) {
       this.logger.warn(`markPlatformWebhook 落盘失败（本次仍已切换）: ${e.message}`);
@@ -261,17 +285,29 @@ export class QQBotDO {
   /**
    * 反向：平台切回了 WebSocket 网关。
    *
-   * 这个方向只能在「还在跑长连接」时自动发现 —— 因为 Webhook 模式下本对象
-   * 根本不连网关，收不到 WS 事件，也就没有信号可依。所以：
-   *   - 手动切回：后台「重新检测」按钮 / 调用 /detect-platform
-   *   - 自动发现：只要长连接还活着、能收到 DISPATCH，就说明平台在用 WebSocket
+   * 这个方向只能靠两个信号：
+   *   - 手动：后台「我在平台改成了 WebSocket」按钮（force）
+   *   - 自动：长连接还活着、收到 READY/RESUMED/DISPATCH（说明平台在用 WebSocket）
+   *
+   * 自动信号同样受宽限期保护：刚从 Webhook 切过来或刚切到 Webhook 的短时间内，
+   * 不因一条偶然的网关事件就来回改模式（避免切换震荡）。
    */
-  async markPlatformWs(reason) {
+  async markPlatformWs(reason, { force = false } = {}) {
     if (!this.config) return false;
-    if (this.transportName() === 'ws' && this.config.platformMode === 'ws') return false;
+    const already = this.transportName() === 'ws' && this.config.platformMode === 'ws';
+    if (already) return false;
 
+    // 自动信号在宽限期内被抑制：刚切到 webhook，旧连接还可能吐一条 READY 之类
+    if (!force && this._switchAt && Date.now() - this._switchAt < SWITCH_GRACE_MS) {
+      this.logger.info(`忽略宽限期内的自动 WS 信号（${reason}）`);
+      return false;
+    }
+
+    const now = Date.now();
     this.config.platformMode = 'ws';
     this.config.webhookVerifiedAt = '';
+    this._switchMark = 'ws';
+    this._switchAt = now;
 
     try {
       const { saveConfig } = await import('./db.js');
@@ -281,11 +317,37 @@ export class QQBotDO {
       this.logger.warn(`markPlatformWs 落盘失败（本次仍已切换）: ${e.message}`);
     }
 
-    // 切回长连接：如果此刻在跑 Webhook 模式（没连接），就把它建起来
+    // 切回长连接：如果此刻没有连接，就把它建起来
     if (this.isWsTransport() && this.desiredRunning && !this.isAlive()) {
       this.state.waitUntil(this.startBot());
     }
     return true;
+  }
+
+  /** 宽限期结束后回收多余的长连接（只在当前仍是 webhook 模式时执行） */
+  _scheduleWsRetire(fromNow) {
+    const delay = SWITCH_GRACE_MS + 500;
+    if (this._retireTimer) clearTimeout(this._retireTimer);
+    this._retireTimer = setTimeout(() => {
+      this._retireTimer = null;
+      // 宽限期内又切回 ws 了，就别断
+      if (!this.isWsTransport()) {
+        this._retireWs('Webhook 宽限期结束');
+      }
+    }, delay);
+  }
+
+  /** 真正断开长连接（切换宽限期结束 / 手动强制） */
+  _retireWs(why) {
+    if (this._retireTimer) {
+      clearTimeout(this._retireTimer);
+      this._retireTimer = null;
+    }
+    if (this.ws || this.heartbeatTimer || this.reconnectTimer) {
+      this.logger.info(`断开多余的长连接（${why}）`);
+      this.teardown();
+      this.running = this.desiredRunning;
+    }
   }
 
   /**
@@ -489,7 +551,7 @@ export class QQBotDO {
         // （只写内存 + 低频落盘，避免每条消息都多一次写操作）
         this.lastEventAt = Date.now();
         // 能收到真实推送 = 平台侧确实配了 Webhook。这是最硬的证据，
-        // 立刻把本地模式同步过去，并把多余的长连接断掉（否则白烧 GB-s）
+        // 立刻把本地模式同步过去（但长连接不立刻断，进入宽限期，避免切换瞬间丢消息）
         await this.markPlatformWebhook('收到平台推送').catch(() => {});
         if (!this._eventAtSaved || this.lastEventAt - this._eventAtSaved > 60000) {
           this._eventAtSaved = this.lastEventAt;
@@ -522,11 +584,11 @@ export class QQBotDO {
         // 平台切回 WebSocket 时没有任何被动信号能自动发现。
         const action = url.searchParams.get('action') || 'probe';
         if (action === 'to-ws') {
-          await this.markPlatformWs('后台手动切回');
+          await this.markPlatformWs('后台手动切回', { force: true });
           return Response.json({ ok: true, transport: this.transportName(), switched: 'ws' });
         }
         if (action === 'to-webhook') {
-          await this.markPlatformWebhook('后台手动切换');
+          await this.markPlatformWebhook('后台手动切换', { force: true });
           return Response.json({ ok: true, transport: this.transportName(), switched: 'webhook' });
         }
         if (action === 'status') {
@@ -595,14 +657,15 @@ export class QQBotDO {
         const prevTransport = this.transportName();
         await this.loadConfig();
         this.logSystem('后台修改配置，已热更新生效');
-        // 传输方式被改过：按新方式重建（webhook 停连接，ws 建连接）
+        // 传输方式被改过：走宽限期切换（webhook 不立刻断连接、ws 补建连接），
+        // 而不是立即 teardown —— 平台切换生效有延迟，立刻断连接会丢切换瞬间的消息。
         if (prevTransport !== this.transportName()) {
-          this.logger.info(`传输方式变化 ${prevTransport} → ${this.transportName()}，重建连接`);
-          this.teardown();
-          if (this.isWsTransport()) {
-            this.state.waitUntil(this.startBot());
+          const now = this.transportName();
+          this.logger.info(`传输方式变化 ${prevTransport} → ${now}，走宽限期切换`);
+          if (now === 'webhook') {
+            await this.markPlatformWebhook('配置热更新');
           } else {
-            this.running = this.desiredRunning;
+            await this.markPlatformWs('配置热更新');
           }
         } else if (this.isWsTransport() && this.running && prevWelcome !== this.config.welcomeEnabled) {
           this.logger.info('welcome 开关变化，重启连接以应用新 intents');
@@ -620,15 +683,14 @@ export class QQBotDO {
         const prevTransport = this.transportName();
         try { await this.loadConfig(); } catch {}
         // 传输方式变了（典型场景：QQ 平台刚校验通过回调地址）：
-        // 这里必须和 /reload 一样处理，否则万一下发通知失败，就会一直挂在长连接上白烧 GB-s
+        // 走宽限期切换，不要立刻 teardown —— 平台切换生效有延迟，立即断连接会丢消息。
         if (prevTransport !== this.transportName()) {
-          this.logger.info(`Watchdog: 传输方式 ${prevTransport} → ${this.transportName()}`);
-          this.teardown();
-          if (this.isWsTransport()) {
-            if (this.desiredRunning) this.state.waitUntil(this.startBot());
+          const now = this.transportName();
+          this.logger.info(`Watchdog: 传输方式 ${prevTransport} → ${now}，走宽限期切换`);
+          if (now === 'webhook') {
+            await this.markPlatformWebhook('看门狗检测');
           } else {
-            this.running = this.desiredRunning;
-            return Response.json({ ok: true, action: 'transport-switched', transport: 'webhook' });
+            await this.markPlatformWs('看门狗检测');
           }
         }
         // 到点的定时提醒：正常由 alarm 精确驱动，这里是兜底（cron 每 6 小时一次）
@@ -931,6 +993,7 @@ export class QQBotDO {
     this.seq = null;
     if (this.heartbeatTimer) { clearInterval(this.heartbeatTimer); this.heartbeatTimer = null; }
     if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
+    if (this._retireTimer) { clearTimeout(this._retireTimer); this._retireTimer = null; }
     if (this.ws) { try { this.ws.close(1000, 'Stopping'); } catch (_) {} this.ws = null; }
   }
 
@@ -1144,12 +1207,10 @@ export class QQBotDO {
         this.saveGwState();
         this.markPlatformWs('网关 RESUMED').catch(() => {});
       } else if (t === 'GROUP_AT_MESSAGE_CREATE' || t === 'GROUP_MESSAGE_CREATE' || t === 'C2C_MESSAGE_CREATE') {
-        // 收到真实消息事件 —— 平台确实在用 WebSocket
-        if (this.config && this.config.platformMode !== 'ws') {
-          this.config.platformMode = 'ws';
-          this.config.webhookVerifiedAt = '';
-          this.markPlatformWs('收到网关消息事件').catch(() => {});
-        }
+        // 收到真实消息事件 —— 平台确实在用 WebSocket。
+        // 交给 markPlatformWs 统一处理：它内部有宽限期抑制，
+        // 刚切到 Webhook 时旧连接可能还吐消息，不能因此把模式来回改。
+        this.markPlatformWs('收到网关消息事件').catch(() => {});
         await this.handleMessage(t, d);
       } else if (t === 'GROUP_MEMBER_ADD') {
         this.state.waitUntil(this.handleGroupMemberAdd(d));
@@ -1573,7 +1634,13 @@ export class QQBotDO {
     if (!isC2C && this.groupBlacklist.has(scopeId)) return;
     if (this.sensitiveWords.some((w) => content.includes(w))) return;
 
-    const key = isC2C ? `c2c:${userId}` : `group:${scopeId}`;
+    // 会话键按「人」隔离（与 ownerKey 一致），而不是按群共享：
+    //   - 单聊：c2c:<user>
+    //   - 群聊：group:<群>:u:<user>
+    // 这样群里不同人 @ 机器人走各自的队列和 ChatDO 实例，可以**并行处理**，
+    // 不会出现「A 的消息还没答完，B 就必须干等」的串行阻塞；同时每个人的
+    // 对话上下文彼此隔离，不会串味。
+    const key = this.ownerKey({ isC2C, scopeId, userId });
     if (!isC2C) this.touchGroup(scopeId);
     const job = { isC2C, userId, scopeId, content, imageUrl, msgId: data.id, userText, fileName, fileText };
 
@@ -2079,18 +2146,22 @@ export class QQBotDO {
     }
     this.logger.info(`Replied to ${isC2C ? 'c2c' : 'group'} chat: ${reply.slice(0, 50)}...`);
 
-    try {
-      await addChatLog(this.env, {
-        kind: isC2C ? 'c2c' : 'group',
-        scopeId,
-        userId,
-        // 带图的消息在记录里标一下，后台能看出这是图片消息
-        userContent: imageUrl ? `[图片] ${content}` : content,
-        aiReply: normalizeFaceTags(reply),
-        model: used ? `${used.name} · ${used.model}`.slice(0, 128) : null,
-      });
-    } catch (e) {
-      this.logger.warn(`Chat log write failed: ${e.message}`);
+    // 聊天记录写库不阻塞队列：它只是「留痕」，不是回复的必要条件。
+    // 同步 await 会拖慢同会话下一条消息（队列是串行的），改成 waitUntil
+    // 让队列立即释放，记录在后台异步完成；失败也不影响主流程。
+    const logWrite = addChatLog(this.env, {
+      kind: isC2C ? 'c2c' : 'group',
+      scopeId,
+      userId,
+      // 带图的消息在记录里标一下，后台能看出这是图片消息
+      userContent: imageUrl ? `[图片] ${content}` : content,
+      aiReply: normalizeFaceTags(reply),
+      model: used ? `${used.name} · ${used.model}`.slice(0, 128) : null,
+    }).catch((e) => this.logger.warn(`Chat log write failed: ${e.message}`));
+    if (this.state && typeof this.state.waitUntil === 'function') {
+      this.state.waitUntil(logWrite);
+    } else {
+      await logWrite;
     }
   }
 
@@ -2126,7 +2197,7 @@ export class QQBotDO {
       : '';
     const workspaceHint =
       '\n\n【你的工作区】你有一个私有工作区，运行在 Cloudflare Durable Objects 的持久化存储里（AiDO 实例），每个用户一个独立空间，文件路径形如 users/<用户编号>/。' +
-      '你可以在里面创建、修改、删除文件（单文件 ≤1.5MB、每人总量 ≤20MB、最多 200 个文件），也可以把它当作多步任务的草稿本。' +
+      '你可以在里面创建、修改、删除文件（单文件 ≤1.9MB、每人总量 ≤1GB、最多 5000 个文件），也可以把它当作多步任务的草稿本。' +
       '需要写长文、生成文件、整理多步任务时用 sandbox 工具；生成的文件会自动作为附件发给用户。' +
       '\n【关于用户发来的文件】消息里出现「【用户发来文件：xxx】」时，**那段代码块里的文字就是文件真实内容**，已经读到了。' +
       '用户说「存进我的目录」「保存这个」「收下」时，必须把**这段真实内容原样写进工作区**（用 sandbox 工具，任务里明确给出文件名和内容），' +

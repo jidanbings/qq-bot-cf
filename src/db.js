@@ -585,8 +585,11 @@ export async function purgeExpiredSessions(env) {
 export async function addChatLog(env, entry) {
   // 系统消息不脱敏：scope 固定为 'system'，方便后台直接辨识
   const isSystem = entry.kind === 'system';
-  const scopeKey = isSystem ? 'system' : await maskId(entry.scopeId);
-  const userKey = isSystem ? '' : await maskId(entry.userId);
+  // 两次 maskId（SHA-256 摘要）并行计算，省一次串行等待
+  const [scopeKey, userKey] = await Promise.all([
+    isSystem ? 'system' : maskId(entry.scopeId),
+    isSystem ? '' : maskId(entry.userId),
+  ]);
 
   await env.DB.prepare(
     'INSERT INTO chat_log (created_at, kind, scope_id, user_id, user_content, ai_reply, model) ' +
@@ -603,11 +606,15 @@ export async function addChatLog(env, entry) {
     )
     .run();
 
-  await env.DB.prepare(
-    'DELETE FROM chat_log WHERE id <= (SELECT MAX(id) FROM chat_log) - ?1'
-  )
-    .bind(CHAT_LOG_MAX_ROWS)
-    .run();
+  // 清理只在「大约每 32 条」触发一次：表远未满时省掉一次 DELETE 查询。
+  // 触发概率 + 上限 2000 行，能保证表永远不会比上限多超过几十条。
+  if ((Math.random() * 32) < 1) {
+    await env.DB.prepare(
+      'DELETE FROM chat_log WHERE id <= (SELECT MAX(id) FROM chat_log) - ?1'
+    )
+      .bind(CHAT_LOG_MAX_ROWS)
+      .run();
+  }
 }
 
 export async function listChatLogs(env, { page = 1, pageSize = 50, kind = '' } = {}) {
