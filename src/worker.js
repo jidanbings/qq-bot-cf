@@ -203,7 +203,7 @@ async function testImageGen(baseUrl, apiKey, model) {
   }
 }
 
-/** 测试 AI 对话配置：调 OpenAI 兼容 /chat/completions 发一句话，返回是否可用与回复 */
+/** 测试 AI 模型配置：调 OpenAI 兼容 /chat/completions 发一句话，返回是否可用与回复 */
 async function testAiChat(baseUrl, apiKey, model, temperature) {
   const payload = {
     model,
@@ -1074,9 +1074,9 @@ async function handle(request, env, ctx) {
     return htmlResponse(loginPage(nonce), nonce);
   }
 
-  // 后台页面：/status、/config、/ai、/imagegen、/groups、/workspace、/logs
+  // 后台页面：/status、/config、/ai、/groups、/workspace、/logs（生图已并入 /ai）
   // 必须登录才能访问，未登录一律跳 /login（不带任何参数）。
-  const ADMIN_PATHS = new Set(['status', 'config', 'ai', 'imagegen', 'groups', 'workspace', 'logs']);
+  const ADMIN_PATHS = new Set(['status', 'config', 'ai', 'groups', 'workspace', 'logs']);
   const seg = path.slice(1);
   const isAdminPage =
     request.method === 'GET' && path !== '/' && ADMIN_PATHS.has(seg) && !path.includes('/', 1);

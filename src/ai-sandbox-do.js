@@ -371,11 +371,14 @@ export class AiDO {
     let steps = 0;
     const sendQueue = [];
     let lastErr = null;
+    let usedProvider = null;
     for (; steps < MAX_STEPS; steps++) {
       let raw = null;
       for (const provider of providers || []) {
         try {
           raw = await this.callProvider(provider, messages);
+          // 记下真正跑通的那个 provider，后台聊天记录要显示它的模型名
+          usedProvider = provider;
           break;
         } catch (e) {
           lastErr = e;
@@ -430,6 +433,8 @@ export class AiDO {
       files: Object.keys(sb.files).length,
       runs: sb.runs,
       send: sendQueue,
+      // 实际跑通的模型，后台聊天记录用这个显示（而不是写死 "AiDO"）
+      model: usedProvider ? `${usedProvider.name} · ${usedProvider.model}` : '',
     };
   }
 

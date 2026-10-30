@@ -1881,7 +1881,7 @@ export class QQBotDO {
       (p) => p && p.enabled !== 0 && p.baseUrl && p.apiKey && p.model
     );
     if (!providers.length) {
-      this.logger.warn('No AI available (去后台「AI 对话」添加并启用一个)');
+      this.logger.warn('No AI available (去后台「AI 模型」添加并启用一个)');
       return;
     }
 
@@ -1923,7 +1923,7 @@ export class QQBotDO {
         await this.sendReply({
           isC2C,
           scopeId,
-          content: '我这边还没接能看图的模型～ 到后台「AI 对话」里，给支持识图的模型把「识图能力」选成「支持识图」，或者换一个多模态模型再发一次。',
+          content: '我这边还没接能看图的模型～ 到后台「AI 模型」里，给支持识图的模型把「识图能力」选成「支持识图」，或者换一个多模态模型再发一次。',
           msgId,
         });
         this.logger.warn(`Image message dropped: ${providers.length} provider(s) but none supports vision`);
@@ -1951,7 +1951,7 @@ export class QQBotDO {
           await this.sendReply({
             isC2C,
             scopeId,
-            content: '我这边还没接能看图的模型～ 到后台「AI 对话」里，给支持识图的模型把「识图能力」选成「支持识图」。',
+            content: '我这边还没接能看图的模型～ 到后台「AI 模型」里，给支持识图的模型把「识图能力」选成「支持识图」。',
             msgId,
           });
           return;
@@ -2495,7 +2495,7 @@ export class QQBotDO {
       (p) => p && p.enabled !== 0 && p.baseUrl && p.apiKey && p.model
     );
     if (!providers.length) {
-      await this.sendReply({ isC2C, scopeId, content: '还没配置 AI，去后台「AI 对话」加一个再 /沙箱。', msgId });
+      await this.sendReply({ isC2C, scopeId, content: '还没配置 AI，去后台「AI 模型」加一个再 /沙箱。', msgId });
       return;
     }
     if (isC2C && msgId) this.state.waitUntil(this.sendTyping({ scopeId, msgId }));
@@ -2624,7 +2624,8 @@ export class QQBotDO {
       userId,
       userContent: content,
       aiReply: `[沙箱] ${String(out.reply).slice(0, 300)}`,
-      model: 'AiDO',
+      // 用沙箱里真正跑通的模型（AiDO 会把 provider 带回来），拿不到才退回泛称
+      model: String(out.model || '').slice(0, 128) || 'AiDO',
     });
   }
 
@@ -2694,7 +2695,7 @@ export class QQBotDO {
       (p) => p && p.enabled !== 0 && p.baseUrl && p.apiKey && p.model
     );
     if (!providers.length) {
-      await this.sendReply({ isC2C, scopeId, content: '还没配置 AI，去后台「AI 对话」加一个再 /工作。', msgId });
+      await this.sendReply({ isC2C, scopeId, content: '还没配置 AI，去后台「AI 模型」加一个再 /工作。', msgId });
       return;
     }
 
@@ -2718,7 +2719,8 @@ export class QQBotDO {
       userId,
       userContent: content,
       aiReply: `[工作区] ${String(out.reply).slice(0, 300)}`,
-      model: '工作区',
+      // 用工作区里真正跑通的模型，拿不到才退回泛称
+      model: String(out.model || '').slice(0, 128) || '工作区',
     });
   }
 

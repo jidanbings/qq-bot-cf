@@ -125,8 +125,7 @@ function fmtEntryTime(iso){
 var META={
   status:{title:'运行状态',crumb:'概览 / 运行状态'},
   config:{title:'机器人配置',crumb:'设置 / 机器人配置'},
-  ai:{title:'AI 对话',crumb:'设置 / AI 对话'},
-  imagegen:{title:'生图模型',crumb:'设置 / 生图模型'},
+  ai:{title:'AI 模型',crumb:'设置 / AI 模型'},
   groups:{title:'群管理',crumb:'管理 / 群管理'},
   logs:{title:'聊天记录',crumb:'数据 / 聊天记录'},
   workspace:{title:'工作区',crumb:'管理 / 工作区'}
@@ -314,6 +313,30 @@ function skLogLines(n){
   var h='';
   for(var i=0;i<n;i++){
     h+='<div class="sk-field"><span class="sk-bar '+(i%2?'sk-w80':'sk-w90')+'"></span></div>';
+  }
+  return h;
+}
+
+// 列表型骨架屏（工作区 / 定时任务 / 群管理）：几行「头像 + 两行灰条」
+function skListSkeleton(n){
+  var h='';
+  for(var i=0;i<n;i++){
+    h+='<div class="prov-row sk-row-item">'
+      +'<span class="sk-block sk-no"></span>'
+      +'<div class="prov-info"><span class="sk-bar sk-w30"></span><span class="sk-bar sk-w50"></span></div>'
+      +'</div>';
+  }
+  return h;
+}
+
+// 会话列表骨架屏（聊天记录左侧）
+function convSkeleton(n){
+  var h='';
+  for(var i=0;i<n;i++){
+    h+='<div class="conv sk-conv">'
+      +'<span class="sk-block sk-conv-av"></span>'
+      +'<div class="conv-main"><span class="sk-bar sk-w40"></span><span class="sk-bar sk-w70"></span></div>'
+      +'</div>';
   }
   return h;
 }
@@ -1061,7 +1084,7 @@ function sysConvRowHtml(s){
 function loadConversations(){
   var list=$('conv-list');
   if(!list)return Promise.resolve();
-  list.innerHTML='<p class="muted">加载中…</p>';
+  list.innerHTML=convSkeleton(6);
   return api('GET','/api/conversations').then(function(d){
     var items=(d&&d.items)||[];
     var sys=(d&&d.system)||{count:0};
@@ -1236,7 +1259,7 @@ function showLogs(){
   loadConversations();
 }
 
-/* ============================== AI 对话 ============================== */
+/* ============================== AI 模型 ============================== */
 var aiState=[];
 var aiSeq=0;
 
@@ -1526,14 +1549,29 @@ function showAi(){
   rendered=false;
   setActive('ai');
   setTopActions('');
-  setPill('AI 对话','');
+  setPill('AI 模型','');
   $('wrap').innerHTML=skeletonAi();
-  api('GET','/api/ai').then(function(d){
+  // AI 列表 + 生图配置一起拉（生图已并入本页）
+  Promise.all([
+    api('GET','/api/ai'),
+    api('GET','/api/config').catch(function(){ return null; })
+  ]).then(function(r){
+    var d=r[0], cfgResp=r[1];
     if(!d)return;
     aiState=(d.providers||[]).map(function(p){
       return {id:p.id,name:p.name,baseUrl:p.baseUrl,apiKey:'',model:p.model,
         temperature:p.temperature,enabled:p.enabled?1:0,vision:p.vision||'auto',hasKey:!!p.hasKey,models:[]};
     });
+    if(cfgResp){
+      var cfg=(cfgResp.config)||{};
+      var conf=(cfgResp.configured)||{};
+      imageGenState.baseUrl=cfg.imageGenBaseUrl||'';
+      imageGenState.model=cfg.imageGenModel||'';
+      imageGenState.apiKey='';
+      imageGenState.hasKey=!!conf.imageGenApiKey;
+      imageGenState.tested=false;
+      imageGenState.result='';
+    }
     renderAiPage();
   }).catch(function(e){
     $('wrap').innerHTML='<div class="card"><div class="card-head"><h3>AI 列表读取失败</h3></div>'
@@ -1566,9 +1604,13 @@ function renderAiPage(){
     +'国外模型（OpenAI、Gemini、Grok 等）在 Cloudflare Workers 上可直连，不需要代理；调用是机器人服务器发的，跟你本地网络无关。<br>'
     +'改完点「保存」立即生效（机器人自动热更新，无需重启）；「保存并重启」会完整重启一遍连接。</p></div>';
   h+=aiModalHtml();
+  // 生图配置并入本页：追加生图卡片 + 弹窗
+  h+=imageGenCardsHtml();
+  h+=igenModalHtml();
   $('wrap').innerHTML=h;
   renderAiProviders();
   bindAiModal();
+  bindIgenModal();
 
   $('b-ai-add').addEventListener('click',function(){openAiModal(-1);});
   $('b-ai-save').addEventListener('click',function(){saveProviders(false,this);});
@@ -1626,10 +1668,10 @@ function showWorkspace(){
     +'<span class="hint">每个用户一份：文件（AiDO 沙箱）、任务与笔记（/工作）、对话记忆（ChatDO 三层）</span>'
     +'<button class="btn sm" id="b-ws-refresh" type="button">'+IX.refresh+'<span>刷新</span></button></div>'
     +'<p class="muted">按「人」隔离：单聊 <code>c2c:&lt;用户&gt;</code>、群聊 <code>group:&lt;群&gt;:u:&lt;用户&gt;</code>。点「查看」能看到这个人的文件、任务/笔记，以及 AI 记住他的三层记忆。</p>'
-    +'<div id="ws-list"><div class="sk-field"><span class="sk-bar sk-w60"></span></div></div>'
+    +'<div id="ws-list">'+skListSkeleton(4)+'</div>'
     +'<div class="card-head" style="margin-top:1.1rem"><h3>定时任务</h3><span class="hint" id="rem-count"></span></div>'
     +'<p class="muted">群里说「明天 8 点提醒我开会」「10 分钟后提醒我喝水」就会出现在这里；到点主动发消息，重复任务自动顺延。</p>'
-    +'<div class="prov-list" id="rem-list"><p class="muted">加载中…</p></div></div>';
+    +'<div class="prov-list" id="rem-list">'+skListSkeleton(3)+'</div></div>';
   var btn=$('b-ws-refresh');
   if(btn)btn.addEventListener('click',function(){loadWorkspaces();loadReminders();});
   loadWorkspaces();
@@ -1638,7 +1680,7 @@ function showWorkspace(){
 
 function loadWorkspaces(){
   var box=$('ws-list');
-  if(box)box.innerHTML='<div class="sk-field"><span class="sk-bar sk-w60"></span></div>';
+  if(box)box.innerHTML=skListSkeleton(4);
   // 同时拉沙箱与工作区两套索引，按 scope 合并成一个用户列表
   Promise.all([
     api('GET','/api/sandboxes').then(function(d){return (d&&d.items)||[];}).catch(function(){return [];}),
@@ -1820,7 +1862,7 @@ function igenRowHtml(){
   var h='<div class="prov-row" data-igen="1" title="点击编辑">';
   h+='<span class="prov-no">🎨</span>';
   h+='<div class="prov-info"><b>'+esc(imageGenState.model||'未配置（生图关闭）')+'</b><small>'
-    +(host?esc(host):'不填地址和 Key 时用「AI 对话」第一个 AI 兜底')+'</small></div>';
+    +(host?esc(host):'不填地址和 Key 时用「AI 列表」第一个 AI 兜底')+'</small></div>';
   h+='<div class="prov-meta">'+keyFlag+flag+'</div>';
   h+='<div class="prov-tools"><button class="btn sm" type="button" data-act="edit">编辑</button></div>';
   h+='</div>';
@@ -1890,7 +1932,14 @@ function saveIgenModal(){
   imageGenState.model=model;
   imageGenState.apiKey=key;
   closeIgenModal();
-  renderImageGenPage();
+  // 生图已并入 AI 页：刷新生图那行 + 状态，而不是重置整页
+  var row=document.querySelector('[data-igen]');
+  if(row)row.outerHTML=igenRowHtml();
+  else $('wrap').insertAdjacentHTML('beforeend',imageGenCardsHtml());
+  // 重新绑定行点击 + 更新状态
+  var newRow=document.querySelector('[data-igen]');
+  if(newRow)newRow.addEventListener('click',openIgenModal);
+  updateImageGenState();
   toast('已更新生图配置，点下方「保存」后生效','ok');
 }
 
@@ -1948,8 +1997,9 @@ function bindIgenModal(){
   updateImageGenState();
 }
 
-function renderImageGenPage(){
-  var h='<div class="card"><div class="card-head"><h3>生图配置</h3>'
+// 生图卡片（不含弹窗和 wrap 赋值），供 AI 页追加使用
+function imageGenCardsHtml(){
+  var h='<div class="card" style="margin-top:1.1rem"><div class="card-head"><h3>生图配置</h3>'
     +'<span class="hint">先测试通过才能保存；点行或「编辑」在弹窗里改</span></div>'
     +igenRowHtml()
     +'<div class="form-actions">'
@@ -1961,13 +2011,17 @@ function renderImageGenPage(){
   h+='<div class="card"><div class="card-head"><h3>主流生图模型</h3>'
     +'<span class="hint">点一下打开弹窗并填好模型名</span></div>'
     +'<div class="chip-row" id="igen-model-presets">'+igenModelChips()+'</div></div>';
-  h+='<div class="card"><div class="card-head"><h3>怎么用</h3></div>'
-    +'<p class="tip">生图用独立的 Base URL / API Key，和「AI 对话」里的对话模型互不影响，可以指向另一家服务商。'
+  h+='<div class="card"><div class="card-head"><h3>生图怎么用</h3></div>'
+    +'<p class="tip">生图用独立的 Base URL / API Key，和上面的对话模型互不影响，可以指向另一家服务商。'
     +'编辑在弹窗里完成，先点「<b>测试</b>」，服务商会现场画一张示例图；测试通过后保存按钮才会亮，保存后立即生效（机器人自动热更新）。<br>'
     +'群里发「/画 一只橘猫，水彩风格」或直接说「帮我画一只猫」就会出图。留空模型表示关闭生图。<br>'
     +'建议填服务商标注了 <b>image_gen</b> 的模型（比如 qwen-image-3.0-pro），接口需兼容 OpenAI 的 <b>/images/generations</b>。'
-    +'Base URL 不知道填什么的话，「AI 对话」页的内置配置里有各家的地址。'
-    +'不填 Base URL / Key 时，会自动用「AI 对话」里第一个 AI 的配置兜底。</p></div>';
+    +'不填 Base URL / Key 时，会自动用上面「AI 列表」里第一个 AI 的配置兜底。</p></div>';
+  return h;
+}
+
+function renderImageGenPage(){
+  var h=imageGenCardsHtml();
   h+=igenModalHtml();
   $('wrap').innerHTML=h;
   bindIgenModal();
@@ -2044,7 +2098,12 @@ function saveImageGen(btn){
     .then(function(){
       if(imageGenState.apiKey)imageGenState.hasKey=true;
       imageGenState.apiKey='';
-      renderImageGenPage();
+      // 局部刷新生图行 + 状态（生图已并入 AI 页，不能重置整页）
+      var row=document.querySelector('[data-igen]');
+      if(row)row.outerHTML=igenRowHtml();
+      var newRow=document.querySelector('[data-igen]');
+      if(newRow)newRow.addEventListener('click',openIgenModal);
+      updateImageGenState();
       toast('生图模型已保存，立即生效','ok');
     })
     .catch(function(e){toast(e.message,'bad');})
@@ -2067,7 +2126,7 @@ function groupsShell(){
   h+='<div class="grp-add"><input id="grp-add-input" placeholder="手动添加：粘贴群 openid" maxlength="128">'
     +'<button class="btn" type="button" id="grp-add-btn">'+IX.check+'<span>添加</span></button>'
     +'<button class="btn" type="button" id="grp-refresh">'+IX.refresh+'<span>刷新</span></button></div>';
-  h+='<div class="prov-list" id="group-list"><p class="muted">加载中…</p></div></div>';
+  h+='<div class="prov-list" id="group-list">'+skListSkeleton(5)+'</div></div>';
   h+='<div class="card"><div class="card-head"><h3>官方接口能力说明</h3></div>';
   h+='<dl class="dl">';
   h+='<dt>群资料</dt><dd>点群行打开弹窗：群名 / 简介 / 分类 / 标签 / 人数，外加机器人在群里的状态（角色、入群时间、消息接收设置、是否允许主动推送）</dd>';
@@ -2099,6 +2158,7 @@ function grpRowHtml(g){
 function loadGroups(){
   var list=$('group-list');
   if(!list)return Promise.resolve();
+  list.innerHTML=skListSkeleton(5);
   return api('GET','/api/groups').then(function(d){
     var items=(d&&d.items)||[];
     var cnt=$('grp-count');
@@ -2520,7 +2580,7 @@ function renderReminders(){
 }
 
 /* ============================== 路由 ============================== */
-// 路径路由：/status、/config、/ai、/imagegen、/groups、/workspace、/logs
+// 路径路由：/status、/config、/ai、/groups、/workspace、/logs（旧 /imagegen 重定向到 AI 模型页）
 // 不再用 #hash，地址栏就是干净的 /status 这种。
 // 注意：不能用带 \/ 的正则字面量——ADMIN_JS 是模板字符串，\/ 会被吃成 /，
 // 导致正则非法、整段脚本语法错误、页面一行 JS 都不执行（坑过一次）。
@@ -2529,7 +2589,7 @@ function route(){
   var tab = p.length ? p[0] : 'status';
   if(tab==='config')showConfig();
   else if(tab==='ai')showAi();
-  else if(tab==='imagegen')showImageGen();
+  else if(tab==='imagegen')showAi(); // 生图已并入 AI 模型页
   else if(tab==='workspace')showWorkspace();
   else if(tab==='groups')showGroups();
   else if(tab==='logs')showLogs();
@@ -2564,6 +2624,22 @@ if(burger&&side){
   });
   if(mask)mask.addEventListener('click',closeSide);
   window.addEventListener('popstate',closeSide);
+}
+
+/* SPA 导航：拦截侧边栏里的站内链接，用 pushState + 客户端 route() 切换，
+   不做整页刷新。这样点 /config、/logs 时骨架屏立刻渲染，数据再异步加载。 */
+var navLinks = document.querySelectorAll('.tabs a, .side-links a[href^="/"]');
+for (var ni = 0; ni < navLinks.length; ni++) {
+  navLinks[ni].addEventListener('click', function (ev) {
+    var href = this.getAttribute('href') || '';
+    // 只接管站内的后台路径，外链/首页(/)仍走默认跳转
+    if (href.charAt(0) !== '/' || href === '/') return;
+    if (href === location.pathname) return;
+    ev.preventDefault();
+    history.pushState(null, '', href);
+    route();
+    closeSide();
+  });
 }
 
 window.addEventListener('popstate',route);

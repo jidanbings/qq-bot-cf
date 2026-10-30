@@ -11,6 +11,10 @@ const HOST = '127.0.0.1';
 // 后台登录密码（可用环境变量覆盖）
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || 'preview-admin-2026';
 
+// API 模拟延迟（毫秒）：设为 1500 就能看到骨架屏，测完改回 0 或删掉。
+// 命令行第三个参数：node scripts/preview.mjs <端口> <延迟毫秒>
+const API_DELAY_MS = Number(process.argv[3]) || 0;
+
 // 本地预览走 http://，cookie 不能带 Secure，否则浏览器在 http 下不保存/不清除。
 // 其余属性（HttpOnly / SameSite=Strict / Max-Age）跟线上一致。
 function sessionCookie(id, maxAge) {
@@ -46,8 +50,13 @@ function hasSession(req) {
 }
 
 function sendJson(res, status, obj) {
-  res.writeHead(status, { ...SECURITY_HEADERS, 'Content-Type': 'application/json; charset=utf-8' });
-  res.end(JSON.stringify(obj));
+  // 统一在这里加模拟延迟，方便观察骨架屏
+  const finish = () => {
+    res.writeHead(status, { ...SECURITY_HEADERS, 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify(obj));
+  };
+  if (API_DELAY_MS > 0) setTimeout(finish, API_DELAY_MS);
+  else finish();
 }
 
 function readBody(req) {
@@ -595,4 +604,5 @@ createServer((req, res) => {
   console.log(`  登录页     http://127.0.0.1:${PORT}/login`);
   console.log(`  后台首页   http://127.0.0.1:${PORT}/status   （需登录，密码：${ADMIN_TOKEN}）`);
   console.log(`  未配置页   http://127.0.0.1:${PORT}/setup`);
+  if (API_DELAY_MS > 0) console.log(`  ⏱ API 延迟 ${API_DELAY_MS}ms（观察骨架屏用）`);
 });

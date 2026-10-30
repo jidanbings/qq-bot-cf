@@ -453,9 +453,9 @@ button{font-family:inherit}
 .conv-av svg{width:18px;height:18px}
 .conv-av.sys{background:var(--accent-light);color:var(--accent)}
 .conv-main{min-width:0;flex:1 1 auto}
-.conv-name{font-weight:600;font-size:12.5px;display:flex;gap:6px;align-items:baseline;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.conv-name{font-weight:650;font-size:13px;display:flex;gap:6px;align-items:baseline;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .conv-name .hint{font-weight:400;font-size:10.5px;color:var(--muted);flex:0 0 auto}
-.conv-prev{color:var(--muted);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+.conv-prev{color:var(--text-2);font-weight:500;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
 .conv-time{font-size:10.5px;color:var(--muted);flex:0 0 auto}
 .conv-del{flex:0 0 auto;width:26px;height:26px;padding:0;border-radius:8px;border:1px solid var(--border-strong);
   background:var(--surface);color:var(--text-2);cursor:pointer;opacity:0;transition:opacity .12s;display:grid;place-items:center}
@@ -532,6 +532,17 @@ button{font-family:inherit}
 .sk-w10{width:10%}.sk-w15{width:15%}.sk-w20{width:20%}.sk-w25{width:25%}.sk-w30{width:30%}
 .sk-w35{width:35%}.sk-w40{width:40%}.sk-w50{width:50%}.sk-w60{width:60%}.sk-w70{width:70%}
 .sk-w80{width:80%}.sk-w90{width:90%}
+/* 列表型骨架屏：头像 + 两行灰条（工作区/定时任务/群管理） */
+.sk-row-item{cursor:default}
+.sk-row-item:hover{background:transparent}
+.sk-row-item .prov-info{display:flex;flex-direction:column;gap:8px}
+.sk-row-item .prov-info .sk-bar{height:12px}
+/* 会话列表骨架屏（聊天记录左侧） */
+.sk-conv{cursor:default}
+.sk-conv:hover{background:transparent}
+.sk-conv-av{width:36px;height:36px;border-radius:10px;flex:0 0 auto}
+.sk-conv .conv-main{display:flex;flex-direction:column;gap:8px}
+.sk-conv .sk-bar{height:12px}
 
 /* ---------- Toast（右下角） ---------- */
 .toast-wrap{position:fixed;right:20px;bottom:20px;display:flex;flex-direction:column;gap:9px;z-index:60;pointer-events:none}
@@ -695,10 +706,9 @@ ${CSS_A}
     <div class="nav-label">设置</div>
     <div class="tabs">
       <a href="/config" data-tab="config">${ICONS_A.config}<span>机器人配置</span></a>
-      <a href="/ai" data-tab="ai">${ICONS_A.ai}<span>AI 对话</span></a>
-      <a href="/imagegen" data-tab="imagegen">${ICONS_A.imagegen}<span>生图模型</span></a>
+      <a href="/ai" data-tab="ai">${ICONS_A.ai}<span>AI 模型</span></a>
     </div>
-    <div class="nav-label">群管理</div>
+    <div class="nav-label">管理</div>
     <div class="tabs">
       <a href="/groups" data-tab="groups">${ICONS_A.groups}<span>群管理</span></a>
       <a href="/workspace" data-tab="workspace">${ICONS_A.workspace}<span>工作区</span></a>

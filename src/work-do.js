@@ -183,6 +183,8 @@ export class WorkDO {
           tasks: ws.tasks,
           notes: ws.notes,
           runs: ws.runs,
+          // 实际跑通的模型，后台聊天记录用这个显示
+          model: `${provider.name} · ${provider.model}`.slice(0, 128),
         };
       } catch (e) {
         lastErr = e;

@@ -26,6 +26,12 @@ h1{font-size:20px;font-weight:650;letter-spacing:-.01em}
 .field input{width:100%;padding:12px 14px;border:1px solid var(--border-strong);border-radius:10px;background:var(--surface);color:var(--text);font-size:14px;font-family:inherit;outline:none;transition:border-color .15s,box-shadow .15s}
 .field input:focus{border-color:var(--primary);box-shadow:0 0 0 3px rgba(37,99,235,.12)}
 .field input::placeholder{color:#b6bcc6}
+.field.pass{position:relative}
+.field.pass input{padding-right:46px}
+.eye{position:absolute;top:50%;right:8px;transform:translateY(-50%);width:34px;height:34px;display:flex;align-items:center;justify-content:center;border:none;border-radius:8px;background:transparent;color:var(--muted);cursor:pointer;transition:color .15s,background .15s}
+.eye:hover{color:var(--text-2);background:#f3f4f6}
+.eye svg{width:19px;height:19px}
+.eye.on{color:var(--primary)}
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;width:100%;padding:12px;border-radius:10px;border:1px solid var(--border-strong);background:var(--surface);color:var(--text);font-size:15px;font-weight:600;font-family:inherit;cursor:pointer;transition:background .15s,border-color .15s,box-shadow .15s,transform .1s}
 .btn:active{transform:translateY(1px)}
 .btn:disabled{opacity:.55;cursor:not-allowed;transform:none}

@@ -72,6 +72,14 @@ const MIC_ICON =
   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">' +
   '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="17" x2="12" y2="21"/><line x1="8" y1="21" x2="16" y2="21"/></svg>';
 
+const EYE_OFF =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">' +
+  '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
+
+const EYE_ON =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">' +
+  '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+
 const GITHUB_ICON =
   '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">' +
   '<path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>' +
@@ -111,7 +119,7 @@ const FEATURES = [
   {
     icon: CUBE_ICON,
     title: '多个 AI 轮着用',
-    desc: '后台「AI 对话」里可以加多套 Base URL / Key / 模型，按顺序排优先级，前一个超时或报错就自动切下一个。调用跑在独立的 ChatDO 里，慢请求（带图最长 180 秒）不会卡住事件分发。',
+    desc: '后台「AI 模型」里可以加多套 Base URL / Key / 模型，按顺序排优先级，前一个超时或报错就自动切下一个。调用跑在独立的 ChatDO 里，慢请求（带图最长 180 秒）不会卡住事件分发。',
     tags: ['多套配置', '自动切换', '/chat/completions'],
   },
   {
@@ -707,21 +715,32 @@ ${LOGIN_CSS}
   <h1>QQ Bot</h1>
   <p class="sub">管理后台登录</p>
   <form id="f" autocomplete="on">
-    <div class="field">
+    <div class="field pass">
       <input id="p" type="password" placeholder="请输入管理密码" autocomplete="current-password" autofocus>
+      <button class="eye" type="button" id="eye" title="显示/隐藏密码" aria-label="显示/隐藏密码">${EYE_OFF}</button>
     </div>
     <button class="btn primary" type="submit" id="btn">登 录</button>
     <p class="msg" id="e"></p>
   </form>
-  <p class="foot">Cloudflare Workers · 仅供管理员访问</p>
+  <p class="foot">通过 Cloudflare 进行保护</p>
 </div>
 <script nonce="${nonce}">
 var form=document.getElementById('f');
 var input=document.getElementById('p');
 var btn=document.getElementById('btn');
 var msg=document.getElementById('e');
+var eye=document.getElementById('eye');
 var locked=false;
+var EYE_ON_HTML=${JSON.stringify(EYE_ON)};
+var EYE_OFF_HTML=${JSON.stringify(EYE_OFF)};
 function show(text,ok){msg.textContent=text;msg.className=ok?'msg ok':'msg';}
+eye.onclick=function(){
+  var showPw=input.type==='password';
+  input.type=showPw?'text':'password';
+  eye.innerHTML=showPw?EYE_ON_HTML:EYE_OFF_HTML;
+  eye.classList.toggle('on',showPw);
+  input.focus();
+};
 form.onsubmit=function(ev){
   ev.preventDefault();
   if(locked)return;
