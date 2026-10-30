@@ -961,6 +961,20 @@ export async function deleteWorkspace(env, scope) {
 
 /* ------------------------------ AiDO 沙箱索引 ------------------------------ */
 
+export async function getSandbox(env, scope) {
+  try {
+    return (
+      (await env.DB.prepare(
+        'SELECT scope, kind, runs, files, last_task, updated_at FROM sandboxes WHERE scope = ?1'
+      )
+        .bind(String(scope))
+        .first()) || null
+    );
+  } catch {
+    return null;
+  }
+}
+
 export async function upsertSandbox(env, { scope, kind, runs, files, lastTask, updatedAt }) {
   const now = new Date(updatedAt || Date.now()).toISOString();
   await env.DB.prepare(

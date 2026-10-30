@@ -647,8 +647,7 @@ function qqDevSettingsUrl(appId){
  *   - 平台切回 WebSocket → **自动发现不了**：Webhook 模式下本对象根本不连网关，
  *     收不到任何 WS 事件，没有任何信号可依。所以必须给一个手动触发的入口。
  *
- * 以前 webhookVerifiedAt 只写不清，导致切回 WebSocket 后判定永远翻不回来，这是 bug。
- * 现在改成显式的双向 platformMode。
+ * 判定用显式的双向 platformMode（而不是「有过 webhook 痕迹就一直当 webhook」）。
  */
 function transportCards(){
   var isWebhook=(CUR_PLATFORM_MODE==='webhook')||(CUR_PLATFORM_MODE!=='ws'&&!!(CUR_WEBHOOK_VERIFIED||CUR_LAST_EVENT_AT));

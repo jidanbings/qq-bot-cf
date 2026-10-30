@@ -1,27 +1,15 @@
 /**
- * 聊天 Durable Object（ChatDO）：把「会话历史 + 模型调用」从机器人 DO 里拆出来。
+ * 聊天 Durable Object（ChatDO）：每个会话一个实例，负责上下文与模型调用。
  *
- * - 机器人 DO（QQBotDO）只负责 QQ 网关收发、工具执行；
- * - 这里负责每个会话的上下文、分层记忆压缩、按优先级调用 AI（含识图过滤、重试、故障转移）。
+ * QQBotDO 只管 QQ 收发和工具；上下文、分层记忆压缩、按优先级调 AI（含识图过滤、
+ * 重试、故障转移）都在这里。同一会话天然串行，慢请求（带图 180s）不卡别的群。
  *
- * 每个会话一个实例（idFromName(conversationKey)），天然串行处理同一会话的请求，
- * 慢请求（带图 180s）不会卡住别的群。
- *
- * ============================ 分层记忆设计 ============================
- *
- * 只靠「保留最近 N 条 + 一段摘要」在长期使用下会持续丢信息：
- *   - 摘要被反复拼接后截断到 400 字，聊几百轮就装不下了
- *   - record() 直接 splice 丢弃，那部分内容根本没进摘要
- *   - 摘要生成失败时消息已被切走，等于永久丢失
- *
- * 现在改成三层，各司其职：
- *
+ * 分层记忆三层：
  *   messages   最近 N 条原文（短期）      —— 逐字保真，负责当前话题
- *   summary    滚动摘要 ≤1500 字（中期）  —— 覆盖已滚出的历史，负责近期脉络
- *   facts      结构化长期事实（长期）      —— 只增不减，负责「这个人是谁、在意什么」
+ *   summary    滚动摘要 ≤1500 字（中期）  —— 覆盖已滚出的历史
+ *   facts      结构化长期事实（长期）      —— 只增不减，负责「这个人是谁」
  *
- * 压缩时机：每累积 10 轮（20 条）才触发一次，避免每条消息都调模型压一次。
- * 失败一律回滚：宁可这轮不压，也不能把消息丢了却没生成摘要。
+ * 每累积 20 条才压缩一次；压缩失败一律回滚，宁可这轮不压，也不能丢消息却没摘要。
  */
 import { withRetry } from './utils/retry.js';
 import { providerSupportsVision } from './utils/vision.js';
@@ -29,7 +17,7 @@ import { providerSupportsVision } from './utils/vision.js';
 const PREFIX = 'chat:';
 const MAX_KEYS = 500;
 
-/** 摘要字数上限。比原来的 400 宽裕很多，能装下较长脉络 */
+/** 摘要字数上限，够装下较长脉络 */
 const SUMMARY_MAX = 1500;
 /** 长期事实条数上限，超出时淘汰最旧的 */
 const FACTS_MAX = 40;
@@ -325,8 +313,7 @@ export class ChatDO {
     const limit = Math.max(2, Number(body.historyLimit) || 10);
     session.sinceCompress = (session.sinceCompress || 0) + 1;
 
-    // 原来这里直接 splice 丢弃，丢的内容永远进不了摘要。
-    // 现在走同一套压缩：有 provider 就压，没 provider 就宁可不裁。
+    // 超出上限时走压缩：有 provider 就压，没 provider 就宁可不裁（不能静默丢弃）
     if (session.messages.length > limit) {
       const provider = Array.isArray(body.providers) ? body.providers[0] : null;
       if (provider) {

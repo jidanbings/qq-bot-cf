@@ -363,7 +363,7 @@ export class AiDO {
     const basePrompt = String(systemPrompt || '') + AIDO_ENV_RULES + renderFiles(sb);
     const messages = [
       { role: 'system', content: basePrompt },
-      // 上限放到 16000：用户发来的文件全文会拼进 task，2000 装不下（实测 3182 字的文章被截断，AI 只能瞎编）
+      // 上限 16000：用户发来的文件全文会拼进 task，太小会截断导致 AI 瞎编
       { role: 'user', content: String(task || '').slice(0, 16000) },
     ];
 
@@ -433,9 +433,29 @@ export class AiDO {
     };
   }
 
-  async syncIndex(scope, kind, sb, lastTask) {
+  /**
+   * 只把这个人登记进后台索引，不执行任务、不写文件。
+   *
+   * 为什么需要：工作区页面是按索引表列人的。用户只是普通聊天、没让我写过文件时，
+   * 索引里就没有他，后台看不到这个人 —— 但实际上他早就在用机器人了。
+   * 所以每次对话都轻轻登记一下（已存在就只更新 lastTask，不动 files/runs/updatedAt）。
+   */
+  async touch({ scope, kind, owner, lastTask }) {
+    const sb = await this.load();
+    if (owner && !sb.owner) sb.owner = String(owner).slice(0, 32);
+    const task = String(lastTask || '').slice(0, 120);
+    await this.syncIndex(scope || sb.scope || '', kind || sb.kind || 'group', sb, task, {
+      // touch 不刷新 updatedAt，避免「聊一句天」就把工作区时间顶到最新
+      keepUpdatedAt: true,
+    });
+    return { ok: true };
+  }
+
+  async syncIndex(scope, kind, sb, lastTask, { keepUpdatedAt = false } = {}) {
     try {
       if (!scope || !this.env || !this.env.DB) return;
+      const { getSandbox } = await import('./db.js');
+      const prev = keepUpdatedAt ? await getSandbox(this.env, scope).catch(() => null) : null;
       const { upsertSandbox } = await import('./db.js');
       await upsertSandbox(this.env, {
         scope,
@@ -443,7 +463,7 @@ export class AiDO {
         runs: sb.runs,
         files: Object.keys(sb.files).length,
         lastTask,
-        updatedAt: sb.updatedAt,
+        updatedAt: keepUpdatedAt && prev ? prev.updated_at : sb.updatedAt,
       });
     } catch (e) {
       console.warn('[AIDO] index sync failed:', e && e.message);
@@ -469,14 +489,13 @@ export class AiDO {
   /**
    * 直接写入一个文件（不经 AI）。
    *
-   * 用途：用户发来文件时说「存进我的目录」，这件事根本不需要模型参与 ——
-   * 模型看到几千字内容反而容易编（实测会创建一个只写「缺少具体保存内容」的空文件）。
-   * 由代码按原始文件名直接落盘，既准确又省 token。
+   * 用途：用户发来文件时说「存进我的目录」，这件事不需要模型参与 ——
+   * 让模型做反而容易建出空文件。由代码按原始文件名直接落盘，准确且省 token。
    *
-   * 限制与 AI 写入完全一致：单文件 1.9MB、总量 1GB、最多 5000 个；
+   * 限制与 AI 写入一致：单文件 1.9MB、总量 1GB、最多 5000 个；
    * 路径自动归档到 users/<编号>/ 下，保持隐私隔离。
    *
-   * scope / kind 用来同步 D1 索引（后台沙箱列表靠它统计文件数）。
+   * scope / kind 用来同步 D1 索引（后台工作区靠它统计文件数）。
    */
   async putFile({ name, content, path, owner, scope, kind }) {
     const sb = await this.load();
@@ -503,9 +522,7 @@ export class AiDO {
     if (scope) sb.scope = String(scope).slice(0, 120);
     if (kind) sb.kind = String(kind).slice(0, 16);
     await this.save(sb, before);
-    // 关键：这里必须同步 D1 索引。
-    // 以前 putFile 不走 syncIndex，用户发来文件被自动存进沙箱后，
-    // 后台「沙箱」页的文件数还停在旧值（实际 2 个却显示 1 个）。
+    // 必须同步 D1 索引，否则后台工作区的文件数会停在旧值
     await this.syncIndex(sb.scope || '', sb.kind || '', sb, sb.lastTask || '');
     return { ok: true, path: target, bytes: Buffer.byteLength(text, 'utf8') };
   }
@@ -546,6 +563,7 @@ export class AiDO {
       const body = await request.json().catch(() => ({}));
       if (url.pathname === '/run') return Response.json(await this.run(body));
       if (url.pathname === '/state') return Response.json(await this.getState());
+      if (url.pathname === '/touch') return Response.json(await this.touch(body));
       if (url.pathname === '/file') return Response.json(await this.readFile(body.path));
       if (url.pathname === '/put') return Response.json(await this.putFile(body));
       if (url.pathname === '/reset') return Response.json(await this.reset());

@@ -568,8 +568,8 @@ export const HOME_CSS = `
   .home.motion .reveal.d4{animation-delay:.27s}
   @keyframes home-in{to{opacity:1;transform:none}}
 
-  /* 光晕：位移要够大才看得出来。原来 19 秒只挪 38px 且被 blur(90px) 糊掉，
-     等于静止；这里改成 12 秒挪 90px 并配合缩放，肉眼能明显感到「在呼吸」。 */
+  /* 光晕：位移要够大才看得出来（太小会被 blur 糊掉，等于静止）。
+     12 秒挪 90px 并配合缩放，肉眼能感到「在呼吸」。 */
   .home.motion .glow.g1{animation:home-drift 12s ease-in-out infinite alternate}
   .home.motion .glow.g2{animation:home-drift 15s ease-in-out infinite alternate-reverse}
   .home.motion .glow.g3{animation:home-drift 18s ease-in-out infinite alternate}
@@ -582,8 +582,8 @@ export const HOME_CSS = `
   .home.motion .float.f2{animation:home-bob 8.5s ease-in-out infinite reverse}
   @keyframes home-bob{from{transform:translateY(-6px)}to{transform:translateY(6px)}}
 
-  /* 波纹：原来只做 opacity .75→1，在一团本来就模糊的图形上完全看不出。
-     改成真正的涟漪 —— 缩放 + 透明度从外向内衰减。 */
+  /* 波纹：真正的涟漪 —— 缩放 + 透明度从外向内衰减
+     （只改 opacity 在一团模糊图形上完全看不出来） */
   .home.motion .wave{animation:home-ripple 4.5s ease-out infinite}
   @keyframes home-ripple{
     0%{transform:scale(.62);opacity:0}

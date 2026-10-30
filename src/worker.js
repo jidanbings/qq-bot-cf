@@ -283,7 +283,7 @@ function qqAck() {
 
 /**
  * op=13 回调地址验证的响应体：根节点必须是 plain_token + signature。
- * 单独抽出来是为了能直接测（历史上这里套过 {ok,data}，导致平台报「签名校验不通过」）。
+ * 单独抽出来为了能直接测（套一层 {ok,data} 会让平台报「签名校验不通过」）。
  */
 export async function qqValidationResponse(secret, d) {
   const signature = await signValidation(secret, d && d.event_ts, d && d.plain_token);

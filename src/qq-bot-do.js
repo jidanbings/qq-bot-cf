@@ -195,7 +195,7 @@ export class QQBotDO {
     });
   }
 
-  /** 每天最多清理一次过期会话（替代原来每分钟 cron 里的清扫） */
+  /** 每天最多清理一次过期会话 */
   async pruneDaily() {    try {
       const last = Number(await this.state.storage.get('pruned_at')) || 0;
       if (Date.now() - last < 24 * 60 * 60 * 1000) return;
@@ -473,13 +473,10 @@ export class QQBotDO {
   /**
    * 网关会话状态（sessionId + seq）落盘。
    *
-   * 为什么必须持久化：QQ 网关支持 RESUME —— 带上 session_id 和最后收到的 seq，
-   * 网关会自动补发这之后漏掉的事件。但 sessionId / seq 原来只存在内存里，
-   * DO 一旦被驱逐（Webhook 模式频繁休眠、或部署重启），重启后就没有了，
-   * 只能重新 IDENTIFY（新建会话），于是断线期间的消息补不回来，
-   * 还会额外消耗一次会话配额。
+   * QQ 网关支持 RESUME：带上 session_id 和最后收到的 seq，网关会补发之后漏掉的事件。
+   * 这些状态必须落盘 —— DO 会被驱逐（Webhook 模式频繁休眠、或部署重启），
+   * 只存内存就会丢，重启后只能重新 IDENTIFY（补不回消息，还多烧一次会话配额）。
    *
-   * 落盘之后，重启仍能走 RESUME，漏的事件由网关补发 —— 这才是真正的「不丢消息」。
    * 写操作低频（只在 READY/RESUMED/每收到事件时），成本可忽略。
    */
   saveGwState() {
@@ -1294,18 +1291,15 @@ export class QQBotDO {
   }
 
   /**
-   * 下载用户发来的文件附件，尽量转成 AI 能读的内容。
-   *
-   * 为什么要做：原来只处理图片附件，用户发 .txt / .md / .py 时 AI 完全收不到内容，
-   * 只能凭空编（典型症状：「把这个存进工作目录」→ AI 自己造了个快照说「工作区为空」）。
+   * 下载用户发来的文件附件，转成 AI 能读的内容。
    *
    * 处理策略：
-   *   - 文本类（.md/.py/.js/.json/.csv/代码/日志/配置…）→ 直接解码，这是主要路径
+   *   - 文本类（.md/.py/.js/.json/.csv/代码/日志/配置…）→ 直接解码，主要路径
    *   - docx/xlsx/pptx → 本质是 zip，抽里面的 XML 文本
    *   - 图片 → 交给识图（走 imageUrl 那条路）
    *   - .so/.zip/.exe 等二进制 → 明确告诉 AI「读不了」，避免它瞎编内容
    *
-   * 不做 PDF：PDF 文本层抽取在纯 JS 下不可靠（字体编码、子集化、扫描件都会失败），
+   * 不做 PDF：文本层抽取在纯 JS 下不可靠（字体编码、子集化、扫描件都会失败），
    * 与其给模型一堆乱码，不如明确说读不了。
    */
   async downloadAttachment(url, contentType, filenameHint) {
@@ -1565,7 +1559,6 @@ export class QQBotDO {
     const userText = content;
 
     // 文件附件：把内容读进来交给 AI，让它能真正「看到」文件
-    // 以前只处理图片，用户发 .txt / .md / .py 时 AI 根本收不到内容，只能瞎编
     let fileText = '';
     let fileName = '';
     if (fileAttachment) {
@@ -1579,9 +1572,8 @@ export class QQBotDO {
           fileText = r.text;
           const name = fileAttachment.filename || r.filename || '附件';
           fileName = name;
-          // 先把文件按原始文件名直接存进 AiDO 沙箱（不经 AI）。
-          // 这件事让模型做很容易出错（实测它会建一个只写「缺少具体保存内容」的空文件），
-          // 而「保存用户给的原始内容」本来就不需要模型参与。
+          // 把文件按原始文件名直接存进 AiDO 沙箱，不经 AI：
+          // 「保存用户给的原始内容」不需要模型参与，让模型做反而容易建出空文件。
           let savedNote = '';
           try {
             const aidNs = this.env && this.env.AIDO;
@@ -1853,9 +1845,9 @@ export class QQBotDO {
       return;
     }
 
-    // 定时提醒：识别「X 点提醒我…」直接落库，不绕 AI（AI 未配置也能用）
-    // 只在「用户原话」上解析提醒：content 里可能拼了几千字的文件内容，
-    // 文章中出现「提醒」字样会误建提醒（实际踩过：发一篇文章就自动建了个 01:00 的提醒）
+    // 定时提醒：识别「X 点提醒我…」直接落库，不绕 AI（AI 未配置也能用）。
+    // 只在用户原话上解析：content 里可能拼了几千字文件内容，
+    // 正文出现「提醒」字样会误建提醒。
     const reminderIntent = parseReminder(userText || content);
     if (reminderIntent) {
       await addReminder(this.env, {
@@ -2099,6 +2091,16 @@ export class QQBotDO {
         // 图片、梗图、表情这类一次性产物不记，避免上下文膨胀
         const fact = this.factFromTool(toolCall, toolResult);
         if (fact) await this.rememberFact({ key, text: fact, useAiDo });
+        // 工具这条也要进聊天记录，并且带上实际用的模型 ——
+        // 否则后台「聊天记录」里工具类回复只会显示成一条没有模型的空白记录
+        this.logExchange({
+          isC2C,
+          scopeId,
+          userId,
+          userContent: imageUrl ? `[图片] ${content}` : content,
+          aiReply: this.toolRecordNote(toolCall),
+          model: used ? `${used.name} · ${used.model}`.slice(0, 128) : null,
+        });
         session.lastUsed = Date.now();
         await this.saveSession(key, session);
         return;
@@ -2163,6 +2165,41 @@ export class QQBotDO {
     } else {
       await logWrite;
     }
+
+    // 把这个人登记进「工作区」索引（不动文件、不动 runs）。
+    // 之前只有写/读文件时才建索引，导致只聊天的人在工作区页面里根本看不到。
+    this.touchWorkspace({ isC2C, scopeId, userId, lastTask: String(userText || content).slice(0, 60) });
+  }
+
+  /**
+   * 轻量登记：让这个人出现在后台「工作区」列表里。
+   *
+   * 不阻塞主流程（挂 waitUntil），失败只记日志。
+   * 索引里已经有他时，只更新 lastTask，不动 updatedAt/files/runs。
+   */
+  touchWorkspace({ isC2C, scopeId, userId, lastTask }) {
+    const ns = this.env && this.env.AIDO;
+    if (!ns || typeof ns.idFromName !== 'function') return;
+    if (!this.state || typeof this.state.waitUntil !== 'function') return;
+    const key = this.ownerKey({ isC2C, scopeId, userId });
+    const run = (async () => {
+      try {
+        const stub = ns.get(ns.idFromName(key));
+        await stub.fetch('https://aido/touch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            scope: key,
+            kind: isC2C ? 'c2c' : 'group',
+            owner: await maskId(userId || scopeId),
+            lastTask,
+          }),
+        });
+      } catch (e) {
+        this.logger.warn(`touchWorkspace failed: ${e.message}`);
+      }
+    })();
+    this.state.waitUntil(run);
   }
 
   /** 组装系统提示词（人设 + 生图能力 + 工具调用说明） */
@@ -2721,8 +2758,7 @@ export class QQBotDO {
   }
 
   async recordAiDo({ key, assistant, historyLimit, providers }) {
-    // 带上 providers：ChatDO 的 record 需要它才能把滚出的消息压成摘要，
-    // 否则只能干等（原来直接 splice 丢弃，那部分内容永久丢失）
+    // 带上 providers：ChatDO 压缩滚出的消息时要用它调模型生成摘要
     const payload = JSON.stringify({ key, assistant, historyLimit, providers });
     let lastErr = null;
     for (let attempt = 1; attempt <= 2; attempt++) {
@@ -3420,8 +3456,18 @@ export class QQBotDO {
   }
 
   /** 判断文本是否适合用 Markdown 发送（含标题/列表/引用/链接等富格式才切） */
+  /**
+   * 判断这条回复该不该按 Markdown 发送。
+   *
+   * 只认「确实用到了 Markdown 语法」的回复，避免把普通聊天也套 markdown 格式。
+   * 表格必须单独识别：`| a | b |` + `|---|---|` 在 QQ 里按纯文本发会露出一堆竖线，
+   * 之前漏了这条判据，导致「只有表格没有别的标记」的回复被当成纯文本发出去。
+   */
   isMarkdownSafe(text) {
-    return /(^|\n)\s*#{1,6}\s|\*\*|~~|^\s*[-*]\s|\n\s*>|^>|\[[^\]]+\]\(https?:/m.test(text);
+    const s = String(text || '');
+    // 表格：至少一行 | a | b |，且存在分隔行 |---|---|
+    if (/^\s*\|.*\|\s*$/m.test(s) && /^\s*\|[\s:|-]+\|\s*$/m.test(s)) return true;
+    return /(^|\n)\s*#{1,6}\s|\*\*|~~|^\s*[-*]\s|\n\s*>|^>|\[[^\]]+\]\(https?:/m.test(s);
   }
 
   pruneSessions() {
@@ -3599,7 +3645,7 @@ export class QQBotDO {
   }
 
   /**
-   * WS 模式自检：等价于原来看门狗在 cron 里做的事，但由 DO 自己按时唤醒。
+   * WS 模式自检：由 DO 自己按时唤醒，检查连接是否需要重连。
    * 只在长连接模式下生效；Webhook 模式没有连接要守，什么都不做。
    */
   async wsWatchdog() {
