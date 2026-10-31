@@ -110,8 +110,12 @@ button{font-family:inherit}
 .mem-summary{font-size:.72rem;color:var(--text-2);line-height:1.6;padding:.4rem .6rem;
   background:var(--surface-2);border-radius:8px}
 .mem-facts{display:flex;flex-direction:column;gap:.3rem}
-.mem-facts li{font-size:.72rem;line-height:1.5;display:flex;justify-content:space-between;gap:.5rem}
-.mem-fact-time{color:var(--muted);font-size:.66rem;flex:0 0 auto}
+.mem-facts li{font-size:.72rem;line-height:1.5;display:flex;align-items:baseline;gap:.4rem}
+.mem-facts li>span:nth-child(2){flex:1;min-width:0;word-break:break-word}
+.mem-fact-slot{flex:0 0 auto;font-size:.64rem;padding:1px 6px;border-radius:5px;
+  background:var(--surface-2);color:var(--muted);border:1px solid var(--border)}
+.mem-fact-time{color:var(--muted);font-size:.66rem;flex:0 0 auto;margin-left:auto}
+.mem-capped{font-size:.64rem;color:var(--amber,#b45309);margin-left:.2rem}
 /* ============================ 主区（照抄 user.html .main-area） ============================ */
 .scroll{margin-left:240px;height:100vh;height:100dvh;flex:1;display:flex;flex-direction:column;min-width:0;overflow-y:auto;-webkit-overflow-scrolling:touch}
 .topbar{flex:0 0 auto;height:60px;display:flex;align-items:center;gap:14px;padding:0 28px;

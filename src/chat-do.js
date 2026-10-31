@@ -7,7 +7,7 @@
  * 分层记忆三层：
  *   messages   最近 N 条原文（短期）      —— 逐字保真，负责当前话题
  *   summary    滚动摘要 ≤1500 字（中期）  —— 覆盖已滚出的历史
- *   facts      结构化长期事实（长期）      —— 只增不减，负责「这个人是谁」
+ *   facts      结构化长期事实（长期）      —— 按槽位覆盖更新，负责「这个人是谁」
  *
  * 每累积 20 条才压缩一次；压缩失败一律回滚，宁可这轮不压，也不能丢消息却没摘要。
  */
@@ -17,23 +17,118 @@ import { providerSupportsVision } from './utils/vision.js';
 const PREFIX = 'chat:';
 const MAX_KEYS = 500;
 
-/** 摘要字数上限，够装下较长脉络 */
-const SUMMARY_MAX = 1500;
+/** 摘要字数上限：够记下很长的脉络 */
+const SUMMARY_MAX = 20000;
 /** 长期事实条数上限，超出时淘汰最旧的 */
 const FACTS_MAX = 40;
-/** 单条事实长度上限 */
-const FACT_MAX_LEN = 120;
-/** 每累积多少「条消息」触发一次压缩（10 轮 ≈ 20 条，按消息数算更稳） */
+/** 单条事实长度上限：有的项目描述很长，给足空间 */
+const FACT_MAX_LEN = 400;
+/** 每累积多少「条消息」才允许触发一次压缩（按消息数算比按轮数稳） */
 const COMPRESS_EVERY = 20;
+/**
+ * 压缩的「最低水位」：消息数超过 limit 的这么多倍才压。
+ *
+ * 为什么需要：原来只要超过 limit 就压，等于每轮对话都要调 2 次 AI（摘要 + 事实），
+ * token 消耗是对话本身的 2~3 倍。实际不需要这么勤——多留一些原文反而更准，
+ * 摘要压缩本质是「省 token」，太频繁就本末倒置了。
+ * 设成 3 倍：limit=10 时攒到 30 条才压，压缩频率降到原来的 1/3。
+ */
+const COMPRESS_WATERMARK = 3;
+/** 压缩冷却时间：两次压缩至少间隔这么久，防止短时间狂聊时被反复触发 */
+const COMPRESS_COOLDOWN_MS = 10 * 60 * 1000;
+/** 最近消息层的字符预算：一条贴进来的长文就能顶几十轮，光看条数会撑爆上下文 */
+const HISTORY_CHAR_BUDGET = 12000;
+/** 长期事实注入时的字符预算：事实长了也不能无脑全塞进每次请求 */
+const FACTS_CHAR_BUDGET = 4000;
+
+/**
+ * 长期事实的「槽位」。
+ *
+ * 为什么需要：事实是随时会被推翻的（"在杭州" → "搬到上海了"）。
+ * 没有槽位就是两条并存，模型每次看到都要自己猜哪个有效。
+ * 有槽位就能「后者替换前者」，同一个槽位永远只有一条最新值。
+ */
+const FACT_SLOTS = ['name', 'city', 'job', 'stack', 'project', 'like', 'dislike', 'date', 'other'];
+
+/** AI 输出的「槽位|内容」或「槽位：内容」格式 */
+const FACT_SLOT_RE = /^([a-z_]{2,12})\s*[|｜:：]\s*(.+)$/i;
 
 const SUMMARY_PROMPT =
   '把这段聊天记录压成简洁的中文摘要，保留：重要事实、用户偏好、正在做的事、未完成的约定。' +
   '不要客套话，不要复述寒暄。用分号分隔要点，总长不超过 300 字。';
 
 const FACTS_PROMPT =
-  '从这段聊天记录里抽取**值得长期记住的客观事实**，每行一条，用「- 」开头，最多 5 条。\n' +
-  '只抽稳定信息：姓名/称呼、所在城市、职业或身份、技术栈偏好、长期项目、明确的好恶、重要日期。\n' +
-  '不要抽一次性的问题、闲聊内容、临时情绪。没有值得记的就只输出「无」。';
+  '从这段聊天记录里抽取**值得长期记住的客观事实**，每行一条，最多 5 条。\n' +
+  '格式固定为「槽位|内容」，槽位只能从这些里选：\n' +
+  '  name=姓名或称呼, city=城市或所在地, job=职业或身份, stack=技术栈偏好,\n' +
+  '  project=长期项目, like=明确喜欢的东西, dislike=明确讨厌的东西, date=重要日期, other=其它稳定信息\n' +
+  '例子：name|用户叫小王；city|用户在杭州；dislike|讨厌 Java。\n' +
+  '只抽稳定信息，不要抽一次性的问题、闲聊内容、临时情绪。没有值得记的就只输出「无」。';
+
+/**
+ * 解析「一次性产出摘要 + 事实」的合并回复。
+ * 格式不对时尽量兜底：整段当摘要，事实留空（摘要才是主线）。
+ */
+function splitSummaryAndFacts(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return { summary: '', facts: '' };
+
+  const mSum = s.match(/===SUMMARY===\s*([\s\S]*?)(?====FACTS===|$)/i);
+  const mFacts = s.match(/===FACTS===\s*([\s\S]*)$/i);
+
+  if (mSum || mFacts) {
+    return {
+      summary: (mSum ? mSum[1] : '').trim(),
+      facts: (mFacts ? mFacts[1] : '').trim(),
+    };
+  }
+
+  // 模型没按格式走：整段当摘要，事实靠下面的启发式兜一下
+  return { summary: s, facts: '' };
+}
+
+/** 归一化：去多余空白与常见标点差异，用于判重 */
+function normFact(s) {
+  return String(s || '')
+    .replace(/\s+/g, '')
+    .replace(/[，。；、！？,.;!?]/g, '')
+    .trim();
+}
+
+/**
+ * 解析 AI 抽出来的一行事实。
+ * 兼容两种：带槽位的「city|用户在杭州」、不带槽位的历史格式「用户在杭州」。
+ * 只有显式带槽位才参与「同槽位替换」；裸文本按老办法判重追加，
+ * 否则像「事实编号1」「事实编号2」这种会被错误地当成同一条而互相覆盖。
+ */
+function parseFactLine(line) {
+  const raw = String(line || '').replace(/^[-*•\d.\s]+/, '').trim();
+  if (!raw || raw === '无') return null;
+  const m = raw.match(FACT_SLOT_RE);
+  if (m) {
+    const slot = m[1].toLowerCase();
+    const text = m[2].trim();
+    if (text && FACT_SLOTS.includes(slot)) return { slot, text };
+    // 槽位不认识就整行当内容，别把「姓名：小王」里的「姓名」切掉
+  }
+  if (raw.length > FACT_MAX_LEN) return null;
+  return { slot: '', text: raw };
+}
+
+/**
+ * 把旧摘要压到 n 字：保留开头和结尾，砍中间。
+ *
+ * 为什么不是只留开头：「开头」是最早的话题，最新丢失的信息反而在尾部。
+ * 中间通常是过程细节，砍掉损失最小。
+ */
+function compactOldSummary(s, n) {
+  const str = String(s || '');
+  if (str.length <= n) return str;
+  if (n <= 4) return str.slice(0, Math.max(0, n));
+  const head = Math.ceil((n - 1) * 0.5);
+  const tail = n - 1 - head;
+  return str.slice(0, head) + '…' + (tail > 0 ? str.slice(-tail) : '');
+}
 
 export class ChatDO {
   constructor(state, env) {
@@ -57,23 +152,64 @@ export class ChatDO {
             summary: String(stored.summary || ''),
             facts: Array.isArray(stored.facts) ? stored.facts : [],
             sinceCompress: Number(stored.sinceCompress) || 0,
+            lastCompressAt: Number(stored.lastCompressAt) || 0,
             lastUsed: stored.lastUsed || Date.now(),
           }
-        : { messages: [], summary: '', facts: [], sinceCompress: 0, lastUsed: Date.now() };
+        : {
+            messages: [],
+            summary: '',
+            facts: [],
+            sinceCompress: 0,
+            lastCompressAt: 0,
+            lastUsed: Date.now(),
+          };
     this.cache.set(key, session);
     return session;
   }
 
   async save(key, session) {
     session.lastUsed = Date.now();
-    // DO 单个值上限约 128KB：真超了就只裁 messages，summary/facts 必须保住
-    if (JSON.stringify(session).length > 100000) {
-      while (session.messages.length > 2 && JSON.stringify(session).length > 100000) {
+    // DO 单个值上限约 128KB。摘要放宽到 2 万字后，单是摘要就可能占 60KB，
+    // 真撞上限时按「先裁 messages，再压缩摘要，最后才动 facts」的顺序腾地方 ——
+    // facts 是最贵的信息（要跨几十轮才能重新学到），宁可少留原文也不能丢。
+    const byteLen = () => JSON.stringify(session).length;
+    if (byteLen() > 110000) {
+      while (session.messages.length > 2 && byteLen() > 110000) {
         session.messages.shift();
       }
     }
+    if (byteLen() > 110000 && session.summary && session.summary.length > 2000) {
+      // 摘要还在超：留头留尾砍中间，保住最早的人设和最新进展
+      session.summary = compactOldSummary(session.summary, Math.max(2000, Math.floor(session.summary.length / 2)));
+    }
     this.cache.set(key, session);
     await this.state.storage.put(PREFIX + key, session);
+  }
+
+  /**
+   * 是否该压缩了。
+   *
+   * 三个条件同时满足才压，任何一条不满足就继续攒原文：
+   *   1. 消息数超过「limit × 水位」—— 光超 limit 一点不急着压，多留原文更准
+   *   2. 距上次压缩满 20 条 —— 压缩是调 2 次 AI 的贵操作，不能每轮都来
+   *   3. 距上次压缩过了冷却期 —— 防止短时间狂聊被反复触发
+   *
+   * 例外：消息数超过 limit 的 10 倍时无条件压，避免上下文无限膨胀。
+   */
+  shouldCompress(session, limit, now = Date.now()) {
+    const over = session.messages.length - limit;
+    if (over <= 0) return false;
+
+    // 极端情况兜底：涨到 10 倍必须压，否则迟早撑爆上下文
+    if (session.messages.length > limit * 10) return true;
+
+    if (over < limit * (COMPRESS_WATERMARK - 1)) return false;
+    if ((session.sinceCompress || 0) < COMPRESS_EVERY) return false;
+
+    const last = Number(session.lastCompressAt) || 0;
+    if (last && now - last < COMPRESS_COOLDOWN_MS) return false;
+
+    return true;
   }
 
   /**
@@ -102,56 +238,59 @@ export class ChatDO {
     if (!provider) return { compressed: 0, reason: 'no-provider' };
 
     try {
-      // 并行拿「新摘要」和「新事实」。
-      // ⚠ 这里**不能**给每个调用加 .catch(() => '')：那会让「AI 全挂」看起来像成功，
-      // 然后照样 splice 掉旧消息 —— 消息没了、摘要也没有，正是要避免的记忆丢失。
-      // 正确做法：任何一路抛错都让整个 compress 失败，消息原样保留。
-      const [newSummary, newFacts] = await Promise.all([
-        this.chatOnce(provider, [
-          { role: 'system', content: SUMMARY_PROMPT },
-          { role: 'user', content: text },
-        ]),
-        this.chatOnce(provider, [
-          { role: 'system', content: FACTS_PROMPT },
-          { role: 'user', content: text },
-        ]).catch(() => ''), // 事实抽取失败可以容忍（摘要才是主线），但摘要必须成功
+      // 一次调用同时拿摘要和事实：把两份指令合成一个请求。
+      // 原来并行发两次请求，同样的聊天记录要付两遍 input token；
+      // 合成一次后 input 只算一份，输出也就多几十个字，综合更省。
+      const combined = await this.chatOnce(provider, [
+        {
+          role: 'system',
+          content:
+            '你在整理聊天记录，需要同时产出两样东西。严格按下面的格式输出，不要任何多余文字：\n\n' +
+            '===SUMMARY===\n' +
+            '<中文摘要，保留重要事实、用户偏好、正在做的事、未完成的约定，不要客套话，不超过 300 字>\n' +
+            '===FACTS===\n' +
+            '<每行一条长期事实，格式「槽位|内容」，最多 5 条；没有就写「无」>\n\n' +
+            '槽位只能从这些里选：\n' +
+            'name=姓名或称呼, city=城市或所在地, job=职业或身份, stack=技术栈偏好, project=长期项目, ' +
+            'like=明确喜欢的东西, dislike=明确讨厌的东西, date=重要日期, other=其它稳定信息\n' +
+            '只抽稳定的客观信息，不要抽一次性问题、闲聊、临时情绪。',
+        },
+        { role: 'user', content: text },
       ]);
+
+      const parsedOut = splitSummaryAndFacts(combined);
+      const newSummary = parsedOut.summary;
+      const newFacts = parsedOut.facts;
 
       if (!newSummary) throw new Error('摘要为空');
 
-      // 摘要：旧摘要 + 新摘要，超长时**保留旧摘要前半 + 新摘要**，
-      // 而不是从末尾截断（末尾才是最新内容，砍末尾等于丢掉刚发生的事）
+      // 摘要：旧摘要 + 新摘要。超长时旧摘要「留头留尾、砍中间」，
+      // 不能只截开头——最新发生的事在尾部，砍掉尾部等于把刚聊的丢了。
       if (newSummary) {
         const merged = [session.summary, newSummary].filter(Boolean).join('；');
         if (merged.length <= SUMMARY_MAX) {
           session.summary = merged;
         } else {
-          const keepOld = Math.max(0, SUMMARY_MAX - newSummary.length - 1);
-          session.summary = [session.summary.slice(0, keepOld), newSummary].filter(Boolean).join('；');
+          const room = Math.max(0, SUMMARY_MAX - newSummary.length - 1);
+          session.summary = [compactOldSummary(session.summary, room), newSummary]
+            .filter(Boolean)
+            .join('；');
         }
       }
 
-      // 长期事实：解析成结构化条目，去重后追加
+      // 长期事实：解析成结构化条目，按槽位覆盖写回
       if (newFacts) {
         const parsed = newFacts
           .split('\n')
-          .map((l) => l.replace(/^[-*•\d.\s]+/, '').trim())
-          .filter((l) => l && l !== '无' && l.length <= FACT_MAX_LEN);
-        for (const f of parsed) {
-          // 精确比对，不用 includes（否则「编号1」会被「编号10」误判为重复）
-          const nf = f.replace(/\s+/g, '');
-          const exists = session.facts.some((x) => String(x.text).replace(/\s+/g, '') === nf);
-          if (!exists) session.facts.push({ text: f, at: Date.now() });
-        }
-        // 超出上限时淘汰最旧的
-        if (session.facts.length > FACTS_MAX) {
-          session.facts = session.facts.slice(-FACTS_MAX);
-        }
+          .map(parseFactLine)
+          .filter(Boolean);
+        this.mergeFacts(session, parsed);
       }
 
       // 到这里才算成功：真正移除旧消息
       session.messages.splice(0, over);
       session.sinceCompress = 0;
+      session.lastCompressAt = Date.now();
       await this.save(key, session);
       this.logger.info(
         `compressed ${over} msgs → summary=${session.summary.length}字, facts=${session.facts.length}条`
@@ -161,6 +300,57 @@ export class ChatDO {
       // 失败：消息原样保留，等下次再试
       this.logger.warn(`compress failed (kept ${over} msgs): ${e.message}`);
       return { compressed: 0, error: e.message };
+    }
+  }
+
+  /**
+   * 把新事实合并进 session.facts。
+   *
+   * 两条规则：
+   *   1. 带槽位的事实 → 覆盖同槽位的旧值（"在杭州" 被 "搬到上海了" 换掉），
+   *      这样模型看到的信息永远是当前有效的，不用自己判断哪条更新。
+   *   2. 不带槽位的裸文本 → 精确判重后追加（兼容老数据与手工写入）。
+   *
+   * 判重必须精确比对，不能用 includes：否则「编号1」会被「编号10」吞掉。
+   */
+  mergeFacts(session, parsed) {
+    if (!Array.isArray(parsed) || !parsed.length) return;
+    if (!Array.isArray(session.facts)) session.facts = [];
+    const now = Date.now();
+
+    for (const f of parsed) {
+      const text = String(f.text || '').trim();
+      if (!text) continue;
+      const slot = String(f.slot || '');
+
+      if (slot) {
+        // 同槽位：就地替换，保留这一条的位置（不排到末尾），
+        // 否则「最近更新」的顺序会被打乱，超限淘汰时容易先把别的新事实挤掉。
+        const idx = session.facts.findIndex((x) => x && x.slot === slot);
+        if (idx >= 0) {
+          if (normFact(session.facts[idx].text) !== normFact(text)) {
+            session.facts[idx] = { ...session.facts[idx], text, at: now };
+          } else {
+            // 内容没变，只更新时间，不需要重复写
+            session.facts[idx].at = now;
+          }
+        } else {
+          session.facts.push({ slot, text, at: now });
+        }
+        continue;
+      }
+
+      // 无槽位：精确判重后追加
+      const nf = normFact(text);
+      const exists = session.facts.some((x) => x && !x.slot && normFact(x.text) === nf);
+      if (!exists) session.facts.push({ text, at: now });
+    }
+
+    if (session.facts.length > FACTS_MAX) {
+      // 淘汰最旧的：数组本身就是写入顺序（push 追加），直接保留末尾 N 条即最新。
+      // 不能按 at 排序 —— 同一毫秒内连续写入时 at 全相同，排序结果不确定，
+      // 会把刚写进去的新事实当成旧的淘汰掉。
+      session.facts = session.facts.slice(-FACTS_MAX);
     }
   }
 
@@ -257,9 +447,9 @@ export class ChatDO {
         const text = String(data.choices?.[0]?.message?.content || '').trim();
         if (!text) throw new Error('AI 返回空内容');
 
-        // 每累积 COMPRESS_EVERY 条才压一次，避免每条消息都调模型
+        // 攒够（水位数 + 条数 + 冷却期）才压，避免每轮都调 2 次 AI
         session.sinceCompress = (session.sinceCompress || 0) + 1;
-        if (session.messages.length > limit && session.sinceCompress >= COMPRESS_EVERY) {
+        if (this.shouldCompress(session, limit)) {
           await this.compress(key, session, limit, provider);
         }
         await this.save(key, session);
@@ -282,13 +472,48 @@ export class ChatDO {
   buildMessages(session, systemPrompt, imageMessage) {
     const out = [{ role: 'system', content: String(systemPrompt || '') }];
 
-    // 长期事实：放在人设之后、摘要之前，让模型始终知道「这个人是谁」
+    // 长期事实：放在人设之后、摘要之前，让模型始终知道「这个人是谁」。
+    // 带槽位的按中文标签归类，读起来像「人物档案」，比一串平铺 bullet 更省 token 也更准。
+    // 事实可能很长（整段项目描述），注入时按字符预算截断，超出的宁可省略也不能每次请求都全塞。
     if (session.facts && session.facts.length) {
+      const SLOT_LABEL = {
+        name: '称呼',
+        city: '所在地',
+        job: '职业',
+        stack: '技术栈',
+        project: '在做的事',
+        like: '喜欢',
+        dislike: '讨厌',
+        date: '重要日期',
+        other: '其它',
+      };
+      const grouped = [];
+      const loose = [];
+      for (const f of session.facts) {
+        if (!f || !f.text) continue;
+        const label = SLOT_LABEL[f.slot];
+        if (label) grouped.push(`${label}：${f.text}`);
+        else loose.push(f.text);
+      }
+      // 逐条累加，超预算就停；截断的那条带上省略号，让模型知道还有更多
+      const picked = [];
+      let used = 0;
+      for (const line of [...grouped, ...loose]) {
+        const remain = FACTS_CHAR_BUDGET - used;
+        if (remain <= 0) break;
+        if (line.length <= remain) {
+          picked.push(`- ${line}`);
+          used += line.length + 3;
+        } else {
+          picked.push(`- ${line.slice(0, Math.max(0, remain - 8))}…`);
+          used = FACTS_CHAR_BUDGET;
+          break;
+        }
+      }
+      const lines = picked.join('\n');
       out.push({
         role: 'system',
-        content: `【长期记忆】关于这个用户的稳定信息（长期有效，不要反复追问）：\n${session.facts
-          .map((f) => `- ${f.text}`)
-          .join('\n')}`,
+        content: `【长期记忆】关于这个用户的稳定信息（长期有效，不要反复追问）：\n${lines}`,
       });
     }
 
@@ -297,7 +522,24 @@ export class ChatDO {
     }
 
     // 历史里的旧图片只是占位文本，最后一轮换成本次带图的完整消息
-    const history = imageMessage ? session.messages.slice(0, -1) : session.messages;
+    let history = imageMessage ? session.messages.slice(0, -1) : session.messages;
+
+    // 字符预算裁剪：光按「条数」限制挡不住长文（一条贴进来的日志就几十 KB）。
+    // 从最新往前累加，超预算就停，保证送进去的永远是最贴近当前话题的那部分。
+    if (history.length) {
+      let used = 0;
+      let cut = 0;
+      for (let i = history.length - 1; i >= 0; i--) {
+        const c = history[i] && history[i].content;
+        used += typeof c === 'string' ? c.length : 200; // 图片/多段内容按 200 估
+        if (used > HISTORY_CHAR_BUDGET) {
+          cut = i + 1;
+          break;
+        }
+      }
+      if (cut > 0) history = history.slice(cut);
+    }
+
     out.push(...history);
     if (imageMessage) out.push(imageMessage);
     return out;
@@ -313,8 +555,9 @@ export class ChatDO {
     const limit = Math.max(2, Number(body.historyLimit) || 10);
     session.sinceCompress = (session.sinceCompress || 0) + 1;
 
-    // 超出上限时走压缩：有 provider 就压，没 provider 就宁可不裁（不能静默丢弃）
-    if (session.messages.length > limit) {
+    // 同样是「攒够才压」：record 是每次工具执行都会调的，原来只要超一点就压，
+    // 等于每执行一次工具就白烧一轮压缩 token。
+    if (this.shouldCompress(session, limit)) {
       const provider = Array.isArray(body.providers) ? body.providers[0] : null;
       if (provider) {
         await this.compress(key, session, limit, provider);
@@ -332,25 +575,32 @@ export class ChatDO {
    * 用途：工具执行后，把「发过什么文件、做过什么任务、定过什么提醒」这类
    * 一定会被再次问起的信息记下来。这类事实结构清晰，让 AI 再抽一遍纯属浪费 token。
    *
-   * 仍然做去重与上限控制，避免长期使用后无限膨胀。
+   * 支持传 slot（如 slot:'city'），带 slot 时走「同槽位覆盖」，
+   * 不带就是普通的精确判重追加。上限控制与 compress 共用 mergeFacts。
    */
   async addFact(body) {
     const key = String(body.key || '').slice(0, 200);
     if (!key) return { error: 'missing key' };
     const text = String(body.text || '').trim().slice(0, FACT_MAX_LEN);
     if (!text) return { error: 'empty fact' };
+    const slot = FACT_SLOTS.includes(String(body.slot || '').toLowerCase())
+      ? String(body.slot).toLowerCase()
+      : '';
     const session = await this.load(key);
-    // 去重必须**精确比对**，不能用 includes：
-    // 「事实编号1」是「事实编号10」的子串，宽松匹配会把正常事实误判成重复丢掉。
-    const norm = (s) => String(s || '').replace(/\s+/g, '').trim();
-    const exists = session.facts.some((x) => norm(x.text) === norm(text));
-    if (!exists) {
-      session.facts.push({ text, at: Date.now() });
-      if (session.facts.length > FACTS_MAX) session.facts = session.facts.slice(-FACTS_MAX);
-      await this.save(key, session);
-      this.logger.info(`fact added: ${text} (total ${session.facts.length})`);
-    }
-    return { ok: true, added: !exists, facts: session.facts.length };
+    const before = (session.facts || []).length;
+    const beforeText = slot ? (session.facts || []).find((x) => x && x.slot === slot)?.text : null;
+
+    this.mergeFacts(session, [{ slot, text }]);
+
+    const after = (session.facts || []).length;
+    const nowText = slot ? (session.facts || []).find((x) => x && x.slot === slot)?.text : null;
+    const changed = slot ? beforeText !== nowText : after > before;
+
+    if (changed) await this.save(key, session);
+    this.logger.info(
+      `fact ${changed ? 'written' : 'skipped'}${slot ? ` [${slot}]` : ''}: ${text} (total ${after})`
+    );
+    return { ok: true, added: changed, slot: slot || undefined, facts: after };
   }
 
   /** 只读状态：给后台排查用（不能叫 state，会和 DO 的 this.state 撞名） */
@@ -363,11 +613,18 @@ export class ChatDO {
       role: m.role,
       content: typeof m.content === 'string' ? m.content.slice(0, 200) : '[图片]',
     }));
+    // 带上每层的体积估算，后台能直观看到「这一层占了多少上下文」
+    const historyChars = (s.messages || []).reduce(
+      (n, m) => n + (typeof m.content === 'string' ? m.content.length : 200),
+      0
+    );
     return {
       messages: s.messages.length,
+      messagesChars: historyChars,
       summaryLen: s.summary.length,
       summary: s.summary,
       facts: s.facts,
+      factsSlotted: (s.facts || []).filter((f) => f && f.slot).length,
       sinceCompress: s.sinceCompress,
       recent,
     };

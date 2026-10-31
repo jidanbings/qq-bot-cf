@@ -1800,15 +1800,20 @@ function renderWorkspaceDetail(scope,sandbox,workspace,memory){
 
   var summaryHtml=memory.summary
     ? '<p class="mem-summary">'+esc(memory.summary)+'</p>'
-    : '<p class="muted">（还没有摘要，攒够 20 条才会压缩生成）</p>';
+    : '<p class="muted">（还没有摘要，攒够了才会压缩生成）</p>';
 
   var factList=memory.facts||[];
+  var SLOT_LABEL={name:'称呼',city:'所在地',job:'职业',stack:'技术栈',project:'在做的事',like:'喜欢',dislike:'讨厌',date:'重要日期',other:'其它'};
   var factsHtml=factList.length
     ? '<ul class="mem-facts">'+factList.map(function(f){
         var t=f.at?absTime(f.at):'';
-        return '<li><span>'+esc(f.text)+'</span>'+(t?'<span class="mem-fact-time">'+esc(t)+'</span>':'')+'</li>';
+        var tag=f.slot&&SLOT_LABEL[f.slot]?'<span class="mem-fact-slot">'+esc(SLOT_LABEL[f.slot])+'</span>':'';
+        return '<li>'+tag+'<span>'+esc(f.text)+'</span>'+(t?'<span class="mem-fact-time">'+esc(t)+'</span>':'')+'</li>';
       }).join('')+'</ul>'
     : '<p class="muted">（还没有长期事实）</p>';
+
+  var msgChars=memory.messagesChars||0;
+  var msgWarn=msgChars>12000?' <span class="mem-capped">超预算会裁剪</span>':'';
 
   body.innerHTML='<div class="muted">'+esc(scope)+'</div>'
     +'<h4>📂 文件（沙箱 · 写入 '+(sandbox.runs||0)+' 次）</h4><ul>'+files+'</ul>'
@@ -1816,11 +1821,12 @@ function renderWorkspaceDetail(scope,sandbox,workspace,memory){
     +'<h4>📝 笔记（/工作）</h4><ul>'+notes+'</ul>'
     +'<h4>🧠 记忆分层（ChatDO）</h4>'
     +'<div class="mem-block">'
-    +'<div class="mem-layer"><b>第一层 · 最近原文</b><span class="hint">'+(memory.messages||0)+' 条</span></div>'
+    +'<div class="mem-layer"><b>第一层 · 最近原文</b><span class="hint">'+(memory.messages||0)+' 条 · '+(msgChars>=1000?(msgChars/1000).toFixed(1)+'k':msgChars)+' 字'+msgWarn+'</span></div>'
     +recentHtml
-    +'<div class="mem-layer"><b>第二层 · 滚动摘要</b><span class="hint">'+(memory.summaryLen||0)+' 字</span></div>'
+    +'<div class="mem-layer"><b>第二层 · 滚动摘要</b><span class="hint">'+(memory.summaryLen||0)+' / 20000 字</span></div>'
     +summaryHtml
-    +'<div class="mem-layer"><b>第三层 · 长期事实</b><span class="hint">'+factList.length+' 条</span></div>'
+    +'<div class="mem-layer"><b>第三层 · 长期事实</b><span class="hint">'+factList.length+' / 40 条'
+      +((memory.factsSlotted||0)?'（'+memory.factsSlotted+' 条带槽位）':'')+'</span></div>'
     +factsHtml
     +'</div>';
 }
