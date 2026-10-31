@@ -1,6 +1,6 @@
 {
   "name": "qq-bot-cf",
-  "version": "3.15.0",
+  "version": "3.15.1",
   "description": "零服务器、零运行时依赖的 QQ 机器人：跑在 Cloudflare Workers + Durable Objects 上，接入 QQ 开放平台，任意 OpenAI 兼容模型，自带可视化管理后台。",
   "type": "module",
   "private": true,
