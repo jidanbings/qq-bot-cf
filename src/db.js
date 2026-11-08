@@ -912,8 +912,27 @@ export async function cancelReminder(env, id) {
   return (res.meta?.changes ?? 0) > 0;
 }
 
+/**
+ * 物理删除定时任务（连同已发送、已失败、已取消的一并删掉）。
+ * 支持批量：一次性从列表里清掉多条，不再逐条确认。
+ */
+export async function deleteReminders(env, ids) {
+  const nums = (Array.isArray(ids) ? ids : [])
+    .map((n) => Number(n))
+    .filter((n) => Number.isInteger(n) && n > 0);
+  if (!nums.length) return 0;
+  const res = await env.DB.prepare(
+    `DELETE FROM reminders WHERE id IN (${nums
+      .map(() => '?')
+      .join(',')})`
+  )
+    .bind(...nums)
+    .run();
+  return res.meta?.changes ?? 0;
+}
 
-/* ------------------------------ ���ù�ͼ��D1 �洢������ʱ�Զ����룩 ------------------------------ */
+
+/* ------------------------------ 内置梗图（D1 存储，部署时自动导入） ------------------------------ */
 
 export async function listMemes(env) {
   try {

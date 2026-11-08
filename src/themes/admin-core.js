@@ -1714,25 +1714,98 @@ function renderWorkspaces(sandboxes,workspaces){
     box.innerHTML='<p class="muted">还没有工作区。群里 @机器人 发 <b>/工作 帮我整理一下…</b>，或说「写一篇…保存成 a.md 发我」就会创建。</p>';
     return;
   }
-  var h='';
+
+  // 拆成「单聊」和「群聊」。单聊每人一条；群聊按群分组折叠成一条，
+  // 展开后才列出该群的每个用户 —— 一个活跃群几十个用户不再刷屏。
+  var c2c=[];
+  var groups={};   // groupOpenid -> { users:[...], latestAt }
   for(var m=0;m<items.length;m++){
     var it=items[m];
-    var tags='<span class="ws-tag">'+(it.kind==='c2c'?'单聊':'群聊')+'</span>';
-    if(it.hasSandbox)tags+='<span class="ws-tag">文件 '+esc(String(it.files||0))+' 个</span>';
-    if(it.hasWorkspace)tags+='<span class="ws-tag">任务 '+esc(String(it.tasks||0))+' · 笔记 '+esc(String(it.notes||0))+'</span>';
-    tags+='<span class="ws-tag">'+esc(it.updatedAt?absTime(it.updatedAt):'')+'</span>';
-    h+='<div class="ws-row" data-scope="'+esc(it.scope)+'">'
-      +'<div class="ws-main"><b>'+esc(it.scopeMasked||'')+'</b>'
-      +'<small>'+esc(it.lastTask||'（还没执行过任务）')+'</small>'
-      +'<div class="ws-tags">'+tags+'</div></div>'
-      +'<div class="prov-tools"><button class="btn sm" type="button" data-ws="detail">查看</button>'
-      +'<button class="btn sm" type="button" data-ws="clear">清空</button></div></div>';
+    if(it.kind==='c2c'){ c2c.push(it); continue; }
+    var gid=groupOpenidOf(it.scope);
+    if(!groups[gid])groups[gid]={gid:gid,users:[],latestAt:0};
+    groups[gid].users.push(it);
+    if((it.updatedAt||0)>groups[gid].latestAt)groups[gid].latestAt=it.updatedAt;
   }
+
+  var h='';
+  // 单聊直接列出
+  for(var a=0;a<c2c.length;a++)h+=wsUserRowHtml(c2c[a],'c2c');
+
+  // 群聊：一个群一个卡片，默认折叠，点开显示群内用户
+  var groupList=Object.keys(groups).map(function(k){return groups[k];});
+  groupList.sort(function(x,y){return y.latestAt-x.latestAt;});
+  for(var b=0;b<groupList.length;b++){
+    var grp=groupList[b];
+    grp.users.sort(function(x,y){return (y.updatedAt||0)-(x.updatedAt||0);});
+    var urows='';
+    for(var c=0;c<grp.users.length;c++)urows+=wsUserRowHtml(grp.users[c],'group-member');
+    h+='<div class="ws-group" data-gid="'+esc(grp.gid)+'">'
+      +'<div class="ws-group-head" role="button" tabindex="0" aria-expanded="false">'
+      +'<span class="ws-badge">'+IX.groups+'</span>'
+      +'<div class="ws-main"><b>群聊 · '+esc(grp.gid)+'</b>'
+      +'<small>'+grp.users.length+' 个用户的工作区</small></div>'
+      +'<span class="ws-chevron">▸</span></div>'
+      +'<div class="ws-group-body" hidden>'+urows+'</div>'
+      +'</div>';
+  }
+
   box.innerHTML=h;
-  if(!box.__wsBound){ box.__wsBound=true; box.addEventListener('click',onWorkspaceClick); }
+  if(!box.__wsBound){
+    box.__wsBound=true;
+    box.addEventListener('click',onWorkspaceClick);
+  }
+}
+
+// 从 scope 里拆出群 openid：group:<openid>:u:<user>
+function groupOpenidOf(scope){
+  var s=String(scope||'');
+  if(s.indexOf('group:')!==0)return s;
+  var rest=s.slice(6);
+  var idx=rest.indexOf(':u:');
+  return idx>=0?rest.slice(0,idx):rest;
+}
+
+// 单用户工作区行。kind: c2c=单聊顶层 / group-member=群聊折叠内的成员
+function wsUserRowHtml(it,kind){
+  var initial=(it.scopeMasked&&it.scopeMasked.charAt(0))||'U';
+  var sc=it.scope||'';
+  var sub;
+  if(kind==='group-member'){
+    // 群聊成员：只显示打码后的用户标识那一段
+    var idx=sc.indexOf(':u:');
+    sub=idx>=0?('成员 '+esc(sc.slice(idx+3))) : esc(it.scopeMasked||'');
+  } else {
+    sub=esc(it.scopeMasked||'');
+  }
+  var tags='';
+  if(it.hasSandbox)tags+='<span class="ws-tag">文件 '+esc(String(it.files||0))+'</span>';
+  if(it.hasWorkspace)tags+='<span class="ws-tag">任务 '+esc(String(it.tasks||0))+' · 笔记 '+esc(String(it.notes||0))+'</span>';
+  tags+='<span class="ws-tag">'+esc(it.updatedAt?absTime(it.updatedAt):'')+'</span>';
+  return '<div class="ws-row'+(kind==='group-member'?' ws-row-indent':'')+'" data-scope="'+esc(sc)+'">'
+    +'<span class="ws-badge ws-badge-user">'+esc(initial)+'</span>'
+    +'<div class="ws-main"><b>'+sub+'</b>'
+    +'<small>'+esc(it.lastTask||'（还没执行过任务）')+'</small>'
+    +'<div class="ws-tags">'+tags+'</div></div>'
+    +'<div class="prov-tools"><button class="btn sm" type="button" data-ws="detail">查看</button>'
+    +'<button class="btn sm" type="button" data-ws="clear">清空</button></div></div>';
 }
 
 function onWorkspaceClick(e){
+  // 群聊分组头：点一下折叠/展开
+  var gh=e.target&&e.target.closest?e.target.closest('.ws-group-head'):null;
+  if(gh){
+    var grp=gh.closest('.ws-group');
+    if(!grp)return;
+    var body=grp.querySelector('.ws-group-body');
+    var chev=grp.querySelector('.ws-chevron');
+    if(!body)return;
+    var willShow=body.hidden;
+    body.hidden=!willShow;
+    gh.setAttribute('aria-expanded',String(willShow));
+    if(chev)chev.textContent=willShow?'▾':'▸';
+    return;
+  }
   var btn=e.target&&e.target.closest?e.target.closest('button[data-ws]'):null;
   if(!btn)return;
   var row=btn.closest('.ws-row');
@@ -2517,9 +2590,11 @@ function showReminders(){
     +'<span class="hint" id="rem-count"></span></div>'
     +'<p class="tip">机器人收到消息后会识别「明天 8 点提醒我开会」「10 分钟后提醒我喝水」这类请求并存到这里；到点由每分钟巡检主动发消息。'
     +'重复任务（每天 / 每周）发完自动顺延到下一次。<b>注意</b>：QQ 对主动消息有频率和配额限制，发送失败的任务会在下面标红并记入聊天记录。</p>'
-    +'<div class="form-actions"><button class="btn" type="button" id="rem-refresh">'+IX.refresh+'<span>刷新</span></button></div>'
+    +'<div class="form-actions"><button class="btn" type="button" id="rem-refresh">'+IX.refresh+'<span>刷新</span></button>'
+    +'<button class="btn ghost hidden" type="button" id="rem-del-sel">'+IX.trash+'<span>删除选中</span></button></div>'
     +'<div class="prov-list" id="rem-list"><p class="muted">加载中…</p></div></div>';
   $('rem-refresh').addEventListener('click',function(){loadReminders();});
+  $('rem-del-sel').addEventListener('click',function(){deleteSelectedReminders();});
   loadReminders();
 }
 
@@ -2556,13 +2631,15 @@ function renderReminders(){
   if(c)c.textContent='待发送 '+pending+' 条 / 共 '+items.length+' 条';
   if(!items.length){
     box.innerHTML='<p class="muted">还没有定时任务。在群里说「明天 8 点提醒我开会」就能创建。</p>';
+    updateDelSelBtn();
     return;
   }
   var h='';
   for(var k=0;k<items.length;k++){
     var it=items[k];
     var canCancel=it.status==='pending'||it.status==='sending';
-    h+='<div class="prov-row" data-rem="'+it.id+'">';
+    h+='<div class="prov-row rem-row" data-rem="'+it.id+'">';
+    h+='<label class="prov-check rem-check" title="选择这条"><input type="checkbox" data-remsel="'+it.id+'"></label>';
     h+='<span class="prov-no">⏰</span>';
     h+='<div class="prov-info"><b>'+esc(it.text)+'</b><small>'
       +(it.isC2C?'私聊':'群聊')+' · '+esc(it.scopeMasked||'')
@@ -2570,20 +2647,65 @@ function renderReminders(){
       +(it.lastError?' · <span class="error-text">'+esc(it.lastError)+'</span>':'')
       +'</small></div>';
     h+='<div class="prov-meta"><span class="prov-time">'+esc(fmtEntryTime(it.dueAt))+'</span>'+remStatusHtml(it.status)+'</div>';
-    if(canCancel)h+='<div class="prov-tools"><button class="btn sm ghost" type="button" data-remcancel="'+it.id+'">取消</button></div>';
+    h+='<div class="prov-tools">';
+    if(canCancel)h+='<button class="btn sm ghost" type="button" data-remcancel="'+it.id+'">取消</button>';
+    h+='<button class="icon-btn" type="button" data-remdel="'+it.id+'" title="删除这条任务">'+IX.trash+'</button>';
+    h+='</div>';
     h+='</div>';
   }
   box.innerHTML=h;
   box.onclick=function(e){
-    var btn=e.target&&e.target.closest?e.target.closest('[data-remcancel]'):null;
-    if(!btn)return;
-    var id=Number(btn.getAttribute('data-remcancel'));
-    if(!confirm('取消这条定时任务？'))return;
-    api('POST','/api/reminders/cancel',{id:id}).then(function(){
-      toast('已取消','ok');
-      loadReminders();
-    }).catch(function(err){toast(err.message,'bad');});
+    var cancelBtn=e.target&&e.target.closest?e.target.closest('[data-remcancel]'):null;
+    if(cancelBtn){
+      var id=Number(cancelBtn.getAttribute('data-remcancel'));
+      if(!confirm('取消这条定时任务？'))return;
+      api('POST','/api/reminders/cancel',{id:id}).then(function(){
+        toast('已取消','ok');
+        loadReminders();
+      }).catch(function(err){toast(err.message,'bad');});
+      return;
+    }
+    var delBtn=e.target&&e.target.closest?e.target.closest('[data-remdel]'):null;
+    if(delBtn){
+      var did=Number(delBtn.getAttribute('data-remdel'));
+      if(!confirm('删除这条定时任务？删除后不可恢复。'))return;
+      api('POST','/api/reminders/delete',{id:did}).then(function(){
+        toast('已删除','ok');
+        loadReminders();
+      }).catch(function(err){toast(err.message,'bad');});
+      return;
+    }
   };
+  box.onchange=function(e){
+    if(e.target&&e.target.matches&&e.target.matches('[data-remsel]'))updateDelSelBtn();
+  };
+}
+
+function selectedReminderIds(){
+  var box=$('rem-list');
+  if(!box)return [];
+  var ids=[];
+  var cbs=box.querySelectorAll('input[data-remsel]:checked');
+  for(var i=0;i<cbs.length;i++)ids.push(Number(cbs[i].getAttribute('data-remsel')));
+  return ids;
+}
+
+function updateDelSelBtn(){
+  var btn=$('rem-del-sel');
+  if(!btn)return;
+  var n=selectedReminderIds().length;
+  btn.classList.toggle('hidden',n===0);
+  btn.innerHTML=IX.trash+'<span>删除选中'+(n?'（'+n+'）':'')+'</span>';
+}
+
+function deleteSelectedReminders(){
+  var ids=selectedReminderIds();
+  if(!ids.length){ toast('先勾选要删除的任务','bad'); return; }
+  if(!confirm('删除选中的 '+ids.length+' 条定时任务？删除后不可恢复。'))return;
+  api('POST','/api/reminders/delete',{ids:ids}).then(function(d){
+    toast('已删除 '+(d&&d.deleted||ids.length)+' 条','ok');
+    loadReminders();
+  }).catch(function(err){ toast(err.message,'bad'); });
 }
 
 /* ============================== 路由 ============================== */

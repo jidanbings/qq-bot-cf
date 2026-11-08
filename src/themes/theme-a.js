@@ -93,6 +93,23 @@ button{font-family:inherit}
 .ws-row small{display:block;color:var(--muted);font-size:.7rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ws-tags{display:flex;gap:.35rem;flex-wrap:wrap;font-size:.68rem;color:var(--muted);margin-top:.25rem}
 .ws-tag{background:var(--surface-2);border-radius:6px;padding:1px 6px;white-space:nowrap}
+.ws-badge{width:34px;height:34px;border-radius:50%;flex:0 0 auto;display:flex;align-items:center;justify-content:center;
+  background:var(--accent-light);color:var(--accent);font-weight:700;font-size:.8rem}
+.ws-badge svg{width:17px;height:17px}
+.ws-badge-user{background:linear-gradient(135deg,#eef2ff,#e0e7ff);color:var(--accent);
+  font-size:.78rem;text-transform:uppercase}
+/* 群聊工作区分组折叠 */
+.ws-group{border:1px solid var(--border);border-radius:10px;margin-bottom:.5rem;background:var(--surface);overflow:hidden}
+.ws-group-head{display:flex;align-items:center;gap:.6rem;padding:.6rem .7rem;cursor:pointer;user-select:none}
+.ws-group-head:hover{background:var(--surface-2)}
+.ws-group-body{border-top:1px solid var(--border);padding:.4rem .7rem;background:var(--surface-2)}
+.ws-row-indent{border:none;border-radius:8px;background:var(--surface)}
+.ws-row-indent:hover{background:var(--surface-3,#f1f3f6)}
+.ws-chevron{color:var(--muted);font-size:.85rem;flex:0 0 auto;transition:transform .15s}
+/* 定时任务多选 */
+.rem-row .rem-check{flex:0 0 auto;display:inline-flex;align-items:center}
+.rem-row .prov-check input{width:15px;height:15px;accent-color:var(--accent);cursor:pointer}
+.hidden{display:none!important}
 .ws-detail h4{font-size:.78rem;margin:.8rem 0 .3rem}
 .ws-detail ul{list-style:none;display:flex;flex-direction:column;gap:.25rem}
 .ws-detail li{font-size:.75rem;color:var(--text-2);line-height:1.6}

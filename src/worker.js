@@ -6,6 +6,7 @@ import { FAVICON_SVG, FAVICON_PNG_32, FAVICON_ICO, APPLE_TOUCH_PNG } from './ass
 import {
   clearChatLogs,
   cancelReminder,
+  deleteReminders,
   createSession,
   deleteSession,
   deleteConversation,
@@ -889,6 +890,14 @@ async function handleApi(request, env, url) {
       if (!id) throw new HttpError(400, 'invalid_id', '缺少提醒 id');
       const cancelled = await cancelReminder(env, id);
       return jsonResult({ id, cancelled });
+    }
+
+    case '/api/reminders/delete': {
+      if (method !== 'POST') throw new HttpError(405, 'method_not_allowed', '请使用 POST');
+      const body = await readJson(request);
+      const ids = Array.isArray(body?.ids) ? body.ids : [Number(body?.id) || 0];
+      const deleted = await deleteReminders(env, ids);
+      return jsonResult({ deleted });
     }
 
     default:
