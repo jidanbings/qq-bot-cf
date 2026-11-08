@@ -1740,10 +1740,11 @@ function onWorkspaceClick(e){
   var scope=row.getAttribute('data-scope')||'';
   var act=btn.getAttribute('data-ws');
   if(act==='clear'){
-    if(!confirm('清空这个用户的工作区（文件、任务、笔记）？'))return;
+    if(!confirm('清空这个用户的工作区（文件、任务、笔记、记忆三层）？'))return;
     Promise.all([
       api('POST','/api/sandboxes/clear',{scope:scope}).catch(function(){}),
-      api('POST','/api/workspaces/clear',{scope:scope}).catch(function(){})
+      api('POST','/api/workspaces/clear',{scope:scope}).catch(function(){}),
+      api('POST','/api/memory/clear',{scope:scope}).catch(function(){})
     ]).then(function(){ toast('已清空'); loadWorkspaces(); })
       .catch(function(err){ toast(err.message,'bad'); });
   } else if(act==='detail'){
@@ -1808,7 +1809,7 @@ function renderWorkspaceDetail(scope,sandbox,workspace,memory){
     ? '<ul class="mem-facts">'+factList.map(function(f){
         var t=f.at?absTime(f.at):'';
         var tag=f.slot&&SLOT_LABEL[f.slot]?'<span class="mem-fact-slot">'+esc(SLOT_LABEL[f.slot])+'</span>':'';
-        return '<li>'+tag+'<span>'+esc(f.text)+'</span>'+(t?'<span class="mem-fact-time">'+esc(t)+'</span>':'')+'</li>';
+        return '<li>'+tag+'<span class="mem-fact-text">'+esc(f.text)+'</span>'+(t?'<span class="mem-fact-time">'+esc(t)+'</span>':'')+'</li>';
       }).join('')+'</ul>'
     : '<p class="muted">（还没有长期事实）</p>';
 

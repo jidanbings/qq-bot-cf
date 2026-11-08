@@ -801,6 +801,19 @@ async function handleApi(request, env, url) {
       return jsonResult({ scope, scopeMasked: await maskId(scope), ...state });
     }
 
+    case '/api/memory/clear': {
+      if (method !== 'POST') throw new HttpError(405, 'method_not_allowed', '请使用 POST');
+      const body = await readJson(request);
+      const scope = assertScope(body?.scope);
+      if (!env.CHAT) throw new HttpError(503, 'no_chat', 'ChatDO 未绑定');
+      const stub = env.CHAT.get(env.CHAT.idFromName(scope));
+      await stub.fetch('https://chat/reset', {
+        method: 'POST',
+        body: JSON.stringify({ key: scope }),
+      });
+      return jsonResult({ cleared: true });
+    }
+
     /* -------- AI 工作区 -------- */
 
     case '/api/workspaces': {
