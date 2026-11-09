@@ -93,6 +93,13 @@ button{font-family:inherit}
 .ws-col-head{display:flex;align-items:baseline;gap:.5rem;padding:.2rem .1rem .55rem}
 .ws-col-head b{font-size:.85rem}
 .ws-col-n{font-size:.7rem;color:var(--muted)}
+/* 可折叠的栏头（私聊栏默认收起，人多时不撑高页面） */
+.ws-fold-head{align-items:center;cursor:pointer;user-select:none;border-radius:8px;transition:background .15s}
+.ws-fold-head:hover{background:var(--surface-2)}
+.ws-fold-head .ws-chevron{margin-left:auto}
+/* [hidden] 兜底：.ws-col-list / .ws-btn-grid 都有 display:flex，
+   会盖掉 hidden 属性的默认 display:none，导致「默认折叠」失效。 */
+[hidden]{display:none!important}
 .ws-col-list{display:flex;flex-direction:column;gap:.45rem;min-width:0}
 /* 单个用户 = 紧凑按钮 */
 .ws-user-btn{display:flex;align-items:center;gap:.55rem;padding:.45rem .6rem;border:1px solid var(--border);
@@ -114,7 +121,14 @@ button{font-family:inherit}
 .ws-group-tools{display:flex;align-items:center;gap:.4rem;flex:0 0 auto}
 .ws-group-body{border-top:1px solid var(--border);padding:.5rem .7rem;background:var(--surface-2)}
 .ws-btn-grid{display:flex;flex-direction:column;gap:.4rem}
-.ws-chevron{color:var(--muted);font-size:.85rem;flex:0 0 auto;transition:transform .15s}
+.ws-chevron{width:22px;height:22px;flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;
+  border-radius:50%;background:var(--surface-2);color:var(--muted);border:1px solid var(--border);
+  transition:transform .2s ease,background .15s,color .15s,border-color .15s}
+.ws-chevron svg{width:13px;height:13px;stroke-width:2.6}
+.ws-group-head:hover .ws-chevron,
+.ws-fold-head:hover .ws-chevron{background:var(--accent-light);color:var(--accent);border-color:transparent}
+.is-open>.ws-chevron,
+.is-open .ws-chevron{transform:rotate(90deg);background:var(--accent-light);color:var(--accent);border-color:transparent}
 .ws-badge{width:34px;height:34px;border-radius:50%;flex:0 0 auto;display:flex;align-items:center;justify-content:center;
   background:var(--accent-light);color:var(--accent);font-weight:700;font-size:.8rem}
 .ws-badge svg{width:17px;height:17px}
@@ -123,11 +137,41 @@ button{font-family:inherit}
 @media (max-width:900px){
   .ws-cols{grid-template-columns:1fr}
 }
-/* 定时任务多选 */
-.rem-row .rem-check{flex:0 0 auto;display:inline-flex;align-items:center}
-.rem-row .prov-check input{width:15px;height:15px;accent-color:var(--accent);cursor:pointer}
-/* 定时任务列表限高滚动：任务多时不把整页撑长 */
-.ws-rem-scroll{max-height:360px;overflow-y:auto;border:1px solid var(--border);border-radius:10px;padding:.2rem .4rem}
+/* 定时任务表格 */
+/* 限高约 10 条（表格行 ~48px），超出内部滚动 */
+.ws-rem-scroll{max-height:520px;overflow-y:auto;border:1px solid var(--border);border-radius:10px;
+  -webkit-overflow-scrolling:touch}
+.rem-toolbar{display:flex;gap:.5rem;align-items:center;margin-bottom:.6rem;flex-wrap:wrap}
+.rem-selall{display:inline-flex;align-items:center;gap:.35rem;font-size:.72rem;color:var(--text-2);cursor:pointer;user-select:none}
+.rem-selall input{width:14px;height:14px;accent-color:var(--accent);cursor:pointer}
+.rem-table{width:100%;border-collapse:collapse;font-size:.75rem}
+.rem-table thead th{position:sticky;top:0;z-index:1;background:var(--surface-2);color:var(--muted);
+  font-size:.68rem;font-weight:600;text-align:left;padding:.45rem .5rem;border-bottom:1px solid var(--border);white-space:nowrap}
+.rem-table tbody td{padding:.5rem;border-bottom:1px solid var(--border);vertical-align:middle}
+.rem-table tbody tr:last-child td{border-bottom:none}
+.rem-table tbody tr:hover{background:var(--surface-2)}
+.rem-th-check,.rem-td-check{width:32px;text-align:center}
+.rem-th-check input,.rem-td-check input{width:14px;height:14px;accent-color:var(--accent);cursor:pointer}
+.rem-th-target,.rem-td-target{width:150px}
+.rem-th-time,.rem-td-time{width:110px;white-space:nowrap;color:var(--text-2);font-size:.7rem}
+.rem-th-status,.rem-td-status{width:88px}
+.rem-th-ops,.rem-td-ops{width:96px;text-align:right;white-space:nowrap}
+.rem-td-text b{display:block;font-weight:600;color:var(--text);line-height:1.4;word-break:break-word}
+.rem-td-text small{display:block;font-size:.68rem;margin-top:.15rem}
+.rem-repeat{display:inline-block;margin-top:.2rem;font-size:.64rem;padding:1px 6px;border-radius:5px;
+  background:var(--accent-light);color:var(--accent)}
+.rem-td-target{color:var(--text-2);font-size:.7rem;word-break:break-all}
+.rem-kind{display:inline-block;margin-right:.3rem;font-size:.62rem;padding:1px 5px;border-radius:4px;
+  background:var(--surface-2);color:var(--muted)}
+/* 超小图标按钮（群卡片里的复制/删除） */
+.icon-btn.xs{width:24px;height:24px;border-radius:7px;border-width:1px}
+.icon-btn.xs svg{width:12px;height:12px}
+.icon-btn.sm{width:26px;height:26px;border-radius:8px}
+.icon-btn.sm svg{width:13px;height:13px}
+/* 间距工具类（代替内联 style，CSP 不允许 inline style） */
+.mt-sm{margin-top:.2rem}
+.mt-lg{margin-top:1.4rem}
+.mb-sm{margin-bottom:.8rem}
 .hidden{display:none!important}
 .ws-detail h4{font-size:.78rem;margin:.8rem 0 .3rem}
 .ws-detail ul{list-style:none;display:flex;flex-direction:column;gap:.25rem}
@@ -427,6 +471,12 @@ button{font-family:inherit}
 .modal-x:hover{color:var(--red)}
 .modal-body{padding:1rem 1.2rem .25rem;overflow-y:auto}
 .modal-foot{display:flex;flex-wrap:wrap;align-items:center;gap:.6rem;padding:.9rem 1.2rem;border-top:1px solid var(--border)}
+/* 工作区详情 footer：编号独占一行（可折行），按钮另起一行靠右。
+   原因：scope 形如 c2c:<32位hex>，一串 40+ 字符和按钮挤一行必然溢出。 */
+.ws-foot{flex-direction:column;align-items:stretch;gap:.55rem}
+.ws-foot-scope{font-size:11px;color:var(--muted);font-family:ui-monospace,Consolas,monospace;
+  word-break:break-all;line-height:1.5;margin:0}
+.ws-foot-actions{display:flex;gap:.6rem;justify-content:flex-end;flex-wrap:wrap}
 .test-result{font-size:12.5px;border-radius:10px;padding:.55rem .8rem;margin:.4rem 0 .6rem;word-break:break-all}
 .test-result.testing{background:var(--surface-2);color:var(--text-2)}
 .test-result.ok{background:var(--green-soft);color:var(--green)}
@@ -687,6 +737,30 @@ button{font-family:inherit}
   .card>.card-head .hint{order:3;width:100%;margin-left:0;line-height:1.6}
   .card>.card-head .btn{order:2;flex:0 0 auto}
   .ws-group-tools{flex-wrap:wrap}
+  /* 窄屏：表格改成卡片式。6 列在手机上必然挤成一团，
+     改成「每条任务一张小卡」：勾选框在左，内容在上，元信息和操作在下。
+     仍然保留限高滚动（约 10 条），往下滑看全部。 */
+  .ws-rem-scroll{max-height:560px;border-radius:10px}
+  .rem-table{display:block;font-size:.78rem}
+  .rem-table thead{display:none}
+  .rem-table tbody{display:flex;flex-direction:column;gap:.55rem}
+  .rem-table tbody tr{display:grid;grid-template-columns:22px 1fr;
+    grid-template-areas:"chk text" "chk meta" "chk ops";
+    gap:.3rem .55rem;border:1px solid var(--border);border-radius:10px;
+    padding:.65rem .75rem;background:var(--surface)}
+  .rem-table tbody tr:hover{background:var(--surface)}
+  .rem-table tbody td{border:none;padding:0;display:block}
+  .rem-td-check{grid-area:chk;align-self:start;padding-top:.2rem!important;width:auto}
+  .rem-td-text{grid-area:text;width:auto}
+  .rem-td-text b{font-size:.8rem}
+  .rem-td-target{grid-area:meta;width:auto;display:flex;align-items:center;gap:.35rem;
+    font-size:.68rem;color:var(--muted);min-width:0;flex-wrap:wrap;word-break:break-all}
+  .rem-td-time{grid-area:meta;width:auto;justify-self:end;align-self:center;
+    font-size:.66rem;color:var(--muted);white-space:nowrap;padding-left:.5rem}
+  .rem-td-status{grid-area:ops;width:auto;justify-self:start;align-self:center}
+  .rem-td-ops{grid-area:ops;width:auto;justify-self:end;align-self:center;
+    display:flex!important;gap:.4rem;align-items:center}
+  .rem-td-ops .icon-btn.sm{width:28px;height:28px}
 }
 
 @media (prefers-reduced-motion:reduce){

@@ -28,7 +28,8 @@ var IX={
   stop:'<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>',
   trash:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>',
   arrow:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>',
-  back:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>'
+  back:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>',
+  chevron:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>'
 };
 
 /**
@@ -286,18 +287,6 @@ function skeletonAi(){
   }
   h+='</div>';
   return h;
-}
-
-function skeletonLogs(){
-  var h='<div class="card">';
-  for(var i=0;i<5;i++){
-    h+='<div class="entry"><div class="entry-head">'
-      +'<span class="sk-bar sk-w15"></span><span class="sk-bar sk-w25"></span><span class="sk-bar sk-w10"></span>'
-      +'</div><div class="entry-body"><div class="sk-field">'
-      +'<span class="sk-bar sk-w90"></span><span class="sk-bar sk-w70"></span>'
-      +'</div></div></div>';
-  }
-  return h+'</div>';
 }
 
 function skDetailRows(n){
@@ -963,11 +952,6 @@ function showConfig(){
       +'<p class="error-text">'+esc(e.message)+'</p></div>';
     setPill('读取失败','bad');
   });
-}
-
-function setSaveMsg(text,kind){
-  // 不再有常驻 save-msg 栏，保存状态统一用右下角 toast 提示
-  toast(text, kind || '');
 }
 
 function saveConfig(restart){
@@ -1668,26 +1652,22 @@ function showWorkspace(){
     +'<div class="card-head"><h3>工作区</h3>'
     +'<span class="hint">群管理已融入群卡片 · 定时任务在最下面</span></div>'
     // 用户工作区区块
-    +'<div class="card-head" style="margin-top:.2rem"><h3>用户工作区</h3>'
+    +'<div class="card-head mt-sm"><h3>用户工作区</h3>'
     +'<span class="hint">每个用户一份：文件、任务与笔记、对话记忆</span>'
     +'<button class="btn sm" id="b-ws-refresh" type="button">'+IX.refresh+'<span>刷新</span></button></div>'
     +'<p class="muted">按「人」隔离：单聊 <code>c2c:&lt;用户&gt;</code>、群聊 <code>group:&lt;群&gt;:u:&lt;用户&gt;</code>。'
     +'群卡片里可以直接开关回复、查成员、复制 openid、移除群；点卡片展开看群内每个用户的工作区。</p>'
-    +'<div class="grp-add" style="margin:.2rem 0 .8rem">'
-    +'<input id="grp-add-input" placeholder="手动添加群：粘贴群 openid" maxlength="128">'
-    +'<button class="btn sm" type="button" id="grp-add-btn">'+IX.check+'<span>添加</span></button></div>'
     +'<div id="ws-list">'+skListSkeleton(4)+'</div>'
     // 定时任务区块
-    +'<div class="card-head" style="margin-top:1.4rem"><h3>定时任务</h3><span class="hint" id="rem-count"></span></div>'
+    +'<div class="card-head mt-lg"><h3>定时任务</h3><span class="hint" id="rem-count"></span></div>'
     +'<p class="tip">群里说「明天 8 点提醒我开会」「10 分钟后提醒我喝水」就会出现在这里；到点主动发消息，重复任务自动顺延。'
     +'QQ 对主动消息有频率和配额限制，发送失败的任务会标红。</p>'
-    +'<div class="form-actions"><button class="btn" type="button" id="rem-refresh">'+IX.refresh+'<span>刷新</span></button>'
-    +'<button class="btn ghost hidden" type="button" id="rem-del-sel">'+IX.trash+'<span>删除选中</span></button></div>'
-    +'<div class="prov-list ws-rem-scroll" id="rem-list">'+skListSkeleton(3)+'</div>'
+    +'<div class="rem-toolbar"><button class="btn sm" type="button" id="rem-refresh">'+IX.refresh+'<span>刷新</span></button>'
+    +'<label class="rem-selall"><input type="checkbox" id="rem-sel-all"><span>全选</span></label>'
+    +'<button class="btn sm danger hidden" type="button" id="rem-del-sel">'+IX.trash+'<span>删除选中</span></button></div>'
+    +'<div class="ws-rem-scroll" id="rem-list">'+skListSkeleton(3)+'</div>'
     +'</div>';
   $('b-ws-refresh').addEventListener('click',function(){loadWorkspaces();});
-  $('grp-add-btn').addEventListener('click',addGroupRow);
-  $('grp-add-input').addEventListener('keydown',function(e){if(e.key==='Enter')addGroupRow();});
   $('rem-refresh').addEventListener('click',function(){loadReminders();});
   $('rem-del-sel').addEventListener('click',function(){deleteSelectedReminders();});
   loadWorkspaces();
@@ -1751,10 +1731,12 @@ function renderWorkspaces(sandboxes,workspaces,groupRows){
     if((it.updatedAt||0)>groups[gid].latestAt)groups[gid].latestAt=it.updatedAt;
   }
 
-  // 左栏：私聊
+  // 左栏：私聊（默认折叠，人多时不占空间）
   var left='<div class="ws-col">'
-    +'<div class="ws-col-head"><b>私聊对话</b><span class="ws-col-n">'+c2c.length+' 人</span></div>'
-    +'<div class="ws-col-list">';
+    +'<div class="ws-col-head ws-fold-head" role="button" tabindex="0" aria-expanded="false">'
+    +'<b>私聊对话</b><span class="ws-col-n">'+c2c.length+' 人</span>'
+    +'<span class="ws-chevron">'+IX.chevron+'</span></div>'
+    +'<div class="ws-col-list ws-fold-body" hidden>';
   for(var a=0;a<c2c.length;a++)left+=wsUserBtnHtml(c2c[a],'c2c');
   if(!c2c.length)left+='<p class="muted">（还没有私聊用户）</p>';
   left+='</div></div>';
@@ -1798,9 +1780,9 @@ function wsGroupCardHtml(grp,urows){
     +'<div class="ws-group-tools">'
     +'<label class="prov-switch" title="开关本机器人在这个群的回复"><input type="checkbox" data-gact="toggle"'+(replyEnabled?' checked':'')+'><i></i></label>'
     +'<button class="btn sm" type="button" data-gact="members" title="查看群资料 / 成员 / 禁言">成员</button>'
-    +'<button class="icon-btn" type="button" data-gact="copy" title="复制完整 openid">'+IX.key+'</button>'
-    +'<button class="icon-btn" type="button" data-gact="del" title="从群列表移除">'+IX.trash+'</button>'
-    +'<span class="ws-chevron">▸</span>'
+    +'<button class="icon-btn xs" type="button" data-gact="copy" title="复制完整 openid">'+IX.key+'</button>'
+    +'<button class="icon-btn xs" type="button" data-gact="del" title="从群列表移除">'+IX.trash+'</button>'
+    +'<span class="ws-chevron">'+IX.chevron+'</span>'
     +'</div></div>'
     +'<div class="ws-group-body" hidden><div class="ws-btn-grid">'+urows+'</div></div>'
     +'</div>';
@@ -1839,6 +1821,17 @@ function wsUserBtnHtml(it,kind){
 }
 
 function onWorkspaceClick(e){
+  // 私聊栏折叠/展开
+  var foldHead=e.target&&e.target.closest?e.target.closest('.ws-fold-head'):null;
+  if(foldHead){
+    var foldBody=foldHead.nextElementSibling;
+    if(!foldBody)return;
+    var willShow=foldBody.hidden;
+    foldBody.hidden=!willShow;
+    foldHead.setAttribute('aria-expanded',String(willShow));
+    foldHead.classList.toggle('is-open',willShow);
+    return;
+  }
   // 群卡片头里的群管理操作按钮（成员/复制/移除）
   var gactEl=e.target&&e.target.closest?e.target.closest('[data-gact]'):null;
   if(gactEl){
@@ -1858,12 +1851,11 @@ function onWorkspaceClick(e){
     var grp=gh.closest('.ws-group');
     if(!grp)return;
     var body=grp.querySelector('.ws-group-body');
-    var chev=grp.querySelector('.ws-chevron');
     if(!body)return;
     var willShow=body.hidden;
     body.hidden=!willShow;
     gh.setAttribute('aria-expanded',String(willShow));
-    if(chev)chev.textContent=willShow?'▾':'▸';
+    gh.classList.toggle('is-open',willShow);
     return;
   }
   // 用户按钮：点开详情（清空操作在详情弹窗里）
@@ -1901,9 +1893,11 @@ function openWorkspaceDetail(scope){
     m.innerHTML='<div class="modal" role="dialog" aria-modal="true"><div class="modal-head"><h3>工作区详情</h3>'
       +'<button class="modal-x" type="button" id="ws-modal-x" aria-label="关闭">×</button></div>'
       +'<div class="modal-body ws-detail" id="ws-detail-body"></div>'
-      +'<div class="modal-foot"><span class="hint" id="ws-detail-scope"></span><span class="grow"></span>'
+      +'<div class="modal-foot ws-foot"><p class="ws-foot-scope" id="ws-detail-scope"></p>'
+      +'<div class="ws-foot-actions">'
       +'<button class="btn danger" type="button" id="ws-clear-btn">'+IX.trash+'<span>清空这个用户</span></button>'
-      +'<button class="btn" type="button" id="ws-close-btn">关闭</button></div></div>';
+      +'<button class="btn" type="button" id="ws-close-btn">关闭</button>'
+      +'</div></div></div>';
     document.body.appendChild(m);
     m.addEventListener('click',function(ev){
       if(ev.target===m||ev.target.id==='ws-modal-x')m.hidden=true;
@@ -1988,31 +1982,6 @@ function renderWorkspaceDetail(scope,sandbox,workspace,memory){
       +((memory.factsSlotted||0)?'（'+memory.factsSlotted+' 条带槽位）':'')+'</span></div>'
     +factsHtml
     +'</div>';
-}
-
-function showImageGen(){
-  stopStatusTimer();
-  rendered=false;
-  setActive('imagegen');
-  setTopActions('');
-  setPill('生图模型','');
-  $('wrap').innerHTML='<div class="card"><div class="card-head"><h3>生图模型</h3></div>'
-    +'<div class="sk-field"><span class="sk-bar sk-w60"></span></div></div>';
-  api('GET','/api/config').then(function(c){
-    var cfg=(c&&c.config)||{};
-    var conf=(c&&c.configured)||{};
-    imageGenState.baseUrl=cfg.imageGenBaseUrl||'';
-    imageGenState.model=cfg.imageGenModel||'';
-    imageGenState.apiKey='';
-    imageGenState.hasKey=!!conf.imageGenApiKey;
-    imageGenState.tested=false;
-    imageGenState.result='';
-    renderImageGenPage();
-  }).catch(function(e){
-    $('wrap').innerHTML='<div class="card"><div class="card-head"><h3>配置读取失败</h3></div>'
-      +'<p class="error-text">'+esc(e.message)+'</p></div>';
-    setPill('读取失败','bad');
-  });
 }
 
 function igenRowHtml(){
@@ -2164,7 +2133,7 @@ function bindIgenModal(){
 
 // 生图卡片（不含弹窗和 wrap 赋值），供 AI 页追加使用
 function imageGenCardsHtml(){
-  var h='<div class="card" style="margin-top:1.1rem"><div class="card-head"><h3>生图配置</h3>'
+  var h='<div class="card mt-lg"><div class="card-head"><h3>生图配置</h3>'
     +'<span class="hint">先测试通过才能保存；点行或「编辑」在弹窗里改</span></div>'
     +igenRowHtml()
     +'<div class="form-actions">'
@@ -2183,13 +2152,6 @@ function imageGenCardsHtml(){
     +'建议填服务商标注了 <b>image_gen</b> 的模型（比如 qwen-image-3.0-pro），接口需兼容 OpenAI 的 <b>/images/generations</b>。'
     +'不填 Base URL / Key 时，会自动用上面「AI 列表」里第一个 AI 的配置兜底。</p></div>';
   return h;
-}
-
-function renderImageGenPage(){
-  var h=imageGenCardsHtml();
-  h+=igenModalHtml();
-  $('wrap').innerHTML=h;
-  bindIgenModal();
 }
 
 /* 主流生图模型（OpenAI 兼容 /images/generations），点预设打开弹窗并填入模型名 */
@@ -2283,19 +2245,6 @@ function grpPermHint(msg){
   return String(msg||'').indexOf('11253')>=0
     ?msg+'（官方白名单接口：到 QQ 开放平台 q.qq.com 的机器人管理后台申请「群管理」相关接口权限，通过后即可用）'
     :msg;
-}
-
-function addGroupRow(){
-  var input=$('grp-add-input');
-  var openid=String((input&&input.value)||'').trim();
-  if(!openid){toast('先粘贴群 openid','bad');return;}
-  var btn=$('grp-add-btn');
-  if(btn)btn.disabled=true;
-  api('POST','/api/groups/add',{openid:openid}).then(function(){
-    if(input)input.value='';
-    toast('已添加到群列表','ok');
-    return loadWorkspaces(); // 群卡片已并入工作区列表，刷新整个列表
-  }).catch(function(e){toast(e.message,'bad');}).then(function(){if(btn)btn.disabled=false;});
 }
 
 function removeGroupRow(openid){
@@ -2594,26 +2543,34 @@ function renderReminders(){
     updateDelSelBtn();
     return;
   }
-  var h='';
+  // 表格布局：勾选 / 内容 / 目标 / 时间 / 状态 / 操作
+  var h='<table class="rem-table"><thead><tr>'
+    +'<th class="rem-th-check"></th>'
+    +'<th>内容</th><th class="rem-th-target">目标</th>'
+    +'<th class="rem-th-time">到期时间</th><th class="rem-th-status">状态</th>'
+    +'<th class="rem-th-ops">操作</th>'
+    +'</tr></thead><tbody>';
   for(var k=0;k<items.length;k++){
     var it=items[k];
     var canCancel=it.status==='pending'||it.status==='sending';
-    h+='<div class="prov-row rem-row" data-rem="'+it.id+'">';
-    h+='<label class="prov-check rem-check" title="选择这条"><input type="checkbox" data-remsel="'+it.id+'"></label>';
-    h+='<span class="prov-no">⏰</span>';
-    h+='<div class="prov-info"><b>'+esc(it.text)+'</b><small>'
-      +(it.isC2C?'私聊':'群聊')+' · '+esc(it.scopeMasked||'')
-      +(it.repeatRule?' · '+esc(remRepeatText(it.repeatRule)):'')
-      +(it.lastError?' · <span class="error-text">'+esc(it.lastError)+'</span>':'')
-      +'</small></div>';
-    h+='<div class="prov-meta"><span class="prov-time">'+esc(fmtEntryTime(it.dueAt))+'</span>'+remStatusHtml(it.status)+'</div>';
-    h+='<div class="prov-tools">';
+    h+='<tr class="rem-tr" data-rem="'+it.id+'">';
+    h+='<td class="rem-td-check"><input type="checkbox" data-remsel="'+it.id+'"></td>';
+    h+='<td class="rem-td-text"><b>'+esc(it.text)+'</b>'
+      +(it.repeatRule?'<span class="rem-repeat">'+esc(remRepeatText(it.repeatRule))+'</span>':'')
+      +(it.lastError?'<small class="error-text">'+esc(it.lastError)+'</small>':'')
+      +'</td>';
+    h+='<td class="rem-td-target"><span class="rem-kind">'+(it.isC2C?'私聊':'群聊')+'</span>'
+      +esc(it.scopeMasked||'')+'</td>';
+    h+='<td class="rem-td-time" data-label="到期">'+esc(fmtEntryTime(it.dueAt))+'</td>';
+    h+='<td class="rem-td-status" data-label="状态">'+remStatusHtml(it.status)+'</td>';
+    h+='<td class="rem-td-ops">';
     if(canCancel)h+='<button class="btn sm ghost" type="button" data-remcancel="'+it.id+'">取消</button>';
-    h+='<button class="icon-btn" type="button" data-remdel="'+it.id+'" title="删除这条任务">'+IX.trash+'</button>';
-    h+='</div>';
-    h+='</div>';
+    h+='<button class="icon-btn sm" type="button" data-remdel="'+it.id+'" title="删除这条任务">'+IX.trash+'</button>';
+    h+='</td></tr>';
   }
+  h+='</tbody></table>';
   box.innerHTML=h;
+
   box.onclick=function(e){
     var cancelBtn=e.target&&e.target.closest?e.target.closest('[data-remcancel]'):null;
     if(cancelBtn){
@@ -2637,8 +2594,36 @@ function renderReminders(){
     }
   };
   box.onchange=function(e){
-    if(e.target&&e.target.matches&&e.target.matches('[data-remsel]'))updateDelSelBtn();
+    var t=e.target;
+    if(!t||!t.matches)return;
+    if(t.matches('[data-remsel]')){
+      // 单条取消勾选时，把工具栏的「全选」也放掉
+      var selAll=$('rem-sel-all');
+      var all=box.querySelectorAll('input[data-remsel]');
+      var checked=box.querySelectorAll('input[data-remsel]:checked');
+      if(selAll)selAll.checked=all.length>0&&checked.length===all.length;
+      updateDelSelBtn();
+    }
   };
+
+  // 工具栏「全选」：在表格外，单独绑定（每次渲染后重绑，元素是静态的所以只绑一次）
+  var selAllBox=$('rem-sel-all');
+  if(selAllBox&&!selAllBox.__bound){
+    selAllBox.__bound=true;
+    selAllBox.addEventListener('change',function(){
+      var all=this.checked;
+      var cbs=box.querySelectorAll('input[data-remsel]');
+      for(var i=0;i<cbs.length;i++)cbs[i].checked=all;
+      updateDelSelBtn();
+    });
+  }
+  // 表格重渲染后，把全选状态按当前勾选情况同步一次
+  if(selAllBox){
+    var allNow=box.querySelectorAll('input[data-remsel]');
+    var checkedNow=box.querySelectorAll('input[data-remsel]:checked');
+    selAllBox.checked=allNow.length>0&&checkedNow.length===allNow.length;
+  }
+  updateDelSelBtn();
 }
 
 function selectedReminderIds(){

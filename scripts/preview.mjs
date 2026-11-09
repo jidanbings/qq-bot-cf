@@ -230,6 +230,12 @@ function demoApi(pathname, search) {
   if (pathname === '/api/workspaces') {
     return { items: demoWorkspaces() };
   }
+  if (pathname === '/api/groups') {
+    return { items: demoGroups(), blockedCount: 0 };
+  }
+  if (pathname === '/api/reminders') {
+    return { items: demoReminders() };
+  }
   return { ok: true };
 }
 
@@ -245,27 +251,62 @@ function withFakeBotVolume() {
 }
 
 /* ------------------------------ 沙箱演示数据 ------------------------------ */
-// 造几个用户、每人 1~4 个文件，带上真实的「修改时间」，
+// 造几个用户、每人若干文件，带上真实的「修改时间」，
 // 用来验证后台沙箱页与 AI 的 file.list 是否都能给出时间（而不是「暂不可知」）。
+// scope 用真实格式：单聊 c2c:<32位hex>、群聊 group:<32位hex>:u:<32位hex>。
 const MIN = 60 * 1000;
+
+// 私聊用户（4 个，用来验证左栏）
+const C2C_A = 'c2c:9F5E6B45B1786BB51AFABA082F0BFB9E';
+const C2C_B = 'c2c:3A7C1D9E4F8B2A6C5D0E7F1B3A9C8D2E';
+const C2C_C = 'c2c:7B2E4F8A1C6D9E3B5A0F7C2D8E4B1A9F';
+const C2C_D = 'c2c:1D8F3A6B9C2E5F7A4B0D8C1E6F3A9B2D';
+
+// 群（2 个），每群 2~3 个用户
+const G1 = 'D4A8F2C6B1E9D7A3C5F8B2E6D9A1C4F7';
+const G2 = '8E3B7C1D5A9F2E6B4C8D0A3F7E1B5C9D';
+const G1_U1 = `${G1}:u:E5F1A8C3D6B2E9F4A7C1D8B5E2F6A3C9`;
+const G1_U2 = `${G1}:u:A2D7F4B8E1C6A9D3F5B0E8C2A4D7F1B6`;
+const G1_U3 = `${G1}:u:C9B3E6A1F4D8B2E7A5C0F3D9B6E2A8C4`;
+const G2_U1 = `${G2}:u:F1C5A9D3B7E2F6A4C8D1B5E9F3A7C2D6`;
+const G2_U2 = `${G2}:u:B6E2F8A4C1D9B5E3F7A0C6D2B8E4F1A5`;
+
 const SANDBOX_FILES = {
-  'c2c:OPENID_USER_A': [
+  [C2C_A]: [
     ['affection.json', '{\n  "score": 88,\n  "level": "亲密",\n  "updated": "2026-10-27"\n}', 3 * MIN],
     ['旅行计划.md', '# 杭州三日游\n\n第一天：西湖 + 河坊街\n第二天：灵隐寺 + 龙井村\n第三天：西溪湿地\n', 42 * MIN],
   ],
-  'group:OPENGROUPID_B:u:OPENID_USER_B': [
+  [C2C_B]: [
+    ['周报-第45周.md', '# 本周进展\n\n1. 完成工作区两栏布局\n2. 修掉 CSP 内联样式\n', 15 * MIN],
+  ],
+  [C2C_C]: [
+    ['affection.json', '{\n  "score": 12,\n  "level": "陌生"\n}', 2 * 24 * 60 * MIN],
+  ],
+  [C2C_D]: [
+    ['shopping.txt', '牛奶\n鸡蛋\n猫粮\n', 3 * 60 * MIN],
+  ],
+  [`group:${G1_U1}`]: [
     ['周报-第43周.md', '# 本周进展\n\n1. 完成 Webhook 迁移\n2. 修掉 DO 空转计费\n3. 分层记忆上线\n', 26 * 60 * MIN],
     ['待办.txt', '整理 README\n补 12 个测试脚本\n写发版说明\n', 5 * 60 * MIN],
     ['notes/api.md', '## 接口清单\n\n- POST /qq/webhook\n- GET /api/status\n', 9 * 60 * MIN],
   ],
-  'c2c:OPENID_USER_C': [
-    ['affection.json', '{\n  "score": 12,\n  "level": "陌生"\n}', 2 * 24 * 60 * MIN],
+  [`group:${G1_U2}`]: [
+    ['会议纪要.md', '# 11-08 例会\n\n- 决定两栏布局\n- 下周三前出测试\n', 2 * 60 * MIN],
+  ],
+  [`group:${G1_U3}`]: [
+    ['buglist.txt', '1. footer 溢出\n2. CSP 拦截内联样式\n', 40 * MIN],
+  ],
+  [`group:${G2_U1}`]: [
+    ['文案草稿.md', '# 群公告草稿\n\n本周活动：技术分享，请报名。\n', 6 * 60 * MIN],
+  ],
+  [`group:${G2_U2}`]: [
+    ['affection.json', '{\n  "score": 45,\n  "level": "熟悉"\n}', 90 * MIN],
   ],
 };
 
 function demoSandboxes() {
   return Object.entries(SANDBOX_FILES).map(([scope, files]) => {
-    const newest = Math.max(...files.map((f) => f[2]));
+    const newest = Math.min(...files.map((f) => f[2]));
     return {
       scope,
       scopeMasked: scope.replace(/^c2c:/, '').replace(/^group:[^:]+:u:/, ''),
@@ -297,7 +338,7 @@ function demoSandboxDetail(scope) {
 
 /* ------------------------------ 工作区演示数据 ------------------------------ */
 const WORKSPACE_DATA = {
-  'c2c:OPENID_USER_A': {
+  [C2C_A]: {
     tasks: [
       { id: 1, text: '整理 README 的部署说明', done: true },
       { id: 2, text: '给机器人写一段介绍文案', done: false },
@@ -306,13 +347,33 @@ const WORKSPACE_DATA = {
     notes: [{ text: '用户偏好简洁口语，不要长篇大论' }, { text: '喜欢在周末聊技术' }],
     runs: 7,
   },
-  'group:OPENGROUPID_B:u:OPENID_USER_B': {
+  [C2C_B]: {
+    tasks: [{ id: 1, text: '检查后台工作区布局', done: false }],
+    notes: [{ text: '做前端，关注 CSS Grid' }],
+    runs: 3,
+  },
+  [C2C_D]: {
+    tasks: [],
+    notes: [{ text: '养猫，需要定期买猫粮' }],
+    runs: 1,
+  },
+  [`group:${G1_U1}`]: {
     tasks: [
       { id: 1, text: '整理本周群内待办', done: true },
       { id: 2, text: '汇总大家的提问', done: false },
     ],
     notes: [{ text: '群里常问部署问题' }],
     runs: 4,
+  },
+  [`group:${G1_U2}`]: {
+    tasks: [{ id: 1, text: '写例会纪要', done: true }],
+    notes: [{ text: '负责会议记录' }],
+    runs: 2,
+  },
+  [`group:${G2_U2}`]: {
+    tasks: [{ id: 1, text: '准备群公告', done: false }],
+    notes: [],
+    runs: 1,
   },
 };
 
@@ -341,19 +402,74 @@ function demoWorkspaceDetail(scope) {
   };
 }
 
+/* ------------------------------ 群列表演示数据（群卡片头用） ------------------------------ */
+function demoGroups() {
+  const masked = (openid) => openid.slice(0, 8) + '…' + openid.slice(-4);
+  return [
+    {
+      openid: G1,
+      masked: masked(G1),
+      source: 'auto',
+      addedAt: Date.now() - 7 * 24 * 60 * 60 * 1000,
+      lastSeen: Date.now() - 2 * MIN,
+      replyEnabled: true,
+    },
+    {
+      openid: G2,
+      masked: masked(G2),
+      source: 'manual',
+      addedAt: Date.now() - 20 * 24 * 60 * 60 * 1000,
+      lastSeen: Date.now() - 3 * 60 * MIN,
+      replyEnabled: false,
+    },
+  ];
+}
+
+/* ------------------------------ 定时任务演示数据 ------------------------------ */
+// 造 8 条（超过可视高度），用来验证限高滚动和多选删除。
+function demoReminders() {
+  const masked = (openid) => openid.slice(0, 8) + '…' + openid.slice(-4);
+  const base = Date.now();
+  const mk = (id, text, agoMin, opts = {}) => ({
+    id,
+    dueAt: base + (opts.dueAheadMin || 60) * MIN,
+    text,
+    isC2C: !!opts.isC2C,
+    scopeMasked: masked(opts.scope || G1),
+    repeatRule: opts.repeatRule || null,
+    status: opts.status || 'pending',
+    createdAt: base - agoMin * MIN,
+    firedAt: opts.firedAt || null,
+    lastError: opts.lastError || null,
+  });
+  return [
+    mk(1, '明天 8 点提醒我开周会', 30, { dueAheadMin: 720 }),
+    mk(2, '10 分钟后提醒我喝水', 5, { dueAheadMin: 10, isC2C: true, scope: C2C_A }),
+    mk(3, '每天 8:00 提醒我背单词', 120, { dueAheadMin: 480, repeatRule: 'daily' }),
+    mk(4, '每周一 9:00 提醒我交周报', 600, { dueAheadMin: 1440, repeatRule: 'weekly:1' }),
+    mk(5, '下午 3 点提醒我发版本', 90, { dueAheadMin: 180, status: 'done', firedAt: base - 90 * MIN }),
+    mk(6, '明早提醒我买菜', 200, { dueAheadMin: 900, isC2C: true, scope: C2C_B }),
+    mk(7, '提醒我续费服务器', 300, { dueAheadMin: 60, status: 'failed', lastError: '主动消息配额不足' }),
+    mk(8, '周五提醒我复盘', 400, { dueAheadMin: 2880, status: 'cancelled' }),
+  ];
+}
+
 /* ------------------------------ 记忆分层演示数据 ------------------------------ */
 const MEMORY_DATA = {
-  'c2c:OPENID_USER_A': {
+  [C2C_A]: {
     messages: 14,
+    messagesChars: 2380,
     summaryLen: 96,
     summary: '用户叫小王，在杭州做前端开发，主要用 TypeScript；正在做 QQ 机器人项目，跑在 Cloudflare Workers 上；讨厌 Java，养了只橘猫叫年糕。',
     facts: [
-      { text: '用户叫小王，在杭州做前端开发', at: Date.now() - 2 * 24 * 60 * 60 * 1000 },
-      { text: '技术栈：TypeScript + React', at: Date.now() - 2 * 24 * 60 * 60 * 1000 },
-      { text: '正在做 QQ 机器人项目（Cloudflare Workers）', at: Date.now() - 24 * 60 * 60 * 1000 },
-      { text: '讨厌 Java，觉得太重', at: Date.now() - 24 * 60 * 60 * 1000 },
-      { text: '养了一只橘猫叫年糕', at: Date.now() - 12 * 60 * 60 * 1000 },
+      { slot: 'name', text: '用户叫小王', at: Date.now() - 2 * 24 * 60 * 60 * 1000 },
+      { slot: 'city', text: '在杭州做前端开发', at: Date.now() - 2 * 24 * 60 * 60 * 1000 },
+      { slot: 'stack', text: 'TypeScript + React', at: Date.now() - 2 * 24 * 60 * 60 * 1000 },
+      { slot: 'project', text: '正在做 QQ 机器人项目（Cloudflare Workers）', at: Date.now() - 24 * 60 * 60 * 1000 },
+      { slot: 'dislike', text: '讨厌 Java，觉得太重', at: Date.now() - 24 * 60 * 60 * 1000 },
+      { slot: 'like', text: '养了一只橘猫叫年糕', at: Date.now() - 12 * 60 * 60 * 1000 },
     ],
+    factsSlotted: 6,
     recent: [
       { role: 'user', content: '帮我看看今天适合写代码吗' },
       { role: 'assistant', content: '适合呀，状态好就趁热打铁～' },
@@ -362,8 +478,22 @@ const MEMORY_DATA = {
     ],
     sinceCompress: 8,
   },
-  'group:OPENGROUPID_B:u:OPENID_USER_B': {
+  [C2C_B]: {
     messages: 6,
+    messagesChars: 820,
+    summaryLen: 0,
+    summary: '',
+    facts: [{ slot: 'job', text: '做前端开发', at: Date.now() - 5 * 60 * 60 * 1000 }],
+    factsSlotted: 1,
+    recent: [
+      { role: 'user', content: '后台工作区布局怎么样？' },
+      { role: 'assistant', content: '现在是左右两栏，私聊在左、群聊在右。' },
+    ],
+    sinceCompress: 2,
+  },
+  [`group:${G1_U1}`]: {
+    messages: 6,
+    messagesChars: 640,
     summaryLen: 0,
     summary: '',
     facts: [{ text: '群里常问部署问题', at: Date.now() - 6 * 60 * 60 * 1000 }],
@@ -372,6 +502,19 @@ const MEMORY_DATA = {
       { role: 'assistant', content: '用 npm run deploy 一条命令就行。' },
     ],
     sinceCompress: 2,
+  },
+  [`group:${G1_U2}`]: {
+    messages: 4,
+    messagesChars: 310,
+    summaryLen: 42,
+    summary: '用户在群里负责会议记录，关注部署流程。',
+    facts: [],
+    factsSlotted: 0,
+    recent: [
+      { role: 'user', content: '记一下今天的结论' },
+      { role: 'assistant', content: '好的，已记到工作区。' },
+    ],
+    sinceCompress: 1,
   },
 };
 
