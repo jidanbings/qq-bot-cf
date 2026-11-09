@@ -87,28 +87,47 @@ button{font-family:inherit}
 .do-row .do-state{margin-left:auto;font-size:11px;padding:1px 8px;border-radius:999px;background:var(--surface-2);color:var(--muted)}
 .do-row .do-state.ok{color:#0e7490}
 .do-row .do-state.warn{color:#b45309}
-.ws-row{display:flex;align-items:center;gap:.6rem;padding:.55rem .7rem;border:1px solid var(--border);border-radius:10px;margin-bottom:.5rem;background:var(--surface)}
-.ws-row .ws-main{flex:1;min-width:0}
-.ws-row b{font-size:.8rem}
-.ws-row small{display:block;color:var(--muted);font-size:.7rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ws-tags{display:flex;gap:.35rem;flex-wrap:wrap;font-size:.68rem;color:var(--muted);margin-top:.25rem}
-.ws-tag{background:var(--surface-2);border-radius:6px;padding:1px 6px;white-space:nowrap}
+/* 用户工作区：私聊/群聊两栏 */
+.ws-cols{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+.ws-col{min-width:0;display:flex;flex-direction:column}
+.ws-col-head{display:flex;align-items:baseline;gap:.5rem;padding:.2rem .1rem .55rem}
+.ws-col-head b{font-size:.85rem}
+.ws-col-n{font-size:.7rem;color:var(--muted)}
+.ws-col-list{display:flex;flex-direction:column;gap:.45rem;min-width:0}
+/* 单个用户 = 紧凑按钮 */
+.ws-user-btn{display:flex;align-items:center;gap:.55rem;padding:.45rem .6rem;border:1px solid var(--border);
+  border-radius:10px;background:var(--surface);cursor:pointer;text-align:left;font-family:inherit;
+  transition:border-color .15s,background .15s,box-shadow .15s}
+.ws-user-btn:hover{background:var(--surface-2);border-color:var(--accent);box-shadow:0 1px 3px rgba(16,24,40,.06)}
+.ws-user-btn .ws-badge{width:30px;height:30px;font-size:.72rem}
+.ws-user-name{flex:1;min-width:0;font-size:.8rem;font-weight:600;color:var(--text);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ws-user-meta{font-size:.66rem;color:var(--muted);flex:0 0 auto;white-space:nowrap}
+.ws-user-time{font-size:.66rem;color:var(--muted);flex:0 0 auto;white-space:nowrap}
+/* 群聊工作区分组折叠 */
+.ws-group{border:1px solid var(--border);border-radius:10px;margin-bottom:.5rem;background:var(--surface);overflow:hidden}
+.ws-group-head{display:flex;align-items:center;gap:.6rem;padding:.6rem .7rem;cursor:pointer;user-select:none}
+.ws-group-head:hover{background:var(--surface-2)}
+.ws-group-head .ws-main{flex:1;min-width:0}
+.ws-group-head .ws-main b{font-size:.8rem;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ws-group-head .ws-main small{display:block;color:var(--muted);font-size:.7rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ws-group-tools{display:flex;align-items:center;gap:.4rem;flex:0 0 auto}
+.ws-group-body{border-top:1px solid var(--border);padding:.5rem .7rem;background:var(--surface-2)}
+.ws-btn-grid{display:flex;flex-direction:column;gap:.4rem}
+.ws-chevron{color:var(--muted);font-size:.85rem;flex:0 0 auto;transition:transform .15s}
 .ws-badge{width:34px;height:34px;border-radius:50%;flex:0 0 auto;display:flex;align-items:center;justify-content:center;
   background:var(--accent-light);color:var(--accent);font-weight:700;font-size:.8rem}
 .ws-badge svg{width:17px;height:17px}
 .ws-badge-user{background:linear-gradient(135deg,#eef2ff,#e0e7ff);color:var(--accent);
   font-size:.78rem;text-transform:uppercase}
-/* 群聊工作区分组折叠 */
-.ws-group{border:1px solid var(--border);border-radius:10px;margin-bottom:.5rem;background:var(--surface);overflow:hidden}
-.ws-group-head{display:flex;align-items:center;gap:.6rem;padding:.6rem .7rem;cursor:pointer;user-select:none}
-.ws-group-head:hover{background:var(--surface-2)}
-.ws-group-body{border-top:1px solid var(--border);padding:.4rem .7rem;background:var(--surface-2)}
-.ws-row-indent{border:none;border-radius:8px;background:var(--surface)}
-.ws-row-indent:hover{background:var(--surface-3,#f1f3f6)}
-.ws-chevron{color:var(--muted);font-size:.85rem;flex:0 0 auto;transition:transform .15s}
+@media (max-width:900px){
+  .ws-cols{grid-template-columns:1fr}
+}
 /* 定时任务多选 */
 .rem-row .rem-check{flex:0 0 auto;display:inline-flex;align-items:center}
 .rem-row .prov-check input{width:15px;height:15px;accent-color:var(--accent);cursor:pointer}
+/* 定时任务列表限高滚动：任务多时不把整页撑长 */
+.ws-rem-scroll{max-height:360px;overflow-y:auto;border:1px solid var(--border);border-radius:10px;padding:.2rem .4rem}
 .hidden{display:none!important}
 .ws-detail h4{font-size:.78rem;margin:.8rem 0 .3rem}
 .ws-detail ul{list-style:none;display:flex;flex-direction:column;gap:.25rem}
@@ -667,10 +686,7 @@ button{font-family:inherit}
   .card>.card-head h3{flex:1 1 auto}
   .card>.card-head .hint{order:3;width:100%;margin-left:0;line-height:1.6}
   .card>.card-head .btn{order:2;flex:0 0 auto}
-  .ws-row{flex-wrap:wrap;align-items:flex-start}
-  .ws-row .ws-main{flex:1 1 100%}
-  .ws-row .prov-tools{flex:1 1 100%;margin-left:0;justify-content:flex-end}
-  .ws-tags{gap:.3rem}
+  .ws-group-tools{flex-wrap:wrap}
 }
 
 @media (prefers-reduced-motion:reduce){
@@ -684,7 +700,6 @@ const SVG = (paths) =>
   '</svg>';
 
 export const ICONS_A = {
-  sandbox: SVG('<path d="M9 3h6v4l4 8a3 3 0 0 1-2.7 4.4H7.7A3 3 0 0 1 5 15l4-8z"/><line x1="9" y1="3" x2="9" y2="7"/><line x1="15" y1="3" x2="15" y2="7"/><line x1="8" y1="14" x2="16" y2="14"/>'),
   workspace: SVG('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M8 13h8"/><path d="M8 16h5"/>'),
   status: SVG('<path d="M3 12h4l3 8 4-16 3 8h4"/>'),
   config: SVG(
@@ -695,15 +710,6 @@ export const ICONS_A = {
   ),
   ai: SVG(
     '<path d="M12 3l2.1 5.4L20 10l-5.9 1.6L12 17l-2.1-5.4L4 10l5.9-1.6z"/><path d="M18 15.5l.9 2.1 2.1.9-2.1.9-.9 2.1-.9-2.1-2.1-.9 2.1-.9z"/>'
-  ),
-  imagegen: SVG(
-    '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/>'
-  ),
-  groups: SVG(
-    '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>'
-  ),
-  reminders: SVG(
-    '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>'
   ),
   home: SVG('<path d="M3 10.5 12 3l9 7.5"/><path d="M5.5 9.5V20h13V9.5"/>'),
   logout: SVG('<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>'),
@@ -731,7 +737,6 @@ ${CSS_A}
     </div>
     <div class="nav-label">管理</div>
     <div class="tabs">
-      <a href="/groups" data-tab="groups">${ICONS_A.groups}<span>群管理</span></a>
       <a href="/workspace" data-tab="workspace">${ICONS_A.workspace}<span>工作区</span></a>
     </div>
     <div class="nav-label">数据</div>

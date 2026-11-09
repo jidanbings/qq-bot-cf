@@ -126,7 +126,7 @@ var META={
   status:{title:'运行状态',crumb:'概览 / 运行状态'},
   config:{title:'机器人配置',crumb:'设置 / 机器人配置'},
   ai:{title:'AI 模型',crumb:'设置 / AI 模型'},
-  groups:{title:'群管理',crumb:'管理 / 群管理'},
+  groups:{title:'工作区',crumb:'管理 / 工作区'},
   logs:{title:'聊天记录',crumb:'数据 / 聊天记录'},
   workspace:{title:'工作区',crumb:'管理 / 工作区'}
 };
@@ -1656,7 +1656,7 @@ function onPresetClick(e){
   openAiModal(-1,{name:p.name,url:p.url,model:p.model});
 }
 
-/* ------------------------------ 工作区（沙箱 + 任务 + 记忆，合并） ------------------------------ */
+/* ------------------------------ 工作区（群管理融入群卡片 + 用户工作区 + 定时任务） ------------------------------ */
 
 function showWorkspace(){
   stopStatusTimer();
@@ -1664,16 +1664,32 @@ function showWorkspace(){
   setActive('workspace');
   setTopActions('');
   setPill('工作区','');
-  $('wrap').innerHTML='<div class="card"><div class="card-head"><h3>工作区</h3>'
-    +'<span class="hint">每个用户一份：文件（AiDO 沙箱）、任务与笔记（/工作）、对话记忆（ChatDO 三层）</span>'
+  $('wrap').innerHTML='<div class="card">'
+    +'<div class="card-head"><h3>工作区</h3>'
+    +'<span class="hint">群管理已融入群卡片 · 定时任务在最下面</span></div>'
+    // 用户工作区区块
+    +'<div class="card-head" style="margin-top:.2rem"><h3>用户工作区</h3>'
+    +'<span class="hint">每个用户一份：文件、任务与笔记、对话记忆</span>'
     +'<button class="btn sm" id="b-ws-refresh" type="button">'+IX.refresh+'<span>刷新</span></button></div>'
-    +'<p class="muted">按「人」隔离：单聊 <code>c2c:&lt;用户&gt;</code>、群聊 <code>group:&lt;群&gt;:u:&lt;用户&gt;</code>。点「查看」能看到这个人的文件、任务/笔记，以及 AI 记住他的三层记忆。</p>'
+    +'<p class="muted">按「人」隔离：单聊 <code>c2c:&lt;用户&gt;</code>、群聊 <code>group:&lt;群&gt;:u:&lt;用户&gt;</code>。'
+    +'群卡片里可以直接开关回复、查成员、复制 openid、移除群；点卡片展开看群内每个用户的工作区。</p>'
+    +'<div class="grp-add" style="margin:.2rem 0 .8rem">'
+    +'<input id="grp-add-input" placeholder="手动添加群：粘贴群 openid" maxlength="128">'
+    +'<button class="btn sm" type="button" id="grp-add-btn">'+IX.check+'<span>添加</span></button></div>'
     +'<div id="ws-list">'+skListSkeleton(4)+'</div>'
-    +'<div class="card-head" style="margin-top:1.1rem"><h3>定时任务</h3><span class="hint" id="rem-count"></span></div>'
-    +'<p class="muted">群里说「明天 8 点提醒我开会」「10 分钟后提醒我喝水」就会出现在这里；到点主动发消息，重复任务自动顺延。</p>'
-    +'<div class="prov-list" id="rem-list">'+skListSkeleton(3)+'</div></div>';
-  var btn=$('b-ws-refresh');
-  if(btn)btn.addEventListener('click',function(){loadWorkspaces();loadReminders();});
+    // 定时任务区块
+    +'<div class="card-head" style="margin-top:1.4rem"><h3>定时任务</h3><span class="hint" id="rem-count"></span></div>'
+    +'<p class="tip">群里说「明天 8 点提醒我开会」「10 分钟后提醒我喝水」就会出现在这里；到点主动发消息，重复任务自动顺延。'
+    +'QQ 对主动消息有频率和配额限制，发送失败的任务会标红。</p>'
+    +'<div class="form-actions"><button class="btn" type="button" id="rem-refresh">'+IX.refresh+'<span>刷新</span></button>'
+    +'<button class="btn ghost hidden" type="button" id="rem-del-sel">'+IX.trash+'<span>删除选中</span></button></div>'
+    +'<div class="prov-list ws-rem-scroll" id="rem-list">'+skListSkeleton(3)+'</div>'
+    +'</div>';
+  $('b-ws-refresh').addEventListener('click',function(){loadWorkspaces();});
+  $('grp-add-btn').addEventListener('click',addGroupRow);
+  $('grp-add-input').addEventListener('keydown',function(e){if(e.key==='Enter')addGroupRow();});
+  $('rem-refresh').addEventListener('click',function(){loadReminders();});
+  $('rem-del-sel').addEventListener('click',function(){deleteSelectedReminders();});
   loadWorkspaces();
   loadReminders();
 }
@@ -1681,15 +1697,16 @@ function showWorkspace(){
 function loadWorkspaces(){
   var box=$('ws-list');
   if(box)box.innerHTML=skListSkeleton(4);
-  // 同时拉沙箱与工作区两套索引，按 scope 合并成一个用户列表
+  // 拉三份：沙箱、工作区、群列表（群管理信息融进群卡片头）
   Promise.all([
     api('GET','/api/sandboxes').then(function(d){return (d&&d.items)||[];}).catch(function(){return [];}),
-    api('GET','/api/workspaces').then(function(d){return (d&&d.items)||[];}).catch(function(){return [];})
-  ]).then(function(r){ renderWorkspaces(r[0],r[1]); })
+    api('GET','/api/workspaces').then(function(d){return (d&&d.items)||[];}).catch(function(){return [];}),
+    api('GET','/api/groups').then(function(d){return (d&&d.items)||[];}).catch(function(){return [];})
+  ]).then(function(r){ renderWorkspaces(r[0],r[1],r[2]); })
     .catch(function(e){ if(box)box.innerHTML='<p class="error-text">'+esc(e.message)+'</p>'; });
 }
 
-function renderWorkspaces(sandboxes,workspaces){
+function renderWorkspaces(sandboxes,workspaces,groupRows){
   var box=$('ws-list');
   if(!box)return;
   var byScope={};
@@ -1708,6 +1725,13 @@ function renderWorkspaces(sandboxes,workspaces){
     if(!rec.kind)rec.kind=w.kind;
     byScope[w.scope]=rec;
   }
+  // 群列表 → 按 openid 索引，群卡片头要显示回复开关/来源/最近活跃
+  var groupMap={};
+  for(var g=0;g<groupRows.length;g++){
+    var gr=groupRows[g];
+    if(gr&&gr.openid)groupMap[gr.openid]=gr;
+  }
+
   var items=Object.keys(byScope).map(function(k){return byScope[k];});
   items.sort(function(a,b){return (b.updatedAt||0)-(a.updatedAt||0);});
   if(!items.length){
@@ -1715,46 +1739,72 @@ function renderWorkspaces(sandboxes,workspaces){
     return;
   }
 
-  // 拆成「单聊」和「群聊」。单聊每人一条；群聊按群分组折叠成一条，
-  // 展开后才列出该群的每个用户 —— 一个活跃群几十个用户不再刷屏。
+  // 拆成「私聊」和「群聊」两栏。私聊每人一个按钮；群聊按群分组折叠，群内每人一个按钮。
   var c2c=[];
-  var groups={};   // groupOpenid -> { users:[...], latestAt }
+  var groups={};   // groupOpenid -> { users:[...], latestAt, groupMeta }
   for(var m=0;m<items.length;m++){
     var it=items[m];
     if(it.kind==='c2c'){ c2c.push(it); continue; }
     var gid=groupOpenidOf(it.scope);
-    if(!groups[gid])groups[gid]={gid:gid,users:[],latestAt:0};
+    if(!groups[gid])groups[gid]={gid:gid,users:[],latestAt:0,groupMeta:groupMap[gid]||null};
     groups[gid].users.push(it);
     if((it.updatedAt||0)>groups[gid].latestAt)groups[gid].latestAt=it.updatedAt;
   }
 
-  var h='';
-  // 单聊直接列出
-  for(var a=0;a<c2c.length;a++)h+=wsUserRowHtml(c2c[a],'c2c');
+  // 左栏：私聊
+  var left='<div class="ws-col">'
+    +'<div class="ws-col-head"><b>私聊对话</b><span class="ws-col-n">'+c2c.length+' 人</span></div>'
+    +'<div class="ws-col-list">';
+  for(var a=0;a<c2c.length;a++)left+=wsUserBtnHtml(c2c[a],'c2c');
+  if(!c2c.length)left+='<p class="muted">（还没有私聊用户）</p>';
+  left+='</div></div>';
 
-  // 群聊：一个群一个卡片，默认折叠，点开显示群内用户
+  // 右栏：群聊
   var groupList=Object.keys(groups).map(function(k){return groups[k];});
   groupList.sort(function(x,y){return y.latestAt-x.latestAt;});
+  var right='<div class="ws-col">'
+    +'<div class="ws-col-head"><b>群聊对话</b><span class="ws-col-n">'+groupList.length+' 群</span></div>'
+    +'<div class="ws-col-list">';
   for(var b=0;b<groupList.length;b++){
     var grp=groupList[b];
     grp.users.sort(function(x,y){return (y.updatedAt||0)-(x.updatedAt||0);});
-    var urows='';
-    for(var c=0;c<grp.users.length;c++)urows+=wsUserRowHtml(grp.users[c],'group-member');
-    h+='<div class="ws-group" data-gid="'+esc(grp.gid)+'">'
-      +'<div class="ws-group-head" role="button" tabindex="0" aria-expanded="false">'
-      +'<span class="ws-badge">'+IX.groups+'</span>'
-      +'<div class="ws-main"><b>群聊 · '+esc(grp.gid)+'</b>'
-      +'<small>'+grp.users.length+' 个用户的工作区</small></div>'
-      +'<span class="ws-chevron">▸</span></div>'
-      +'<div class="ws-group-body" hidden>'+urows+'</div>'
-      +'</div>';
+    var ubtns='';
+    for(var c=0;c<grp.users.length;c++)ubtns+=wsUserBtnHtml(grp.users[c],'group-member');
+    right+=wsGroupCardHtml(grp,ubtns);
   }
+  if(!groupList.length)right+='<p class="muted">（还没有群聊用户）</p>';
+  right+='</div></div>';
 
-  box.innerHTML=h;
+  box.innerHTML='<div class="ws-cols">'+left+right+'</div>';
   if(!box.__wsBound){
     box.__wsBound=true;
     box.addEventListener('click',onWorkspaceClick);
+    box.addEventListener('change',onWorkspaceToggle);
   }
+}
+
+// 群卡片：头 = 群信息 + 群管理操作，体 = 群内用户按钮（默认折叠）
+function wsGroupCardHtml(grp,urows){
+  var meta=grp.groupMeta||{};
+  var masked=meta.masked||grp.gid;
+  var seen=meta.lastSeen?('最近活跃 '+fmtEntryTime(meta.lastSeen)):'';
+  var src=meta.source==='manual'?'手动添加':'自动收集';
+  var replyEnabled=meta.replyEnabled!==false; // 群列表里没有的默认算开启
+  var h='<div class="ws-group" data-openid="'+esc(grp.gid)+'">'
+    +'<div class="ws-group-head" role="button" tabindex="0" aria-expanded="false">'
+    +'<span class="ws-badge">'+IX.groups+'</span>'
+    +'<div class="ws-main"><b>群聊 · '+esc(masked)+'</b>'
+    +'<small>'+(seen?seen+' · ':'')+src+' · '+grp.users.length+' 人</small></div>'
+    +'<div class="ws-group-tools">'
+    +'<label class="prov-switch" title="开关本机器人在这个群的回复"><input type="checkbox" data-gact="toggle"'+(replyEnabled?' checked':'')+'><i></i></label>'
+    +'<button class="btn sm" type="button" data-gact="members" title="查看群资料 / 成员 / 禁言">成员</button>'
+    +'<button class="icon-btn" type="button" data-gact="copy" title="复制完整 openid">'+IX.key+'</button>'
+    +'<button class="icon-btn" type="button" data-gact="del" title="从群列表移除">'+IX.trash+'</button>'
+    +'<span class="ws-chevron">▸</span>'
+    +'</div></div>'
+    +'<div class="ws-group-body" hidden><div class="ws-btn-grid">'+urows+'</div></div>'
+    +'</div>';
+  return h;
 }
 
 // 从 scope 里拆出群 openid：group:<openid>:u:<user>
@@ -1766,33 +1816,43 @@ function groupOpenidOf(scope){
   return idx>=0?rest.slice(0,idx):rest;
 }
 
-// 单用户工作区行。kind: c2c=单聊顶层 / group-member=群聊折叠内的成员
-function wsUserRowHtml(it,kind){
+// 单个用户工作区按钮。kind: c2c=私聊 / group-member=群聊成员
+function wsUserBtnHtml(it,kind){
   var initial=(it.scopeMasked&&it.scopeMasked.charAt(0))||'U';
   var sc=it.scope||'';
   var sub;
   if(kind==='group-member'){
-    // 群聊成员：只显示打码后的用户标识那一段
     var idx=sc.indexOf(':u:');
     sub=idx>=0?('成员 '+esc(sc.slice(idx+3))) : esc(it.scopeMasked||'');
   } else {
     sub=esc(it.scopeMasked||'');
   }
-  var tags='';
-  if(it.hasSandbox)tags+='<span class="ws-tag">文件 '+esc(String(it.files||0))+'</span>';
-  if(it.hasWorkspace)tags+='<span class="ws-tag">任务 '+esc(String(it.tasks||0))+' · 笔记 '+esc(String(it.notes||0))+'</span>';
-  tags+='<span class="ws-tag">'+esc(it.updatedAt?absTime(it.updatedAt):'')+'</span>';
-  return '<div class="ws-row'+(kind==='group-member'?' ws-row-indent':'')+'" data-scope="'+esc(sc)+'">'
+  var meta=[];
+  if(it.hasSandbox)meta.push('文件 '+it.files);
+  if(it.hasWorkspace)meta.push('任务 '+it.tasks);
+  return '<button class="ws-user-btn" type="button" data-ws="detail" data-scope="'+esc(sc)+'">'
     +'<span class="ws-badge ws-badge-user">'+esc(initial)+'</span>'
-    +'<div class="ws-main"><b>'+sub+'</b>'
-    +'<small>'+esc(it.lastTask||'（还没执行过任务）')+'</small>'
-    +'<div class="ws-tags">'+tags+'</div></div>'
-    +'<div class="prov-tools"><button class="btn sm" type="button" data-ws="detail">查看</button>'
-    +'<button class="btn sm" type="button" data-ws="clear">清空</button></div></div>';
+    +'<span class="ws-user-name">'+sub+'</span>'
+    +(meta.length?'<span class="ws-user-meta">'+esc(meta.join(' · '))+'</span>':'')
+    +'<span class="ws-user-time">'+esc(it.updatedAt?absTime(it.updatedAt):'')+'</span>'
+    +'</button>';
 }
 
 function onWorkspaceClick(e){
-  // 群聊分组头：点一下折叠/展开
+  // 群卡片头里的群管理操作按钮（成员/复制/移除）
+  var gactEl=e.target&&e.target.closest?e.target.closest('[data-gact]'):null;
+  if(gactEl){
+    var gcard=gactEl.closest('.ws-group');
+    if(!gcard)return;
+    var gopenid=gcard.getAttribute('data-openid')||'';
+    var gact=gactEl.getAttribute('data-gact');
+    if(gact==='members')openGrpModal(gopenid,true);
+    else if(gact==='del')removeGroupRow(gopenid);
+    else if(gact==='copy')copyGrpId(gopenid);
+    // toggle 走 change 事件，这里不管
+    return;
+  }
+  // 群卡片头本体：折叠/展开
   var gh=e.target&&e.target.closest?e.target.closest('.ws-group-head'):null;
   if(gh){
     var grp=gh.closest('.ws-group');
@@ -1806,23 +1866,30 @@ function onWorkspaceClick(e){
     if(chev)chev.textContent=willShow?'▾':'▸';
     return;
   }
-  var btn=e.target&&e.target.closest?e.target.closest('button[data-ws]'):null;
-  if(!btn)return;
-  var row=btn.closest('.ws-row');
-  if(!row)return;
-  var scope=row.getAttribute('data-scope')||'';
-  var act=btn.getAttribute('data-ws');
-  if(act==='clear'){
-    if(!confirm('清空这个用户的工作区（文件、任务、笔记、记忆三层）？'))return;
-    Promise.all([
-      api('POST','/api/sandboxes/clear',{scope:scope}).catch(function(){}),
-      api('POST','/api/workspaces/clear',{scope:scope}).catch(function(){}),
-      api('POST','/api/memory/clear',{scope:scope}).catch(function(){})
-    ]).then(function(){ toast('已清空'); loadWorkspaces(); })
-      .catch(function(err){ toast(err.message,'bad'); });
-  } else if(act==='detail'){
-    openWorkspaceDetail(scope);
+  // 用户按钮：点开详情（清空操作在详情弹窗里）
+  var ubtn=e.target&&e.target.closest?e.target.closest('button[data-ws="detail"]'):null;
+  if(ubtn){
+    var uscope=ubtn.getAttribute('data-scope')||'';
+    if(uscope)openWorkspaceDetail(uscope);
+    return;
   }
+}
+
+// 群卡片头里的回复开关（change 事件）
+function onWorkspaceToggle(e){
+  var input=e.target&&e.target.closest?e.target.closest('input[data-gact="toggle"]'):null;
+  if(!input)return;
+  var gcard=input.closest('.ws-group');
+  if(!gcard)return;
+  var openid=gcard.getAttribute('data-openid')||'';
+  var enabled=!!input.checked;
+  input.disabled=true;
+  api('POST','/api/groups/reply',{openid:openid,enabled:enabled?1:0}).then(function(){
+    toast(enabled?'已开启该群的回复':'已关闭该群的回复','ok');
+  }).catch(function(err){
+    input.checked=!enabled;
+    toast(err.message,'bad');
+  }).then(function(){input.disabled=false;});
 }
 
 function openWorkspaceDetail(scope){
@@ -1833,12 +1900,30 @@ function openWorkspaceDetail(scope){
     m.id='ws-modal-mask';
     m.innerHTML='<div class="modal" role="dialog" aria-modal="true"><div class="modal-head"><h3>工作区详情</h3>'
       +'<button class="modal-x" type="button" id="ws-modal-x" aria-label="关闭">×</button></div>'
-      +'<div class="modal-body ws-detail" id="ws-detail-body"></div></div>';
+      +'<div class="modal-body ws-detail" id="ws-detail-body"></div>'
+      +'<div class="modal-foot"><span class="hint" id="ws-detail-scope"></span><span class="grow"></span>'
+      +'<button class="btn danger" type="button" id="ws-clear-btn">'+IX.trash+'<span>清空这个用户</span></button>'
+      +'<button class="btn" type="button" id="ws-close-btn">关闭</button></div></div>';
     document.body.appendChild(m);
     m.addEventListener('click',function(ev){
       if(ev.target===m||ev.target.id==='ws-modal-x')m.hidden=true;
     });
+    $('ws-close-btn').addEventListener('click',function(){m.hidden=true;});
+    $('ws-clear-btn').addEventListener('click',function(){
+      var cur=m.getAttribute('data-scope')||'';
+      if(!cur)return;
+      if(!confirm('清空这个用户的工作区（文件、任务、笔记、记忆三层）？'))return;
+      Promise.all([
+        api('POST','/api/sandboxes/clear',{scope:cur}).catch(function(){}),
+        api('POST','/api/workspaces/clear',{scope:cur}).catch(function(){}),
+        api('POST','/api/memory/clear',{scope:cur}).catch(function(){})
+      ]).then(function(){ toast('已清空'); m.hidden=true; loadWorkspaces(); })
+        .catch(function(err){ toast(err.message,'bad'); });
+    });
   }
+  m.setAttribute('data-scope',scope);
+  var scopeEl=$('ws-detail-scope');
+  if(scopeEl)scopeEl.textContent=scope;
   var body=$('ws-detail-body');
   body.innerHTML='<p class="muted">加载中…</p>';
   m.hidden=false;
@@ -2200,61 +2285,6 @@ function grpPermHint(msg){
     :msg;
 }
 
-function groupsShell(){
-  var h='<div class="card"><div class="card-head"><h3>群列表</h3><span class="hint" id="grp-count"></span></div>';
-  h+='<p class="tip">机器人收到群消息或被拉进新群时，会自动把群记到这里（完整 openid 存在数据库里，列表只显示打码版，需要完整版点复制按钮）。</p>';
-  h+='<div class="grp-add"><input id="grp-add-input" placeholder="手动添加：粘贴群 openid" maxlength="128">'
-    +'<button class="btn" type="button" id="grp-add-btn">'+IX.check+'<span>添加</span></button>'
-    +'<button class="btn" type="button" id="grp-refresh">'+IX.refresh+'<span>刷新</span></button></div>';
-  h+='<div class="prov-list" id="group-list">'+skListSkeleton(5)+'</div></div>';
-  h+='<div class="card"><div class="card-head"><h3>官方接口能力说明</h3></div>';
-  h+='<dl class="dl">';
-  h+='<dt>群资料</dt><dd>点群行打开弹窗：群名 / 简介 / 分类 / 标签 / 人数，外加机器人在群里的状态（角色、入群时间、消息接收设置、是否允许主动推送）</dd>';
-  h+='<dt>成员管理</dt><dd>「拉取成员列表」是官方内邀接口（开放平台申请不到，等官方开放）；已批禁言权限的话，可以在弹窗里粘贴成员 openid 直接禁言 / 解除，或点「拉取成员列表」选中操作。机器人需要群管理员身份，最长 30 天</dd>';
-  h+='<dt>禁言状态</dt><dd>弹窗实时显示全员禁言模式和当前被禁言的成员（官方已开放的查询接口）</dd>';
-  h+='<dt>权限</dt><dd>群资料 / 机器人状态属官方白名单（报 code=11253 需联系平台运营）；撤回、入群审批、禁言、批量移除可在开放平台自助申请</dd>';
-  h+='<dt>回复开关</dt><dd>只控制本机器人是否在这个群里回话（黑名单机制），不影响官方群管理</dd>';
-  h+='</dl></div>';
-  return h;
-}
-
-function grpRowHtml(g){
-  var seen=g.lastSeen?fmtEntryTime(g.lastSeen):'—';
-  var h='<div class="prov-row'+(g.replyEnabled?'':' is-off')+'" data-openid="'+esc(g.openid)+'" title="点行查看群资料">';
-  h+='<span class="prov-no">👥</span>';
-  h+='<div class="prov-info"><b>'+esc(g.masked)+'</b><small>最近活跃 '+esc(seen)+'</small></div>';
-  h+='<div class="prov-meta">';
-  h+=g.source==='manual'?'<span class="prov-flag off">手动添加</span>':'<span class="prov-flag on">自动收集</span>';
-  h+='</div>';
-  h+='<div class="prov-tools">';
-  h+='<label class="prov-switch" title="开关本机器人在这个群的回复"><input type="checkbox" data-act="toggle"'+(g.replyEnabled?' checked':'')+'><i></i></label>';
-  h+='<button class="btn sm" type="button" data-act="members">成员</button>';
-  h+='<button class="icon-btn" type="button" data-act="copy" title="复制完整 openid">'+IX.key+'</button>';
-  h+='<button class="icon-btn" type="button" data-act="del" title="从列表移除">'+IX.trash+'</button>';
-  h+='</div></div>';
-  return h;
-}
-
-function loadGroups(){
-  var list=$('group-list');
-  if(!list)return Promise.resolve();
-  list.innerHTML=skListSkeleton(5);
-  return api('GET','/api/groups').then(function(d){
-    var items=(d&&d.items)||[];
-    var cnt=$('grp-count');
-    if(cnt)cnt.textContent=items.length?('共 '+items.length+' 个群'):'';
-    if(!items.length){
-      list.innerHTML='<p class="muted">还没有记录。机器人在群里收到第一条消息、或被拉进新群时，会自动把群加进来；也可以在上面手动添加。</p>';
-      return;
-    }
-    var h='';
-    for(var i=0;i<items.length;i++)h+=grpRowHtml(items[i]);
-    list.innerHTML=h;
-  }).catch(function(e){
-    list.innerHTML='<p class="error-text">'+esc(e.message)+'</p>';
-  });
-}
-
 function addGroupRow(){
   var input=$('grp-add-input');
   var openid=String((input&&input.value)||'').trim();
@@ -2264,7 +2294,7 @@ function addGroupRow(){
   api('POST','/api/groups/add',{openid:openid}).then(function(){
     if(input)input.value='';
     toast('已添加到群列表','ok');
-    return loadGroups();
+    return loadWorkspaces(); // 群卡片已并入工作区列表，刷新整个列表
   }).catch(function(e){toast(e.message,'bad');}).then(function(){if(btn)btn.disabled=false;});
 }
 
@@ -2272,7 +2302,7 @@ function removeGroupRow(openid){
   if(!confirm('从群列表移除这个群？只影响后台列表，不影响机器人运行。'))return;
   api('POST','/api/groups/remove',{openid:openid}).then(function(){
     toast('已移除','ok');
-    return loadGroups();
+    return loadWorkspaces(); // 群卡片已并入工作区列表，刷新整个列表
   }).catch(function(e){toast(e.message,'bad');});
 }
 
@@ -2283,58 +2313,6 @@ function copyGrpId(text){
   }else{
     toast('当前浏览器不支持一键复制','bad');
   }
-}
-
-function onGroupClick(e){
-  var actEl=e.target.closest('[data-act]');
-  var row=e.target.closest('.prov-row');
-  if(!row)return;
-  var openid=row.getAttribute('data-openid');
-  if(actEl){
-    var act=actEl.getAttribute('data-act');
-    if(act==='toggle')return;
-    if(act==='members')openGrpModal(openid,true);
-    else if(act==='del')removeGroupRow(openid);
-    else if(act==='copy')copyGrpId(openid);
-    return;
-  }
-  openGrpModal(openid,false);
-}
-
-function onGroupToggle(e){
-  var input=e.target.closest('input[data-act="toggle"]');
-  if(!input)return;
-  var row=e.target.closest('.prov-row');
-  if(!row)return;
-  var openid=row.getAttribute('data-openid');
-  var enabled=!!input.checked;
-  input.disabled=true;
-  api('POST','/api/groups/reply',{openid:openid,enabled:enabled?1:0}).then(function(){
-    row.classList.toggle('is-off',!enabled);
-    toast(enabled?'已开启该群的回复':'已关闭该群的回复','ok');
-  }).catch(function(err){
-    input.checked=!enabled;
-    toast(err.message,'bad');
-  }).then(function(){input.disabled=false;});
-}
-
-function showGroups(){
-  stopStatusTimer();
-  rendered=false;
-  setActive('groups');
-  setTopActions('');
-  setPill('群管理','');
-  var wrap=$('wrap');
-  if(!$('group-list')){
-    wrap.innerHTML=groupsShell();
-    $('grp-add-btn').addEventListener('click',addGroupRow);
-    $('grp-add-input').addEventListener('keydown',function(e){if(e.key==='Enter')addGroupRow();});
-    $('grp-refresh').addEventListener('click',function(){loadGroups();});
-    var list=$('group-list');
-    list.addEventListener('click',onGroupClick);
-    list.addEventListener('change',onGroupToggle);
-  }
-  return loadGroups();
 }
 
 /* ---- 群管理弹窗：群资料 + 成员/禁言 ---- */
@@ -2580,24 +2558,6 @@ function openGrpModal(openid,autoMembers){
 /* ============================== 定时任务 ============================== */
 var remState={items:[]};
 
-function showReminders(){
-  stopStatusTimer();
-  rendered=false;
-  setActive('reminders');
-  setTopActions('');
-  setPill('定时任务','');
-  $('wrap').innerHTML='<div class="card"><div class="card-head"><h3>定时任务</h3>'
-    +'<span class="hint" id="rem-count"></span></div>'
-    +'<p class="tip">机器人收到消息后会识别「明天 8 点提醒我开会」「10 分钟后提醒我喝水」这类请求并存到这里；到点由每分钟巡检主动发消息。'
-    +'重复任务（每天 / 每周）发完自动顺延到下一次。<b>注意</b>：QQ 对主动消息有频率和配额限制，发送失败的任务会在下面标红并记入聊天记录。</p>'
-    +'<div class="form-actions"><button class="btn" type="button" id="rem-refresh">'+IX.refresh+'<span>刷新</span></button>'
-    +'<button class="btn ghost hidden" type="button" id="rem-del-sel">'+IX.trash+'<span>删除选中</span></button></div>'
-    +'<div class="prov-list" id="rem-list"><p class="muted">加载中…</p></div></div>';
-  $('rem-refresh').addEventListener('click',function(){loadReminders();});
-  $('rem-del-sel').addEventListener('click',function(){deleteSelectedReminders();});
-  loadReminders();
-}
-
 function loadReminders(){
   api('GET','/api/reminders').then(function(d){
     remState.items=(d&&d.items)||[];
@@ -2719,8 +2679,7 @@ function route(){
   if(tab==='config')showConfig();
   else if(tab==='ai')showAi();
   else if(tab==='imagegen')showAi(); // 生图已并入 AI 模型页
-  else if(tab==='workspace')showWorkspace();
-  else if(tab==='groups')showGroups();
+  else if(tab==='workspace'||tab==='groups')showWorkspace(); // 群管理已并入工作区
   else if(tab==='logs')showLogs();
   else showStatus();
 }
