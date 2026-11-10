@@ -39,7 +39,6 @@ button{font-family:inherit}
 :focus-visible{outline:2px solid var(--primary);outline-offset:2px}
 ::selection{background:var(--accent-light);color:var(--accent)}
 
-/* ============================ 左侧导航（照抄 user.html .sidebar） ============================ */
 .side{width:240px;flex:0 0 240px;height:100vh;height:100dvh;position:fixed;left:0;top:0;bottom:0;z-index:40;
   display:flex;flex-direction:column;background:var(--side-bg);border-right:1px solid var(--border-strong);
   overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;
@@ -87,21 +86,16 @@ button{font-family:inherit}
 .do-row .do-state{margin-left:auto;font-size:11px;padding:1px 8px;border-radius:999px;background:var(--surface-2);color:var(--muted)}
 .do-row .do-state.ok{color:#0e7490}
 .do-row .do-state.warn{color:#b45309}
-/* 用户工作区：私聊/群聊两栏 */
 .ws-cols{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
 .ws-col{min-width:0;display:flex;flex-direction:column}
 .ws-col-head{display:flex;align-items:baseline;gap:.5rem;padding:.2rem .1rem .55rem}
 .ws-col-head b{font-size:.85rem}
 .ws-col-n{font-size:.7rem;color:var(--muted)}
-/* 可折叠的栏头（私聊栏默认收起，人多时不撑高页面） */
 .ws-fold-head{align-items:center;cursor:pointer;user-select:none;border-radius:8px;transition:background .15s}
 .ws-fold-head:hover{background:var(--surface-2)}
 .ws-fold-head .ws-chevron{margin-left:auto}
-/* [hidden] 兜底：.ws-col-list / .ws-btn-grid 都有 display:flex，
-   会盖掉 hidden 属性的默认 display:none，导致「默认折叠」失效。 */
 [hidden]{display:none!important}
 .ws-col-list{display:flex;flex-direction:column;gap:.45rem;min-width:0}
-/* 单个用户 = 紧凑按钮 */
 .ws-user-btn{display:flex;align-items:center;gap:.55rem;padding:.45rem .6rem;border:1px solid var(--border);
   border-radius:10px;background:var(--surface);cursor:pointer;text-align:left;font-family:inherit;
   transition:border-color .15s,background .15s,box-shadow .15s}
@@ -111,7 +105,6 @@ button{font-family:inherit}
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ws-user-meta{font-size:.66rem;color:var(--muted);flex:0 0 auto;white-space:nowrap}
 .ws-user-time{font-size:.66rem;color:var(--muted);flex:0 0 auto;white-space:nowrap}
-/* 群聊工作区分组折叠 */
 .ws-group{border:1px solid var(--border);border-radius:10px;margin-bottom:.5rem;background:var(--surface);overflow:hidden}
 .ws-group-head{display:flex;align-items:center;gap:.6rem;padding:.6rem .7rem;cursor:pointer;user-select:none}
 .ws-group-head:hover{background:var(--surface-2)}
@@ -137,8 +130,6 @@ button{font-family:inherit}
 @media (max-width:900px){
   .ws-cols{grid-template-columns:1fr}
 }
-/* 定时任务表格 */
-/* 限高约 10 条（表格行 ~48px），超出内部滚动 */
 .ws-rem-scroll{max-height:520px;overflow-y:auto;border:1px solid var(--border);border-radius:10px;
   -webkit-overflow-scrolling:touch}
 .rem-toolbar{display:flex;gap:.5rem;align-items:center;margin-bottom:.6rem;flex-wrap:wrap}
@@ -163,12 +154,10 @@ button{font-family:inherit}
 .rem-td-target{color:var(--text-2);font-size:.7rem;word-break:break-all}
 .rem-kind{display:inline-block;margin-right:.3rem;font-size:.62rem;padding:1px 5px;border-radius:4px;
   background:var(--surface-2);color:var(--muted)}
-/* 超小图标按钮（群卡片里的复制/删除） */
 .icon-btn.xs{width:24px;height:24px;border-radius:7px;border-width:1px}
 .icon-btn.xs svg{width:12px;height:12px}
 .icon-btn.sm{width:26px;height:26px;border-radius:8px}
 .icon-btn.sm svg{width:13px;height:13px}
-/* 间距工具类（代替内联 style，CSP 不允许 inline style） */
 .mt-sm{margin-top:.2rem}
 .mt-lg{margin-top:1.4rem}
 .mb-sm{margin-bottom:.8rem}
@@ -176,7 +165,6 @@ button{font-family:inherit}
 .ws-detail h4{font-size:.78rem;margin:.8rem 0 .3rem}
 .ws-detail ul{list-style:none;display:flex;flex-direction:column;gap:.25rem}
 .ws-detail li{font-size:.75rem;color:var(--text-2);line-height:1.6}
-/* 记忆分层图（ChatDO 三层） */
 .mem-block{display:flex;flex-direction:column;gap:.45rem;margin-top:.4rem}
 .mem-layer{display:flex;align-items:center;gap:.5rem;margin-top:.35rem}
 .mem-layer b{font-size:.76rem}
@@ -196,7 +184,6 @@ button{font-family:inherit}
 .mem-fact-text{flex:1;min-width:0;word-break:break-word}
 .mem-fact-time{color:var(--muted);font-size:.66rem;flex:0 0 auto;white-space:nowrap}
 .mem-capped{font-size:.64rem;color:var(--amber,#b45309);margin-left:.2rem}
-/* ============================ 主区（照抄 user.html .main-area） ============================ */
 .scroll{margin-left:240px;height:100vh;height:100dvh;flex:1;display:flex;flex-direction:column;min-width:0;overflow-y:auto;-webkit-overflow-scrolling:touch}
 .topbar{flex:0 0 auto;height:60px;display:flex;align-items:center;gap:14px;padding:0 28px;
   background:var(--surface);border-bottom:1px solid var(--border-strong);position:relative;z-index:20}
@@ -217,7 +204,6 @@ button{font-family:inherit}
 .main{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;min-width:0;min-height:0}
 .wrap{max-width:1100px;margin:0 auto;padding:2rem 2.5rem 3rem;min-width:0}
 
-/* ============================ 通用元件 ============================ */
 .page-head{display:flex;align-items:flex-end;justify-content:space-between;gap:14px;margin-bottom:1.5rem;flex-wrap:wrap}
 .page-head h2{font-size:1.6rem;font-weight:700;letter-spacing:-.02em;line-height:1.25}
 .page-head p{margin-top:.3rem;font-size:.88rem}
@@ -230,7 +216,6 @@ button{font-family:inherit}
 .card.plain{box-shadow:none;background:var(--surface-2);border-style:dashed}
 .error-text{color:var(--red);font-size:12.5px;line-height:1.7;word-break:break-word}
 
-/* ---------- 按钮（无任何动画/过渡/缩放，点了就是最原始的反应） ---------- */
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:.35rem;padding:.6rem 1.5rem;border-radius:40px;
   border:1.5px solid var(--border-strong);background:var(--surface);color:var(--text-2);font-size:.85rem;font-weight:500;
   line-height:1.2;cursor:pointer;white-space:nowrap}
@@ -262,7 +247,6 @@ button{font-family:inherit}
 .chip:hover{border-color:var(--accent);color:var(--accent)}
 .chip:active{background:var(--accent-light)}
 
-/* ---------- 指标卡片 ---------- */
 .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:1rem;margin-bottom:1.5rem}
 .stat{position:relative;background:var(--surface);border:1px solid var(--border);border-radius:14px;
   box-shadow:var(--shadow-sm);padding:1rem 1.1rem;overflow:hidden;transition:border-color .2s,box-shadow .2s}
@@ -282,7 +266,6 @@ button{font-family:inherit}
 .stat-value span{font-size:13px;font-weight:600;color:var(--muted)}
 .outage #stat-bot{border-color:var(--red)}
 
-/* ---------- 横幅 ---------- */
 .banner{display:flex;gap:11px;align-items:flex-start;border-radius:12px;padding:12px 15px;font-size:12.5px;
   margin-bottom:10px;border:1px solid;line-height:1.65}
 .banner .b-ico{flex:0 0 auto;width:18px;height:18px;margin-top:1px}
@@ -296,7 +279,6 @@ button{font-family:inherit}
 .banner.info{background:var(--accent-light);border-color:transparent}
 .banner.info strong,.banner.info .b-ico{color:var(--accent)}
 
-/* ---------- 定义列表 ---------- */
 .dl{display:grid;grid-template-columns:118px minmax(0,1fr);gap:9px 16px;font-size:12.5px;align-items:baseline}
 .dl dt{color:var(--muted)}
 .dl dd{color:var(--text);word-break:break-word;line-height:1.6;min-width:0}
@@ -307,7 +289,6 @@ button{font-family:inherit}
 .tip{margin-top:14px;padding-top:12px;border-top:1px dashed var(--border-strong);font-size:12px;color:var(--muted);line-height:1.7}
 .tip b{color:var(--text-2);font-weight:600}
 
-/* ---------- 控制台 ---------- */
 .console{border:1px solid var(--border-strong);border-radius:12px;background:var(--surface-2);overflow:hidden}
 [data-theme="dark"] .console{background:#0a0e14}
 .console-bar{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border-strong);
@@ -327,7 +308,6 @@ button{font-family:inherit}
 .logline.error{color:var(--red)}
 .logline.error .lv{background:var(--red-soft);color:var(--red)}
 
-/* ---------- 配置表单（照抄 user.html .form-grid） ---------- */
 .form-section{background:var(--surface);border:1px solid var(--border);border-radius:16px;box-shadow:var(--shadow-sm);
   margin-bottom:1.5rem;overflow:hidden}
 .fs-head{display:flex;align-items:center;gap:12px;padding:1.25rem 1.5rem;border-bottom:1px solid var(--border-strong)}
@@ -357,7 +337,6 @@ button{font-family:inherit}
   background-position:calc(100% - 17px) 15px,calc(100% - 12px) 15px;background-size:5px 5px;background-repeat:no-repeat}
 .field .hint{font-size:.7rem;color:var(--muted);margin-top:.25rem;line-height:1.6}
 
-/* 事件接收方式：两张对比卡（只读展示，跟随 QQ 平台自动判定） */
 .tp-banner{display:flex;flex-direction:column;gap:5px;padding:12px 14px;border-radius:12px;
   margin-bottom:1rem;border:1px solid var(--border-strong);background:var(--field)}
 .tp-banner b{font-size:13px;font-weight:650}
@@ -402,8 +381,10 @@ button{font-family:inherit}
   color:var(--muted);font-size:11.5px;padding:5px 8px;border-radius:7px;cursor:pointer}
 .pw-toggle:hover{background:var(--surface-2);color:var(--text)}
 .field input[type=password]::placeholder{font-size:12.5px}
-/* 表单末尾的操作按钮行（照 user.html：按钮直接放在表单内，无 sticky 悬浮栏） */
 .form-actions{display:flex;flex-wrap:wrap;align-items:center;gap:.65rem;margin-top:1.5rem;padding-top:1rem;border-top:1px solid var(--border-strong)}
+.fs-foot{display:flex;align-items:center;gap:.7rem;flex-wrap:wrap;margin:0 0 1rem;padding-top:.85rem;
+  border-top:1px dashed var(--border-strong)}
+.fs-foot-note{font-size:.7rem;color:var(--muted);line-height:1.6;margin-right:auto}
 .grow{flex:1;min-width:0}
 .prov{border:1.5px solid var(--border-strong);border-radius:16px;padding:1rem 1.1rem .2rem;margin-bottom:.9rem;background:var(--surface)}
 .prov.is-off{opacity:.62}
@@ -420,7 +401,6 @@ button{font-family:inherit}
 .igen-preview{display:block;max-width:100%;max-height:320px;margin-top:10px;border-radius:12px;border:1px solid var(--border-strong)}
 .ok-text{color:var(--green);font-weight:600}
 .prov-empty{text-align:center;padding:2rem 1rem;color:var(--muted);font-size:.9rem}
-/* 紧凑 AI 行（编辑在弹窗里） */
 .prov-list{margin:0 0 .2rem}
 .prov-row{display:flex;align-items:center;gap:.7rem;padding:.7rem .4rem;border-bottom:1px solid var(--border);cursor:pointer}
 .prov-row:last-child{border-bottom:none}
@@ -439,7 +419,6 @@ button{font-family:inherit}
 .prov-keyok,.prov-keynew,.prov-keyno{font-size:10.5px;border-radius:6px;padding:2px 8px;background:var(--surface-2);color:var(--muted);white-space:nowrap}
 .prov-keynew{background:var(--amber-soft);color:var(--amber)}
 .prov-keyno{background:var(--red-soft);color:var(--red)}
-/* 行内启停开关 */
 .prov-switch{position:relative;width:40px;height:22px;flex:0 0 auto;display:inline-block;cursor:pointer;vertical-align:middle}
 .prov-switch input{position:absolute;opacity:0;inset:0;margin:0;cursor:pointer;z-index:2}
 .prov-switch i{position:absolute;inset:0;border-radius:999px;background:var(--border-strong);transition:background .15s}
@@ -454,7 +433,6 @@ button{font-family:inherit}
   border-radius:9px;border:1.5px solid var(--border-strong);background:var(--surface);color:var(--text-2);
   cursor:pointer;font-size:14px;line-height:1;padding:0}
 .icon-btn:hover{border-color:var(--accent);color:var(--accent)}
-/* 弹窗 */
 .modal-mask{position:fixed;inset:0;background:rgba(15,18,34,.45);z-index:80;
   display:flex;align-items:center;justify-content:center;padding:16px}
 .modal-mask[hidden]{display:none}
@@ -471,8 +449,26 @@ button{font-family:inherit}
 .modal-x:hover{color:var(--red)}
 .modal-body{padding:1rem 1.2rem .25rem;overflow-y:auto}
 .modal-foot{display:flex;flex-wrap:wrap;align-items:center;gap:.6rem;padding:.9rem 1.2rem;border-top:1px solid var(--border)}
-/* 工作区详情 footer：编号独占一行（可折行），按钮另起一行靠右。
-   原因：scope 形如 c2c:<32位hex>，一串 40+ 字符和按钮挤一行必然溢出。 */
+.confirm-mask{z-index:120;backdrop-filter:blur(3px)}
+.confirm{width:min(430px,100%);border-radius:16px}
+.confirm-head{display:flex;align-items:flex-start;gap:.7rem;padding:1.15rem 1.25rem .35rem}
+.confirm-ico{width:34px;height:34px;flex:0 0 auto;border-radius:11px;display:flex;align-items:center;
+  justify-content:center;background:var(--accent-light);color:var(--accent)}
+.confirm-ico svg{width:18px;height:18px}
+.confirm.danger .confirm-ico{background:var(--red-soft);color:var(--red)}
+.confirm-head h3{font-size:15px;font-weight:700;margin:0;line-height:1.45;padding-top:.28rem;
+  word-break:break-word;overflow-wrap:anywhere}
+.confirm-body{padding:.15rem 1.25rem .35rem 3.45rem}
+.confirm-msg{font-size:13px;line-height:1.7;color:var(--text-2);margin:0;white-space:pre-wrap;
+  word-break:break-word;overflow-wrap:anywhere}
+.confirm-detail{margin:.55rem 0 0;font-size:11.5px;line-height:1.65;color:var(--muted);
+  background:var(--surface-2);border-radius:9px;padding:.5rem .65rem;
+  word-break:break-word;overflow-wrap:anywhere}
+.confirm-foot{display:flex;justify-content:flex-end;gap:.55rem;padding:1rem 1.25rem 1.15rem}
+.confirm-foot .btn{padding:.5rem 1.25rem;font-size:.82rem}
+.btn.danger-solid{background:var(--red);border:none;color:#fff}
+.btn.danger-solid:hover{background:var(--red);filter:brightness(.93)}
+.btn.danger-solid:active{filter:brightness(.86)}
 .ws-foot{flex-direction:column;align-items:stretch;gap:.55rem}
 .ws-foot-scope{font-size:11px;color:var(--muted);font-family:ui-monospace,Consolas,monospace;
   word-break:break-all;line-height:1.5;margin:0}
@@ -482,8 +478,13 @@ button{font-family:inherit}
 .test-result.ok{background:var(--green-soft);color:var(--green)}
 .test-result.bad{background:var(--red-soft);color:var(--red)}
 .chip-label{font-size:12px;color:var(--muted);margin-top:.25rem}
+.ai-sec{padding:0 0 .25rem}
+.ai-sec+.ai-sec{margin-top:1.4rem;padding-top:1.4rem;border-top:1px solid var(--border-strong)}
+.ai-sec-head{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:.85rem}
+.ai-sec-head b{font-size:13.5px;font-weight:650}
+.ai-sec-head .hint{flex:1 1 auto;min-width:0;font-size:11.5px;color:var(--muted)}
+.ai-sec-head .btn{flex:0 0 auto}
 
-/* ---------- 分段控件 ---------- */
 .toolbar{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:16px}
 .seg{display:inline-flex;gap:0;background:var(--surface-2);border:1.5px solid var(--border-strong);border-radius:10px;overflow:hidden}
 .seg button{border:none;background:transparent;padding:.35rem .95rem;font-size:.78rem;cursor:pointer;
@@ -493,7 +494,6 @@ button{font-family:inherit}
 .seg button:not(.active):hover{background:var(--surface-3)}
 .count{margin-left:auto;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
 
-/* ---------- 聊天记录卡片 ---------- */
 .entries{display:flex;flex-direction:column;gap:.65rem}
 .entry{background:var(--surface);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow-sm);
   padding:.75rem 1rem;transition:border-color .2s,box-shadow .2s}
@@ -520,15 +520,12 @@ button{font-family:inherit}
 .bubble-text{font-size:13px;line-height:1.75;color:var(--text);white-space:pre-wrap;word-break:break-word;min-width:0;
   background:var(--surface-2);border-radius:4px 14px 14px 14px;padding:.45rem .8rem;max-width:78%}
 .bubble-row.ai .bubble-text{background:var(--accent-light);color:var(--text);border-radius:14px 4px 14px 14px}
-/* 系统事件行 */
 .sys-line{display:flex;align-items:flex-start;gap:8px;font-size:12.5px;color:var(--text-2);line-height:1.65}
 .sys-ico{flex:0 0 auto;font-size:13px;line-height:1.5}
-/* 日期分隔 */
 .day-sep{display:flex;align-items:center;gap:.8rem;color:var(--muted);font-size:11.5px;margin:.4rem 0}
 .day-sep::before,.day-sep::after{content:"";flex:1;height:1px;background:var(--border)}
 .day-sep span{white-space:nowrap;font-weight:600}
 
-/* ---------- 聊天记录（QQ 风格：桌面双栏 / 手机单栏） ---------- */
 .chat-wrap{display:grid;grid-template-columns:300px minmax(0,1fr);gap:12px;height:calc(100vh - 150px);min-height:420px}
 .chat-list{display:flex;flex-direction:column;min-height:0;background:var(--surface);border:1px solid var(--border);
   border-radius:14px;overflow:hidden}
@@ -581,13 +578,10 @@ button{font-family:inherit}
   font-family:ui-monospace,Consolas,monospace}
 .msg-time{align-self:center;font-size:10.5px;color:var(--muted);margin:2px 0}
 
-/* 筛选按钮上的计数 */
 .seg .seg-n{font-size:.68rem;opacity:.75;font-variant-numeric:tabular-nums}
-/* 本地预览示例数据横幅 */
 .demo-note{background:var(--amber-soft);color:var(--amber);border:1px dashed var(--amber);border-radius:10px;
   padding:.55rem .9rem;font-size:12px;margin-bottom:.8rem}
 
-/* ---------- 分页（照抄 user.html .pagination） ---------- */
 .pager{display:flex;align-items:center;justify-content:center;gap:.5rem;margin-top:1.25rem}
 .pager button{display:inline-flex;align-items:center;justify-content:center;padding:.35rem .95rem;background:var(--surface);
   border-radius:40px;border:1.5px solid var(--border-strong);cursor:pointer;font-size:.76rem;color:var(--text-2);
@@ -596,7 +590,6 @@ button{font-family:inherit}
 .pager button:disabled{opacity:.25;cursor:not-allowed}
 .pager .pg-info{font-variant-numeric:tabular-nums;font-size:.76rem;color:var(--muted)}
 
-/* ---------- 空状态 / 加载 ---------- */
 .empty{display:flex;flex-direction:column;align-items:center;text-align:center;padding:3rem 1rem;color:var(--muted)}
 .empty-ico{width:46px;height:46px;border-radius:14px;display:flex;align-items:center;justify-content:center;
   background:var(--surface-2);border:1px solid var(--border-strong);margin-bottom:14px;color:var(--muted);font-size:2.5rem;opacity:.3}
@@ -604,11 +597,8 @@ button{font-family:inherit}
 .empty b{font-size:14px;font-weight:650;color:var(--text);margin-bottom:6px}
 .empty p{font-size:12.5px;line-height:1.7;max-width:380px;color:var(--muted)}
 .empty .btn-row{margin-top:16px}
-/* 注意：加载占位不能叫 .loading——那会和 .btn.loading 冲突，
-   导致按钮的 padding 被覆盖而「拉长」。现在统一用骨架屏 .sk-* */
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
 
-/* ---------- 骨架屏 ---------- */
 .sk-head{display:flex;align-items:center;gap:12px;margin-bottom:18px}
 .sk-head-txt{display:flex;flex-direction:column;gap:8px;flex:1;min-width:0}
 .sk-bar{display:block;height:11px;border-radius:6px;background:var(--sk);animation:pulse 1.4s ease-in-out infinite}
@@ -622,19 +612,16 @@ button{font-family:inherit}
 .sk-w10{width:10%}.sk-w15{width:15%}.sk-w20{width:20%}.sk-w25{width:25%}.sk-w30{width:30%}
 .sk-w35{width:35%}.sk-w40{width:40%}.sk-w50{width:50%}.sk-w60{width:60%}.sk-w70{width:70%}
 .sk-w80{width:80%}.sk-w90{width:90%}
-/* 列表型骨架屏：头像 + 两行灰条（工作区/定时任务/群管理） */
 .sk-row-item{cursor:default}
 .sk-row-item:hover{background:transparent}
 .sk-row-item .prov-info{display:flex;flex-direction:column;gap:8px}
 .sk-row-item .prov-info .sk-bar{height:12px}
-/* 会话列表骨架屏（聊天记录左侧） */
 .sk-conv{cursor:default}
 .sk-conv:hover{background:transparent}
 .sk-conv-av{width:36px;height:36px;border-radius:10px;flex:0 0 auto}
 .sk-conv .conv-main{display:flex;flex-direction:column;gap:8px}
 .sk-conv .sk-bar{height:12px}
 
-/* ---------- Toast（右下角） ---------- */
 .toast-wrap{position:fixed;right:20px;bottom:20px;display:flex;flex-direction:column;gap:9px;z-index:60;pointer-events:none}
 .toast{pointer-events:auto;display:flex;align-items:center;gap:10px;padding:12px 16px 12px 14px;border-radius:12px;
   font-size:13px;font-weight:500;line-height:1.5;max-width:360px;
@@ -648,7 +635,6 @@ button{font-family:inherit}
 .toast.bad svg{color:var(--red)}
 @keyframes toastIn{from{opacity:0;transform:translateY(12px) scale(.97)}to{opacity:1;transform:none}}
 
-/* ---------- 移动端 ---------- */
 .m-top,.m-mask{display:none}
 @media (max-width:820px){
   .side{width:240px;transform:translateX(-100%);transition:transform .25s ease;
@@ -698,6 +684,15 @@ button{font-family:inherit}
   .field textarea{min-height:120px}
   .dl{grid-template-columns:minmax(84px,auto) minmax(0,1fr)}
   .form-actions .btn{flex:1 1 auto;min-width:0}
+  .fs-foot{row-gap:.5rem}
+  .fs-foot-note{flex:1 1 100%;margin-right:0}
+  .fs-foot .btn{margin-left:auto}
+  .ai-sec-head .hint{flex:1 1 100%;order:3}
+  .ai-sec-head .btn{margin-left:auto}
+  .confirm{width:100%;max-width:360px}
+  .confirm-body{padding-left:1.25rem}
+  .confirm-foot{flex-direction:column-reverse}
+  .confirm-foot .btn{width:100%;justify-content:center}
   .modal-foot .btn{flex:1 1 auto}
   .prov-row{flex-wrap:wrap}
   .prov-meta{margin-left:auto}
@@ -708,7 +703,6 @@ button{font-family:inherit}
   .logline .ts{font-size:10.5px}
   .logline .ts i{display:none}
   .logline>span:last-child{flex:1 1 100%;order:3}
-  /* 聊天记录：手机端单栏，点进会话全屏（像手机 QQ） */
   .chat-wrap{grid-template-columns:minmax(0,1fr);height:calc(100dvh - 170px);min-height:0;gap:0}
   .chat-thread{display:none}
   .chat-wrap.thread-open .chat-list{display:none}
@@ -718,7 +712,6 @@ button{font-family:inherit}
   .thread-head b{max-width:calc(100% - 170px)}
   .msg-bubble{max-width:84%}
   .conv-del{opacity:.55}
-  /* 群管理弹窗：内容多，移动端直接全屏（头部固定/正文滚动/底部贴底） */
   .modal-mask.mask-sheet{padding:0;align-items:stretch}
   .modal-sheet{width:100%;max-height:none;height:100dvh;border-radius:0;border:none;animation:modalInM .18s ease}
   .modal-sheet .modal-head{padding:.8rem 1rem}
@@ -737,9 +730,6 @@ button{font-family:inherit}
   .card>.card-head .hint{order:3;width:100%;margin-left:0;line-height:1.6}
   .card>.card-head .btn{order:2;flex:0 0 auto}
   .ws-group-tools{flex-wrap:wrap}
-  /* 窄屏：表格改成卡片式。6 列在手机上必然挤成一团，
-     改成「每条任务一张小卡」：勾选框在左，内容在上，元信息和操作在下。
-     仍然保留限高滚动（约 10 条），往下滑看全部。 */
   .ws-rem-scroll{max-height:560px;border-radius:10px}
   .rem-table{display:block;font-size:.78rem}
   .rem-table thead{display:none}

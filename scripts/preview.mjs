@@ -8,10 +8,8 @@ import { safeEqual } from '../src/utils/security.js';
 const PORT = Number(process.argv[2]) || 8788;
 const HOST = '127.0.0.1';
 
-// 后台登录密码（可用环境变量覆盖）
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || 'preview-admin-2026';
 
-// API 模拟延迟（毫秒）：设为 1500 就能看到骨架屏，测完改回 0 或删掉。
 // 命令行第三个参数：node scripts/preview.mjs <端口> <延迟毫秒>
 const API_DELAY_MS = Number(process.argv[3]) || 0;
 
@@ -24,7 +22,6 @@ function clearSessionCookie() {
   return `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0`;
 }
 
-// 内存会话表（代替线上 D1 的 sessions 表）
 const sessions = new Map();
 
 function getCookie(req, name) {
@@ -50,7 +47,6 @@ function hasSession(req) {
 }
 
 function sendJson(res, status, obj) {
-  // 统一在这里加模拟延迟，方便观察骨架屏
   const finish = () => {
     res.writeHead(status, { ...SECURITY_HEADERS, 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify(obj));
@@ -67,7 +63,6 @@ function readBody(req) {
   });
 }
 
-// 后台页面路径
 const ADMIN_PATHS = new Set(['status', 'config', 'ai', 'imagegen', 'groups', 'workspace', 'logs']);
 
 const SECURITY_HEADERS = {
@@ -250,19 +245,13 @@ function withFakeBotVolume() {
   };
 }
 
-/* ------------------------------ 沙箱演示数据 ------------------------------ */
-// 造几个用户、每人若干文件，带上真实的「修改时间」，
-// 用来验证后台沙箱页与 AI 的 file.list 是否都能给出时间（而不是「暂不可知」）。
-// scope 用真实格式：单聊 c2c:<32位hex>、群聊 group:<32位hex>:u:<32位hex>。
 const MIN = 60 * 1000;
 
-// 私聊用户（4 个，用来验证左栏）
 const C2C_A = 'c2c:9F5E6B45B1786BB51AFABA082F0BFB9E';
 const C2C_B = 'c2c:3A7C1D9E4F8B2A6C5D0E7F1B3A9C8D2E';
 const C2C_C = 'c2c:7B2E4F8A1C6D9E3B5A0F7C2D8E4B1A9F';
 const C2C_D = 'c2c:1D8F3A6B9C2E5F7A4B0D8C1E6F3A9B2D';
 
-// 群（2 个），每群 2~3 个用户
 const G1 = 'D4A8F2C6B1E9D7A3C5F8B2E6D9A1C4F7';
 const G2 = '8E3B7C1D5A9F2E6B4C8D0A3F7E1B5C9D';
 const G1_U1 = `${G1}:u:E5F1A8C3D6B2E9F4A7C1D8B5E2F6A3C9`;
@@ -336,7 +325,6 @@ function demoSandboxDetail(scope) {
   };
 }
 
-/* ------------------------------ 工作区演示数据 ------------------------------ */
 const WORKSPACE_DATA = {
   [C2C_A]: {
     tasks: [
@@ -402,7 +390,6 @@ function demoWorkspaceDetail(scope) {
   };
 }
 
-/* ------------------------------ 群列表演示数据（群卡片头用） ------------------------------ */
 function demoGroups() {
   const masked = (openid) => openid.slice(0, 8) + '…' + openid.slice(-4);
   return [
@@ -425,8 +412,6 @@ function demoGroups() {
   ];
 }
 
-/* ------------------------------ 定时任务演示数据 ------------------------------ */
-// 造 8 条（超过可视高度），用来验证限高滚动和多选删除。
 function demoReminders() {
   const masked = (openid) => openid.slice(0, 8) + '…' + openid.slice(-4);
   const base = Date.now();
@@ -454,7 +439,6 @@ function demoReminders() {
   ];
 }
 
-/* ------------------------------ 记忆分层演示数据 ------------------------------ */
 const MEMORY_DATA = {
   [C2C_A]: {
     messages: 14,
@@ -523,7 +507,6 @@ function demoMemory(scope) {
   return { scope, scopeMasked: scope.replace(/^c2c:/, '').replace(/^group:[^:]+:u:/, ''), ...m };
 }
 
-/* ------------------------------ 聊天记录演示数据 ------------------------------ */
 const DEMO_CONVERSATIONS = [
   {
     scopeId: 'a3f2c1d0',
@@ -619,7 +602,6 @@ function demoSystemMessages() {
 createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
 
-  /* ---------------- 登录 / 登出 ---------------- */
   if (url.pathname === '/api/auth/login' && req.method === 'POST') {
     readBody(req).then(async (raw) => {
       let password = '';
@@ -644,7 +626,6 @@ createServer((req, res) => {
     return;
   }
 
-  /* ---------------- API（除登录外都要会话） ---------------- */
   if (url.pathname.startsWith('/api/')) {
     if (!hasSession(req)) {
       sendJson(res, 401, { ok: false, error: { code: 'unauthorized', message: '未登录或会话已过期' } });
@@ -708,15 +689,12 @@ createServer((req, res) => {
     return;
   }
 
-  /* ---------------- 页面 ---------------- */
-  // 已登录访问 /login → 直接进后台
   if (url.pathname === '/login' && req.method === 'GET' && hasSession(req)) {
     res.writeHead(302, { Location: '/status' });
     res.end();
     return;
   }
 
-  // 后台页面：未登录跳登录页
   const seg = url.pathname.slice(1);
   if (req.method === 'GET' && ADMIN_PATHS.has(seg) && !url.pathname.includes('/', 1)) {
     if (!hasSession(req)) {

@@ -1,6 +1,128 @@
 
 export const ADMIN_JS = `
-/* ============================== 基础工具 ============================== */
+var confirmState={el:null,resolve:null,lastFocus:null,onKey:null,finishing:false};
+
+function confirmDialog(opts){
+  opts=opts||{};
+  if(confirmState.el)settleConfirm(false);
+
+  var title=opts.title||'确认操作';
+  var message=opts.message||'';
+  var detail=opts.detail||'';
+  var okText=opts.confirm||'确定';
+  var noText=opts.cancel||'取消';
+  var danger=!!opts.danger;
+
+  var lastFocus=document.activeElement;
+
+  var mask=document.createElement('div');
+  mask.className='modal-mask confirm-mask';
+  mask.setAttribute('role','presentation');
+
+  var box=document.createElement('div');
+  box.className='modal confirm'+(danger?' danger':'');
+  box.setAttribute('role','dialog');
+  box.setAttribute('aria-modal','true');
+  box.setAttribute('aria-labelledby','cf-title');
+  if(detail)box.setAttribute('aria-describedby','cf-detail');
+
+  var head=document.createElement('div');
+  head.className='confirm-head';
+  var ico=document.createElement('span');
+  ico.className='confirm-ico';
+  ico.innerHTML=danger?IX.alert:IX.info;
+  var h3=document.createElement('h3');
+  h3.id='cf-title';
+  h3.textContent=title;
+  head.appendChild(ico);
+  head.appendChild(h3);
+
+  var body=document.createElement('div');
+  body.className='confirm-body';
+  var p=document.createElement('p');
+  p.className='confirm-msg';
+  p.textContent=message;
+  body.appendChild(p);
+  if(detail){
+    var d=document.createElement('p');
+    d.className='confirm-detail';
+    d.id='cf-detail';
+    d.textContent=detail;
+    body.appendChild(d);
+  }
+
+  var foot=document.createElement('div');
+  foot.className='confirm-foot';
+  var cancelBtn=document.createElement('button');
+  cancelBtn.type='button';
+  cancelBtn.className='btn';
+  cancelBtn.id='cf-cancel';
+  cancelBtn.textContent=noText;
+
+  var okBtn=document.createElement('button');
+  okBtn.type='button';
+  okBtn.className='btn '+(danger?'danger-solid':'primary');
+  okBtn.id='cf-ok';
+  okBtn.textContent=okText;
+
+  foot.appendChild(cancelBtn);
+  foot.appendChild(okBtn);
+  box.appendChild(head);
+  box.appendChild(body);
+  box.appendChild(foot);
+  mask.appendChild(box);
+  document.body.appendChild(mask);
+
+  var onKey=function(e){
+    if(!confirmState.el)return;
+    if(e.key==='Escape'){
+      e.preventDefault();
+      e.stopPropagation();
+      finish(false);
+    }
+  };
+
+  function finish(result){
+    if(confirmState.finishing)return;
+    confirmState.finishing=true;
+    document.removeEventListener('keydown',onKey,true);
+    if(mask.parentNode)mask.parentNode.removeChild(mask);
+    confirmState.el=null;
+    confirmState.onKey=null;
+    var res=confirmState.resolve;
+    confirmState.resolve=null;
+    confirmState.finishing=false;
+    if(lastFocus&&lastFocus.focus&&document.contains(lastFocus)){
+      try{lastFocus.focus();}catch(e){}
+    }
+    if(typeof res==='function')res(!!result);
+  }
+
+  cancelBtn.addEventListener('click',function(){finish(false);});
+  okBtn.addEventListener('click',function(){finish(true);});
+  mask.addEventListener('click',function(e){
+    if(e.target===mask)finish(false);
+  });
+
+  document.addEventListener('keydown',onKey,true);
+
+  confirmState.el=mask;
+  confirmState.onKey=onKey;
+
+  (danger?cancelBtn:okBtn).focus();
+
+  return new Promise(function(resolve){
+    confirmState.resolve=resolve;
+  });
+}
+
+function settleConfirm(result){
+  if(!confirmState.el)return false;
+  var btn=confirmState.el.querySelector(result?'#cf-ok':'#cf-cancel');
+  if(btn){btn.click();return true;}
+  return false;
+}
+
 function esc(v){
   return String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
     .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
@@ -32,10 +154,6 @@ var IX={
   chevron:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>'
 };
 
-/**
- * 右下角提示。kind 为 'ok' 时整条绿色，'bad' 时整条红色，不传就是中性蓝色。
- * 悬停会暂停倒计时，点一下可以立刻关掉；最多同时留 4 条，多了挤掉最旧的。
- */
 function toast(text,kind){
   var box=$('toast');
   if(!box)return;
@@ -61,7 +179,6 @@ function toast(text,kind){
     el.style.transform='translateY(8px)';
     setTimeout(function(){ if(el.parentNode)el.parentNode.removeChild(el); },220);
   }
-  // 失败信息通常更长，也停留得更久；鼠标移上去就暂停，方便读完或复制
   el.addEventListener('mouseenter',function(){ if(tick)clearInterval(tick); tick=null; });
   el.addEventListener('mouseleave',function(){ if(!gone)start(); });
   el.addEventListener('click',close);
@@ -92,7 +209,6 @@ function api(method,path,body){
   });
 }
 
-/* ------------------------------ 时间格式 ------------------------------ */
 function pad2(n){return (n<10?'0':'')+n;}
 function fmtClock(ts){
   if(!ts)return '—';
@@ -115,14 +231,12 @@ function ago(ms){
   if(diff<0)return '刚刚';
   return fmtDur(diff)+'前';
 }
-/** 记录里的时间戳是 UTC（D1 里存的是 ISO），后台按本地时间显示 */
 function fmtEntryTime(iso){
   var d=new Date(iso);
   if(isNaN(d.getTime()))return String(iso||'').replace('T',' ').slice(0,19);
   return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate())+' '+pad2(d.getHours())+':'+pad2(d.getMinutes());
 }
 
-/* ============================== 外壳联动 ============================== */
 var META={
   status:{title:'运行状态',crumb:'概览 / 运行状态'},
   config:{title:'机器人配置',crumb:'设置 / 机器人配置'},
@@ -152,7 +266,6 @@ function setPill(text,kind){
   var cls='pill-state'+(kind?' '+kind:'');
   var html='<i></i>'+esc(text);
   if(pill){pill.className=cls;pill.innerHTML=html;}
-  // 保留 m-state 类名，否则移动端顶栏的 margin-left:auto 会失效（状态会贴在标题后面）
   if(m){m.className=cls+' m-state';m.innerHTML=html;}
 }
 
@@ -161,7 +274,6 @@ function setTopActions(html){
   if(box)box.innerHTML=html||'';
 }
 
-/* ------------------------------ 外观 ------------------------------ */
 function currentTheme(){
   var t='light';
   try{ t=localStorage.getItem('botAdminTheme')==='dark'?'dark':'light'; }catch(e){}
@@ -180,19 +292,18 @@ function toggleTheme(){
   applyTheme(next);
 }
 
-/* ============================== 运行状态 ============================== */
 var WS_STATE={0:'连接中',1:'已连接',2:'关闭中',3:'已关闭'};
 var statusTimer=null;
 var autoRefresh=true;
 try{ autoRefresh=localStorage.getItem('botAutoRefresh')!=='0'; }catch(e){}
 
-var S={};             // 最近一次状态数据
-var rendered=false;   // 状态页是否已经渲染过骨架
+var S={};
+var rendered=false;
 var TRANSPORT_MODE='';// 配置页里显式保存的事件接收方式（webhook / ws，空=自动）
-var CUR_APPID='';     // 配置页里当前的 QQ AppID，用来拼开放平台跳转链接
-var CUR_WEBHOOK_VERIFIED=false; // 平台是否校验过回调地址（决定自动模式实际走哪条）
-var CUR_LAST_EVENT_AT=0;       // 最近一次从 /event 收到真实推送的时间（平台已走 Webhook 的硬证据）
-var CUR_PLATFORM_MODE='';      // 平台当前推送方式（'ws' / 'webhook'），由 DO 判定后回传
+var CUR_APPID='';
+var CUR_WEBHOOK_VERIFIED=false;
+var CUR_LAST_EVENT_AT=0;
+var CUR_PLATFORM_MODE='';
 
 function stateOf(s){
   if(!s)return {text:'读取中',kind:''};
@@ -211,7 +322,7 @@ function banners(s){
       '预计 '+fmtClock(s.quotaWaitUntil)+' 恢复（还有 '+fmtDur(s.quotaWaitUntil-now)+'）。已经停止无效重连，到点会自动起来，不需要手动操作。']);
   }
   if(!s.qqReady)out.push(['bad','QQ 凭据不完整','缺少 AppID 或 Secret。到「机器人配置」填好并保存，机器人才能连上网关。']);
-  else if(!s.aiReady)out.push(['bad','AI 未配置完整','Base URL / API Key / 模型三者缺一，机器人收到了消息也回不出来。到「机器人配置」补全后保存并重启。']);
+  else if(!s.aiReady)out.push(['bad','AI 未配置完整','Base URL / API Key / 模型三者缺一，机器人收到了消息也回不出来。到「AI 模型」补全后保存即可，不用重启。']);
   if(isWs&&s.running&&!s.tokenExpiry)out.push(['bad','Access Token 未获取','到「机器人配置」确认 AppID / Secret 与开放平台一致。']);
   else if(isWs&&(s.identifyFailures||0)>=5&&!(s.quotaWaitUntil&&s.quotaWaitUntil>now)){
     out.push(['warn','连续鉴权失败 '+s.identifyFailures+' 次',
@@ -220,7 +331,6 @@ function banners(s){
   if(!s.running&&!out.length)out.push(['info',isWs?'机器人已停止':'机器人已停用',
     isWs?'点下面「启动」恢复运行。自动保活'+(s.desiredRunning?'仍在等待':'已关闭')+'。'
         :'点下面「启动」恢复接收消息。']);
-  // 切到 Webhook 后如果一直收不到事件，说明域名不通 / 回调地址配错，得明确提示
   if(!isWs&&s.desiredRunning&&!s.lastEventAt){
     out.push(['warn','Webhook 还没收到过任何事件',
       '已切到 Webhook 但一次事件都没进来。确认 QQ 开放平台的回调地址是 '+(location.origin||'你的域名')+'/qq/webhook，且该域名能从公网访问。收不到消息时可临时改回「WebSocket 网关长连接」。']);
@@ -306,7 +416,6 @@ function skLogLines(n){
   return h;
 }
 
-// 列表型骨架屏（工作区 / 定时任务 / 群管理）：几行「头像 + 两行灰条」
 function skListSkeleton(n){
   var h='';
   for(var i=0;i<n;i++){
@@ -318,7 +427,6 @@ function skListSkeleton(n){
   return h;
 }
 
-// 会话列表骨架屏（聊天记录左侧）
 function convSkeleton(n){
   var h='';
   for(var i=0;i<n;i++){
@@ -398,7 +506,6 @@ function paintStatus(s){
       ?'<i class="dot ok"></i>'+(isWs?'运行中':'已启用')
       :'<i class="dot bad"></i>'+(isWs?'已停止':'已停用'));
     el.querySelector('.stat-value').className='stat-value '+(s.running?'ok':'bad');
-    // Webhook 模式没有常驻连接，说「自动保活」会误导，改成「接收开关」
     el.querySelector('.stat-sub').textContent=(isWs?'自动保活':'接收开关')+(s.desiredRunning?'已开启':'已关闭')
       +(s.lastStartAt?' · 启动于 '+fmtClock(s.lastStartAt):'');
   }
@@ -444,8 +551,6 @@ function paintStatus(s){
     var verTxt=(s.sandbox?'沙箱环境':'正式环境')+' · Worker '+(wv?'v'+wv:'未上报')+' / DO '+(dv?'v'+dv:'未上报');
     if(!sameVer&&wv&&dv)verTxt+='（点「立即切换版本」可马上生效）';
 
-    // 会话/配额/关闭码这些是长连接特有的；Webhook 模式没有连接，
-    // 回调验证与最近事件则是 Webhook 特有的 —— 各显示各的，互不干扰
     var rows=[['运行环境与版本',verTxt,sameVer?'ok':'warn'],
       ['事件接收方式',isWs?'WebSocket 网关长连接（DO 常驻计费）':'Webhook（请求驱动，空闲不计持续时间）',isWs?'warn':'ok']];
 
@@ -468,7 +573,6 @@ function paintStatus(s){
       rows.push(['连续鉴权失败',(s.identifyFailures||0)+' 次',(s.identifyFailures||0)>=5?'bad':'']);
     }
 
-    // 最后关闭码与停机原因合并成一行：两者都是「上次为什么停的」，分开看反而割裂
     (function(){
       var closeTxt=s.lastClose?('code='+s.lastClose.code+(s.lastClose.meaning?'　'+s.lastClose.meaning:'')+(s.lastClose.reason?'　'+s.lastClose.reason:'')+(s.lastClose.at?'　('+fmtClock(s.lastClose.at)+')':'')):'';
       var parts=[];
@@ -643,24 +747,12 @@ function resetLimits(){
   }).catch(function(e){toast(e.message,'bad');}).then(function(){busy(btn,false);});
 }
 
-/* ============================== 机器人配置 ============================== */
 
-/** QQ 开放平台「开发设置」页，AppID 从配置里动态拼，不写死 */
 function qqDevSettingsUrl(appId){
   var id=String(appId||'').replace(/[^0-9]/g,'');
   return 'https://q.qq.com/qqbot/dashboard/manage/'+id+'?sec=dev-settings';
 }
 
-/**
- * 事件接收方式：跟随 QQ 开放平台，主路径自动同步，另给一个「重新检测」兜底。
- *
- * 为什么不能只靠自动：
- *   - 平台切到 Webhook → 能自动发现（收到 /event 推送就是硬证据）
- *   - 平台切回 WebSocket → **自动发现不了**：Webhook 模式下本对象根本不连网关，
- *     收不到任何 WS 事件，没有任何信号可依。所以必须给一个手动触发的入口。
- *
- * 判定用显式的双向 platformMode（而不是「有过 webhook 痕迹就一直当 webhook」）。
- */
 function transportCards(){
   var isWebhook=(CUR_PLATFORM_MODE==='webhook')||(CUR_PLATFORM_MODE!=='ws'&&!!(CUR_WEBHOOK_VERIFIED||CUR_LAST_EVENT_AT));
   var appId=CUR_APPID||'';
@@ -687,7 +779,6 @@ function transportCards(){
   for(var i=0;i<modes.length;i++){
     var m=modes[i];
     var on=(isWebhook?'webhook':'ws')===m.key;
-    // 没有 data-tp / tabindex：这里不可点选，只是展示
     h+='<div class="tp-card ro'+(on?' on':'')+'">';
     h+='<div class="tp-head"><span class="tp-radio"><i></i></span>'
       +'<b>'+esc(m.name)+'</b>'
@@ -707,13 +798,10 @@ function transportCards(){
   }
   h+='</div>';
 
-  // 跳转到 QQ 开放平台：AppID 从后台配置读取，未填则提示先填
   h+='<div class="tp-actions">';
   if(appId){
     h+='<a class="btn primary" href="'+esc(devUrl)+'" target="_blank" rel="noopener noreferrer">'
       +IX.link+'<span>去 QQ 开放平台修改</span></a>';
-    // 两个方向都做成显式按钮：网关可连与否证明不了平台在用哪种方式，
-    // 所以只能由用户自己声明「我在平台上设成了什么」
     if(isWebhook){
       h+='<button class="btn" id="b-to-ws" type="button">'+IX.refresh+'<span>我在平台改成了 WebSocket</span></button>';
     }else{
@@ -763,12 +851,13 @@ var FIELDS=[
   ]}
 ];
 
-function allKeys(){
+function sectionKeys(secId){
   var keys=[];
   for(var s=0;s<FIELDS.length;s++){
-    // 自定义区块（事件接收方式）没有 items，值单独从隐藏字段读，这里跳过
-    if(FIELDS[s].custom)continue;
-    var items=FIELDS[s].items||[];
+    var sec=FIELDS[s];
+    if(sec.custom)continue;
+    if(secId&&sec.id!==secId)continue;
+    var items=sec.items||[];
     for(var i=0;i<items.length;i++)keys.push(items[i].key);
   }
   return keys;
@@ -792,8 +881,6 @@ function fieldHtml(f,cfg,conf){
     }
     h+='</select>';
   }else if(f.type==='password'){
-    // 库里已有值时后端不回传明文，输入框留空并提示「已设置」，
-    // 这样不会在框里显示一排假的圆点让人以为可以改。
     var hasSaved=!!(f.secret&&conf[f.key]);
     h+='<div class="pw-wrap"><input id="cf_'+f.key+'" type="password" value="'+esc(hasSaved?'':v)+'" placeholder="'+esc(ph)+'" autocomplete="new-password">'
       +'<button class="pw-toggle" type="button" data-pw="cf_'+f.key+'">显示</button></div>';
@@ -821,23 +908,26 @@ function renderConfig(d){
       +'<div><h3>'+esc(sec.title)+'</h3><p>'+esc(sec.desc)+'</p></div>'
       +'<span class="fs-state" id="fs-'+sec.id+'"></span></div><div class="fs-body">';
     if(sec.custom){
-      // 自定义区块自己负责布局（比如事件接收方式的两张对比卡）
       h+=sec.custom();
     }else{
       h+='<div class="grid">';
       for(var i=0;i<sec.items.length;i++)h+=fieldHtml(sec.items[i],cfg,conf);
       h+='</div>';
+      h+='<div class="fs-foot">'
+        +'<span class="fs-foot-note">保存即热更新，无需重启</span>'
+        +'<button class="btn primary" id="b-sec-save-'+sec.id+'" type="button" data-sec="'+sec.id+'">'
+        +IX.check+'<span>保存</span></button></div>';
     }
     h+='</div></div>';
   }
-  // 照 user.html：按钮直接放在表单末尾，没有 sticky 悬浮栏、没有常驻状态文字
-  h+='<div class="form-actions">'
-    +'<button class="btn" id="b-save" type="button">'+IX.check+'<span>保存配置</span></button>'
-    +'<button class="btn primary" id="b-save-restart" type="button">'+IX.refresh+'<span>保存并重启</span></button></div>';
   $('wrap').innerHTML=h;
 
-  $('b-save').addEventListener('click',function(){saveConfig(false);});
-  $('b-save-restart').addEventListener('click',function(){saveConfig(true);});
+  var secBtns=document.querySelectorAll('[data-sec]');
+  for(var sb=0;sb<secBtns.length;sb++){
+    secBtns[sb].addEventListener('click',function(){
+      saveSection(this.getAttribute('data-sec'),this);
+    });
+  }
 
   bindTransportCards();
 
@@ -865,7 +955,6 @@ function markDirty(){
   updateSectionStates();
 }
 
-/** 事件接收方式：只读展示，只绑定「复制回调地址」与「重新检测」 */
 function bindTransportCards(){
   var copy=$('tp-copy');
   if(copy){
@@ -880,7 +969,6 @@ function bindTransportCards(){
       }
     });
   }
-  // 两个方向各一个显式按钮：只由用户声明，不做自动猜测
   var toWs=$('b-to-ws');
   if(toWs){
     toWs.addEventListener('click',function(){
@@ -905,12 +993,10 @@ function bindTransportCards(){
   }
 }
 
-/** 每个分组的右上角显示「已填写 n/m」，一眼看出还差什么 */
 function updateSectionStates(){
   for(var s=0;s<FIELDS.length;s++){
     var sec=FIELDS[s];
     if(sec.custom){
-      // 自定义区块：只读展示，始终算「已同步」
       var st=$('fs-'+sec.id);
       if(st){
         st.className='fs-state ok';
@@ -925,7 +1011,6 @@ function updateSectionStates(){
       if(!el)continue;
       total++;
       var v=String(el.value||'').trim();
-      // 敏感字段在库里有值时后端回传空串，但 placeholder 会写「已设置」，按已填写算
       var saved=!!(f.secret&&String(el.getAttribute('placeholder')||'').indexOf('已设置')===0);
       if(v||saved)filled++;
     }
@@ -954,39 +1039,62 @@ function showConfig(){
   });
 }
 
-function saveConfig(restart){
-  var keys=allKeys();
+function collectConfig(secId){
+  var keys=sectionKeys(secId||'');
   var patch={};
   for(var k=0;k<keys.length;k++){
     var el=$('cf_'+keys[k]);
     if(el)patch[keys[k]]=el.value;
   }
-  // 事件接收方式是只读展示，跟随 QQ 平台自动判定，不提交
-  var b1=$('b-save'),b2=$('b-save-restart');
-  busy(b1,true);
-  busy(b2,true);
-  api('POST','/api/config',patch).then(function(){
-    if(restart){
-      return api('POST','/api/bot/restart',{}).then(function(){
-        toast('配置已保存，机器人已重启','ok');
-        // 用 hash 跳转（而不是直接调 showStatus），让 URL 与页面同步，
-        // 否则会出现「内容到了状态页、地址栏还是 #config」的错位。
-        setTimeout(function(){ location.hash = '#status'; },900);
-      });
-    }
-    toast('配置已保存','ok');
-    return api('GET','/api/config').then(function(d){
-      if(d)renderConfig(d);
-      toast('配置已保存','ok');
-    });
-  }).catch(function(e){
-    toast(e.message,'bad');
-    busy(b1,false);
-    busy(b2,false);
+  return patch;
+}
+
+function snapshotOthers(savedKeys){
+  var keys=sectionKeys('');
+  var out={};
+  for(var k=0;k<keys.length;k++){
+    if(savedKeys.indexOf(keys[k])>=0)continue;
+    var el=$('cf_'+keys[k]);
+    if(el)out[keys[k]]=el.value;
+  }
+  return out;
+}
+
+function restoreOthers(draft){
+  for(var key in draft){
+    if(!Object.prototype.hasOwnProperty.call(draft,key))continue;
+    var el=$('cf_'+key);
+    if(el&&el.value!==draft[key])el.value=draft[key];
+  }
+}
+
+function afterSave(d,draft){
+  var hot=!(d&&d.botReloaded===false);
+  toast(hot?'已保存，热更新生效':'已保存（机器人未运行，启动后生效）','ok');
+  return api('GET','/api/config').then(function(c){
+    if(!c)return;
+    renderConfig(c);
+    if(draft)restoreOthers(draft);
+    updateSectionStates();
   });
 }
 
-/* ============================== 聊天记录（QQ 风格会话） ============================== */
+function postConfig(patch,btn,draft){
+  busy(btn,true);
+  api('POST','/api/config',patch).then(function(d){
+    return afterSave(d,draft);
+  }).catch(function(e){
+    toast(e.message,'bad');
+    busy(btn,false);
+  });
+}
+
+function saveSection(secId,btn){
+  var patch=collectConfig(secId);
+  if(!Object.keys(patch).length){toast('这一块没有可保存的项','bad');return;}
+  postConfig(patch,btn,snapshotOthers(Object.keys(patch)));
+}
+
 var chatState={scope:'',kind:'',items:[],hasMore:false};
 
 function dayKey(d){
@@ -1019,11 +1127,6 @@ function fullTime(iso){
   if(dayKey(d)===dayKey(now))return hm;
   return pad2s(d.getMonth()+1)+'-'+pad2s(d.getDate())+' '+hm;
 }
-/**
- * 列表里用的绝对时间：始终带「月-日 时:分」。
- * fullTime 对今天的时间只给「22:06:49」，混在「10-26 20:48:49」旁边会让人以为格式错乱；
- * 沙箱/工作区这类列表要的是「这个文件到底什么时候改的」，统一给完整日期更清楚。
- */
 function absTime(iso){
   var d=new Date(iso);
   if(isNaN(d.getTime()))return '';
@@ -1096,7 +1199,6 @@ function exchangeHtml(it){
   if(it.userContent)h+='<div class="msg-row me"><span class="msg-av">'+IX.user+'</span><div class="msg-bubble">'+esc(it.userContent)+'</div></div>';
   if(it.aiReply){
     h+='<div class="msg-row"><span class="msg-av bot">'+IX.bot+'</span><div class="msg-bubble">'+esc(it.aiReply)+'</div></div>';
-    // 这条回复用的模型
     if(it.model)h+='<div class="msg-model">'+esc(it.model)+'</div>';
   }
   return h+'</div>';
@@ -1212,22 +1314,29 @@ function onConvClick(e){
   openConversation(row.getAttribute('data-scope'),row.getAttribute('data-kind'));
 }
 
-/** 删除整个会话（该会话的全部记录），不是删单条 */
 function deleteConversation(scope){
   if(!scope)return;
   var isSys=scope==='system';
   var label=isSys?'全部系统消息':('会话 #'+scope);
-  if(!confirm('确定删除'+label+'？该会话的全部聊天记录都会被删除，不可撤销。'))return;
-  api('POST','/api/conversations/delete',{scope:scope}).then(function(d){
-    toast('已删除 '+((d&&d.deleted)||0)+' 条记录','ok');
-    if(chatState.scope===scope){
-      chatState.items=[];
-      closeChatThread();
-      var body=$('thread-body');
-      if(body)body.innerHTML='<div class="thread-empty">选择一个会话，查看你和机器人的完整对话</div>';
-    }
-    loadConversations();
-  }).catch(function(err){toast(err.message,'bad');});
+  confirmDialog({
+    title:'删除'+label+'？',
+    message:'该会话的全部聊天记录都会被删除，不可恢复。',
+    detail:'删除的是这个会话下的所有消息，不是单独一条。',
+    confirm:'删除',
+    danger:true
+  }).then(function(yes){
+    if(!yes)return;
+    api('POST','/api/conversations/delete',{scope:scope}).then(function(d){
+      toast('已删除 '+((d&&d.deleted)||0)+' 条记录','ok');
+      if(chatState.scope===scope){
+        chatState.items=[];
+        closeChatThread();
+        var body=$('thread-body');
+        if(body)body.innerHTML='<div class="thread-empty">选择一个会话，查看你和机器人的完整对话</div>';
+      }
+      loadConversations();
+    }).catch(function(err){toast(err.message,'bad');});
+  });
 }
 
 function showLogs(){
@@ -1243,7 +1352,6 @@ function showLogs(){
   loadConversations();
 }
 
-/* ============================== AI 模型 ============================== */
 var aiState=[];
 var aiSeq=0;
 
@@ -1263,7 +1371,6 @@ function modelOptions(p){
   return h;
 }
 
-/* ---- 添加/编辑 AI 的弹窗 ---- */
 var aiModal={idx:-1,isNew:false,p:null,models:[]};
 var aiEscBound=false;
 
@@ -1489,9 +1596,23 @@ function onProvClick(e){
   }
   if(act==='del'){
     if(aiState.length<2){toast('至少保留一个 AI');return;}
-    if(!confirm('删除「'+(aiState[idx].name||'这个 AI')+'」？'))return;
-    aiState.splice(idx,1);
-    renderAiProviders();
+    var name=aiState[idx].name||'这个 AI';
+    confirmDialog({
+      title:'删除「'+name+'」？',
+      message:'删除后要从列表里重新添加才能恢复，需要再填一次地址和 API Key。',
+      detail:'这一步只改内存里的列表，点「保存」后才真正写入；点「取消」可原样退出。',
+      confirm:'删除',
+      danger:true
+    }).then(function(yes){
+      if(!yes)return;
+      var at=-1;
+      for(var j=0;j<aiState.length;j++)if(aiState[j].id===id)at=j;
+      if(at<0)return;
+      if(aiState.length<2){toast('至少保留一个 AI');return;}
+      aiState.splice(at,1);
+      renderAiProviders();
+      toast('已从列表移除，点「保存」生效','ok');
+    });
     return;
   }
   openAiModal(idx);
@@ -1507,7 +1628,7 @@ function collectProviders(){
   return out;
 }
 
-function saveProviders(restart,btn){
+function saveProviders(btn){
   if(!aiState.length){toast('至少保留一个 AI','bad');return;}
   busy(btn,true);
   api('POST','/api/ai',{providers:collectProviders()})
@@ -1518,11 +1639,7 @@ function saveProviders(restart,btn){
         aiState[i].apiKey='';
       }
       renderAiProviders();
-      toast('已保存 '+n+' 个 AI','ok');
-      if(!restart)return null;
-      return api('POST','/api/bot/restart',{}).then(function(){
-        toast('已重启，新配置生效','ok');
-      });
+      toast('已保存 '+n+' 个 AI，热更新生效','ok');
     })
     .catch(function(e){toast(e.message,'bad');})
     .then(function(){busy(btn,false);});
@@ -1535,7 +1652,6 @@ function showAi(){
   setTopActions('');
   setPill('AI 模型','');
   $('wrap').innerHTML=skeletonAi();
-  // AI 列表 + 生图配置一起拉（生图已并入本页）
   Promise.all([
     api('GET','/api/ai'),
     api('GET','/api/config').catch(function(){ return null; })
@@ -1568,28 +1684,46 @@ var imageGenState={model:'',baseUrl:'',apiKey:'',hasKey:false,testedModel:'',tes
 var igenEscBound=false;
 
 function renderAiPage(){
-  var h='<div class="card"><div class="card-head"><h3>AI 列表</h3>'
-    +'<span class="hint">按顺序尝试，失败自动换下一个；点行可编辑</span></div>'
+  var h='<div class="card"><div class="card-head"><h3>AI 模型</h3>'
+    +'<span class="hint">对话和生图各配各的，保存即热更新</span></div>';
+
+  h+='<div class="ai-sec">'
+    +'<div class="ai-sec-head"><b>对话模型</b>'
+    +'<span class="hint">按顺序尝试，失败自动换下一个</span>'
+    +'<button class="btn sm" id="b-ai-add" type="button">＋ 添加</button></div>'
     +'<div class="prov-list" id="prov-list"></div>'
-    +'<div class="form-actions">'
-    +'<button class="btn" id="b-ai-add" type="button">＋ 添加 AI</button>'
-    +'<span class="grow"></span>'
-    +'<button class="btn" id="b-ai-save" type="button">'+IX.check+'<span>保存</span></button>'
-    +'<button class="btn primary" id="b-ai-save-restart" type="button">'+IX.refresh+'<span>保存并重启</span></button>'
-    +'</div></div>';
-  h+='<div class="card"><div class="card-head"><h3>内置国内 AI 配置</h3>'
-    +'<span class="hint">点一下打开弹窗，地址和模型都填好，只需再填 API Key</span></div>'
-    +'<div class="chip-row" id="ai-presets">'+aiPresetChips()+'</div></div>';
+    +'<div class="fs-foot"><span class="fs-foot-note">保存后机器人自动重读列表，不用重启</span>'
+    +'<button class="btn primary" id="b-ai-save" type="button">'+IX.check+'<span>保存</span></button></div>'
+    +'</div>';
+
+  h+='<div class="ai-sec">'
+    +'<div class="ai-sec-head"><b>生图模型</b>'
+    +'<span class="hint">留空即关闭生图；不填地址和 Key 时用上面第一个对话模型兜底</span>'
+    +'<button class="btn sm" id="b-igen-add" type="button">✎ 编辑</button></div>'
+    +'<div id="igen-row-wrap">'+igenRowHtml()+'</div>'
+    +'<div class="fs-foot"><span class="fs-foot-note" id="igen-state"></span>'
+    +'<button class="btn primary" id="b-igen-save" type="button" disabled>'+IX.check+'<span>保存</span></button></div>'
+    +'</div>';
+
+  h+='</div>';
+
+  h+='<div class="card"><div class="card-head"><h3>快速添加</h3>'
+    +'<span class="hint">点一下填好地址和模型，只需再补 API Key</span></div>'
+    +'<p class="chip-label">对话模型</p>'
+    +'<div class="chip-row" id="ai-presets">'+aiPresetChips()+'</div>'
+    +'<p class="chip-label mt-sm">生图模型</p>'
+    +'<div class="chip-row" id="igen-model-presets">'+igenModelChips()+'</div>'
+    +'</div>';
+
   h+='<div class="card"><div class="card-head"><h3>怎么用</h3></div>'
-    +'<p class="tip">每个 AI 一套 Base URL + API Key + 模型，接口要兼容 OpenAI 的 <b>/chat/completions</b>。'
-    +'添加和编辑都在弹窗里完成，可以先「测试」确认能通再保存。列表顺序就是优先级：机器人先问第一个，'
-    +'超时、报错、配额用完就自动切到下一个，全部失败才会回一句「出了点小状况」。停用的 AI 不参与。<br>'
-    +'注：讯飞星火的「API Key」填控制台里的 <b>APIPassword</b>；腾讯混元已升级为 TokenHub 平台，地址用的是新接口。<br>'
-    +'国外模型（OpenAI、Gemini、Grok 等）在 Cloudflare Workers 上可直连，不需要代理；调用是机器人服务器发的，跟你本地网络无关。<br>'
-    +'改完点「保存」立即生效（机器人自动热更新，无需重启）；「保存并重启」会完整重启一遍连接。</p></div>';
+    +'<p class="tip">接口都要兼容 OpenAI。对话模型走 <b>/chat/completions</b>，生图走 <b>/images/generations</b>。<br>'
+    +'「对话模型」列表顺序就是优先级：先问第一个，超时、报错、配额用完自动换下一个，全部失败才回一句「出了点小状况」。'
+    +'停用的不参与。点行可编辑，编辑在弹窗里完成，可以先「测试」确认能通再保存。<br>'
+    +'生图可以指向完全不同的服务商。测试会现场画一张示例图，通过后保存按钮才亮。<br>'
+    +'讯飞星火的「API Key」填控制台里的 <b>APIPassword</b>；腾讯混元已升级为 TokenHub，地址用新接口。'
+    +'国外模型（OpenAI、Gemini、Grok 等）在 Cloudflare Workers 上可直连，不需要代理。</p></div>';
+
   h+=aiModalHtml();
-  // 生图配置并入本页：追加生图卡片 + 弹窗
-  h+=imageGenCardsHtml();
   h+=igenModalHtml();
   $('wrap').innerHTML=h;
   renderAiProviders();
@@ -1597,13 +1731,11 @@ function renderAiPage(){
   bindIgenModal();
 
   $('b-ai-add').addEventListener('click',function(){openAiModal(-1);});
-  $('b-ai-save').addEventListener('click',function(){saveProviders(false,this);});
-  $('b-ai-save-restart').addEventListener('click',function(){saveProviders(true,this);});
+  $('b-ai-save').addEventListener('click',function(){saveProviders(this);});
   $('prov-list').addEventListener('click',onProvClick);
   $('ai-presets').addEventListener('click',onPresetClick);
 }
 
-/* 内置 AI 服务商（OpenAI 兼容端点，地址已按官方文档核实），点预设打开弹窗自动填名称/地址/模型 */
 var AI_PRESETS=[
   {label:'Qwen 中转',name:'Qwen 中转（jdb.us.ci）',url:'https://api.jdb.us.ci/v1',model:'qwen3.7-plus'},
   {label:'Qwen 识图',name:'Qwen 识图（jdb.us.ci）',url:'https://api.jdb.us.ci/v1',model:'qwen3-vl-plus'},
@@ -1640,7 +1772,6 @@ function onPresetClick(e){
   openAiModal(-1,{name:p.name,url:p.url,model:p.model});
 }
 
-/* ------------------------------ 工作区（群管理融入群卡片 + 用户工作区 + 定时任务） ------------------------------ */
 
 function showWorkspace(){
   stopStatusTimer();
@@ -1651,14 +1782,12 @@ function showWorkspace(){
   $('wrap').innerHTML='<div class="card">'
     +'<div class="card-head"><h3>工作区</h3>'
     +'<span class="hint">群管理已融入群卡片 · 定时任务在最下面</span></div>'
-    // 用户工作区区块
     +'<div class="card-head mt-sm"><h3>用户工作区</h3>'
     +'<span class="hint">每个用户一份：文件、任务与笔记、对话记忆</span>'
     +'<button class="btn sm" id="b-ws-refresh" type="button">'+IX.refresh+'<span>刷新</span></button></div>'
     +'<p class="muted">按「人」隔离：单聊 <code>c2c:&lt;用户&gt;</code>、群聊 <code>group:&lt;群&gt;:u:&lt;用户&gt;</code>。'
     +'群卡片里可以直接开关回复、查成员、复制 openid、移除群；点卡片展开看群内每个用户的工作区。</p>'
     +'<div id="ws-list">'+skListSkeleton(4)+'</div>'
-    // 定时任务区块
     +'<div class="card-head mt-lg"><h3>定时任务</h3><span class="hint" id="rem-count"></span></div>'
     +'<p class="tip">群里说「明天 8 点提醒我开会」「10 分钟后提醒我喝水」就会出现在这里；到点主动发消息，重复任务自动顺延。'
     +'QQ 对主动消息有频率和配额限制，发送失败的任务会标红。</p>'
@@ -1677,7 +1806,6 @@ function showWorkspace(){
 function loadWorkspaces(){
   var box=$('ws-list');
   if(box)box.innerHTML=skListSkeleton(4);
-  // 拉三份：沙箱、工作区、群列表（群管理信息融进群卡片头）
   Promise.all([
     api('GET','/api/sandboxes').then(function(d){return (d&&d.items)||[];}).catch(function(){return [];}),
     api('GET','/api/workspaces').then(function(d){return (d&&d.items)||[];}).catch(function(){return [];}),
@@ -1705,7 +1833,6 @@ function renderWorkspaces(sandboxes,workspaces,groupRows){
     if(!rec.kind)rec.kind=w.kind;
     byScope[w.scope]=rec;
   }
-  // 群列表 → 按 openid 索引，群卡片头要显示回复开关/来源/最近活跃
   var groupMap={};
   for(var g=0;g<groupRows.length;g++){
     var gr=groupRows[g];
@@ -1719,7 +1846,6 @@ function renderWorkspaces(sandboxes,workspaces,groupRows){
     return;
   }
 
-  // 拆成「私聊」和「群聊」两栏。私聊每人一个按钮；群聊按群分组折叠，群内每人一个按钮。
   var c2c=[];
   var groups={};   // groupOpenid -> { users:[...], latestAt, groupMeta }
   for(var m=0;m<items.length;m++){
@@ -1731,7 +1857,6 @@ function renderWorkspaces(sandboxes,workspaces,groupRows){
     if((it.updatedAt||0)>groups[gid].latestAt)groups[gid].latestAt=it.updatedAt;
   }
 
-  // 左栏：私聊（默认折叠，人多时不占空间）
   var left='<div class="ws-col">'
     +'<div class="ws-col-head ws-fold-head" role="button" tabindex="0" aria-expanded="false">'
     +'<b>私聊对话</b><span class="ws-col-n">'+c2c.length+' 人</span>'
@@ -1741,7 +1866,6 @@ function renderWorkspaces(sandboxes,workspaces,groupRows){
   if(!c2c.length)left+='<p class="muted">（还没有私聊用户）</p>';
   left+='</div></div>';
 
-  // 右栏：群聊
   var groupList=Object.keys(groups).map(function(k){return groups[k];});
   groupList.sort(function(x,y){return y.latestAt-x.latestAt;});
   var right='<div class="ws-col">'
@@ -1765,13 +1889,12 @@ function renderWorkspaces(sandboxes,workspaces,groupRows){
   }
 }
 
-// 群卡片：头 = 群信息 + 群管理操作，体 = 群内用户按钮（默认折叠）
 function wsGroupCardHtml(grp,urows){
   var meta=grp.groupMeta||{};
   var masked=meta.masked||grp.gid;
   var seen=meta.lastSeen?('最近活跃 '+fmtEntryTime(meta.lastSeen)):'';
   var src=meta.source==='manual'?'手动添加':'自动收集';
-  var replyEnabled=meta.replyEnabled!==false; // 群列表里没有的默认算开启
+  var replyEnabled=meta.replyEnabled!==false;
   var h='<div class="ws-group" data-openid="'+esc(grp.gid)+'">'
     +'<div class="ws-group-head" role="button" tabindex="0" aria-expanded="false">'
     +'<span class="ws-badge">'+IX.groups+'</span>'
@@ -1789,7 +1912,6 @@ function wsGroupCardHtml(grp,urows){
   return h;
 }
 
-// 从 scope 里拆出群 openid：group:<openid>:u:<user>
 function groupOpenidOf(scope){
   var s=String(scope||'');
   if(s.indexOf('group:')!==0)return s;
@@ -1798,7 +1920,6 @@ function groupOpenidOf(scope){
   return idx>=0?rest.slice(0,idx):rest;
 }
 
-// 单个用户工作区按钮。kind: c2c=私聊 / group-member=群聊成员
 function wsUserBtnHtml(it,kind){
   var initial=(it.scopeMasked&&it.scopeMasked.charAt(0))||'U';
   var sc=it.scope||'';
@@ -1821,7 +1942,6 @@ function wsUserBtnHtml(it,kind){
 }
 
 function onWorkspaceClick(e){
-  // 私聊栏折叠/展开
   var foldHead=e.target&&e.target.closest?e.target.closest('.ws-fold-head'):null;
   if(foldHead){
     var foldBody=foldHead.nextElementSibling;
@@ -1832,7 +1952,6 @@ function onWorkspaceClick(e){
     foldHead.classList.toggle('is-open',willShow);
     return;
   }
-  // 群卡片头里的群管理操作按钮（成员/复制/移除）
   var gactEl=e.target&&e.target.closest?e.target.closest('[data-gact]'):null;
   if(gactEl){
     var gcard=gactEl.closest('.ws-group');
@@ -1842,10 +1961,8 @@ function onWorkspaceClick(e){
     if(gact==='members')openGrpModal(gopenid,true);
     else if(gact==='del')removeGroupRow(gopenid);
     else if(gact==='copy')copyGrpId(gopenid);
-    // toggle 走 change 事件，这里不管
     return;
   }
-  // 群卡片头本体：折叠/展开
   var gh=e.target&&e.target.closest?e.target.closest('.ws-group-head'):null;
   if(gh){
     var grp=gh.closest('.ws-group');
@@ -1858,7 +1975,6 @@ function onWorkspaceClick(e){
     gh.classList.toggle('is-open',willShow);
     return;
   }
-  // 用户按钮：点开详情（清空操作在详情弹窗里）
   var ubtn=e.target&&e.target.closest?e.target.closest('button[data-ws="detail"]'):null;
   if(ubtn){
     var uscope=ubtn.getAttribute('data-scope')||'';
@@ -1867,7 +1983,6 @@ function onWorkspaceClick(e){
   }
 }
 
-// 群卡片头里的回复开关（change 事件）
 function onWorkspaceToggle(e){
   var input=e.target&&e.target.closest?e.target.closest('input[data-gact="toggle"]'):null;
   if(!input)return;
@@ -1906,13 +2021,21 @@ function openWorkspaceDetail(scope){
     $('ws-clear-btn').addEventListener('click',function(){
       var cur=m.getAttribute('data-scope')||'';
       if(!cur)return;
-      if(!confirm('清空这个用户的工作区（文件、任务、笔记、记忆三层）？'))return;
-      Promise.all([
-        api('POST','/api/sandboxes/clear',{scope:cur}).catch(function(){}),
-        api('POST','/api/workspaces/clear',{scope:cur}).catch(function(){}),
-        api('POST','/api/memory/clear',{scope:cur}).catch(function(){})
-      ]).then(function(){ toast('已清空'); m.hidden=true; loadWorkspaces(); })
-        .catch(function(err){ toast(err.message,'bad'); });
+      confirmDialog({
+        title:'清空这个用户的工作区？',
+        message:'文件、任务与笔记、对话记忆三层会全部清掉，不可恢复。',
+        detail:cur,
+        confirm:'清空',
+        danger:true
+      }).then(function(yes){
+        if(!yes)return;
+        Promise.all([
+          api('POST','/api/sandboxes/clear',{scope:cur}).catch(function(){}),
+          api('POST','/api/workspaces/clear',{scope:cur}).catch(function(){}),
+          api('POST','/api/memory/clear',{scope:cur}).catch(function(){})
+        ]).then(function(){ toast('已清空','ok'); m.hidden=true; loadWorkspaces(); })
+          .catch(function(err){ toast(err.message,'bad'); });
+      });
     });
   }
   m.setAttribute('data-scope',scope);
@@ -1921,7 +2044,6 @@ function openWorkspaceDetail(scope){
   var body=$('ws-detail-body');
   body.innerHTML='<p class="muted">加载中…</p>';
   m.hidden=false;
-  // 并行拉三份：沙箱文件、工作区任务/笔记、记忆三层
   Promise.all([
     api('POST','/api/sandboxes/detail',{scope:scope}).catch(function(){return {files:[],runs:0};}),
     api('POST','/api/workspaces/detail',{scope:scope}).catch(function(){return {tasks:[],notes:[],log:[],runs:0};}),
@@ -1942,7 +2064,6 @@ function renderWorkspaceDetail(scope,sandbox,workspace,memory){
   var tasks=(workspace.tasks||[]).length?workspace.tasks.map(function(x){return '<li>'+(x.done?'✅':'⬜')+' #'+x.id+' '+esc(x.text)+'</li>';}).join(''):'<li class="muted">（空）</li>';
   var notes=(workspace.notes||[]).length?workspace.notes.slice(-10).map(function(n){return '<li>· '+esc(n.text)+'</li>';}).join(''):'<li class="muted">（空）</li>';
 
-  // 记忆分层图：三层各自的量 + 内容
   var recentHtml=(memory.recent&&memory.recent.length)
     ? '<div class="mem-recent">'+memory.recent.map(function(x){
         var role=x.role==='user'?'用户':'助手';
@@ -2066,15 +2187,12 @@ function saveIgenModal(){
   imageGenState.model=model;
   imageGenState.apiKey=key;
   closeIgenModal();
-  // 生图已并入 AI 页：刷新生图那行 + 状态，而不是重置整页
   var row=document.querySelector('[data-igen]');
   if(row)row.outerHTML=igenRowHtml();
-  else $('wrap').insertAdjacentHTML('beforeend',imageGenCardsHtml());
-  // 重新绑定行点击 + 更新状态
   var newRow=document.querySelector('[data-igen]');
   if(newRow)newRow.addEventListener('click',openIgenModal);
   updateImageGenState();
-  toast('已更新生图配置，点下方「保存」后生效','ok');
+  toast('已更新生图配置，点「保存」后生效','ok');
 }
 
 function bindIgenModal(){
@@ -2127,34 +2245,9 @@ function bindIgenModal(){
       if(e.key==='Escape'&&m&&!m.hidden)closeIgenModal();
     });
   }
-  // 每次重绘后按当前状态刷新保存按钮（弹窗点「完成」会重绘整页，不刷新会一直灰着）
   updateImageGenState();
 }
 
-// 生图卡片（不含弹窗和 wrap 赋值），供 AI 页追加使用
-function imageGenCardsHtml(){
-  var h='<div class="card mt-lg"><div class="card-head"><h3>生图配置</h3>'
-    +'<span class="hint">先测试通过才能保存；点行或「编辑」在弹窗里改</span></div>'
-    +igenRowHtml()
-    +'<div class="form-actions">'
-    +'<button class="btn" id="b-igen-add" type="button">✎ 编辑生图配置</button>'
-    +'<span class="grow"></span>'
-    +'<span class="hint" id="igen-state"></span>'
-    +'<button class="btn primary" id="b-igen-save" type="button" disabled>'+IX.check+'<span>保存生图模型</span></button>'
-    +'</div></div>';
-  h+='<div class="card"><div class="card-head"><h3>主流生图模型</h3>'
-    +'<span class="hint">点一下打开弹窗并填好模型名</span></div>'
-    +'<div class="chip-row" id="igen-model-presets">'+igenModelChips()+'</div></div>';
-  h+='<div class="card"><div class="card-head"><h3>生图怎么用</h3></div>'
-    +'<p class="tip">生图用独立的 Base URL / API Key，和上面的对话模型互不影响，可以指向另一家服务商。'
-    +'编辑在弹窗里完成，先点「<b>测试</b>」，服务商会现场画一张示例图；测试通过后保存按钮才会亮，保存后立即生效（机器人自动热更新）。<br>'
-    +'群里发「/画 一只橘猫，水彩风格」或直接说「帮我画一只猫」就会出图。留空模型表示关闭生图。<br>'
-    +'建议填服务商标注了 <b>image_gen</b> 的模型（比如 qwen-image-3.0-pro），接口需兼容 OpenAI 的 <b>/images/generations</b>。'
-    +'不填 Base URL / Key 时，会自动用上面「AI 列表」里第一个 AI 的配置兜底。</p></div>';
-  return h;
-}
-
-/* 主流生图模型（OpenAI 兼容 /images/generations），点预设打开弹窗并填入模型名 */
 var IMAGE_MODEL_PRESETS=[
   'qwen-image-3.0-pro','qwen-image','wanx2.1-t2i-plus','seedream-4.0',
   'doubao-seedream-3-0-t2i','cogview-4','dall-e-3','gpt-image-1.5','gpt-image-1','flux-schnell','nano-banana'
@@ -2225,7 +2318,6 @@ function saveImageGen(btn){
     .then(function(){
       if(imageGenState.apiKey)imageGenState.hasKey=true;
       imageGenState.apiKey='';
-      // 局部刷新生图行 + 状态（生图已并入 AI 页，不能重置整页）
       var row=document.querySelector('[data-igen]');
       if(row)row.outerHTML=igenRowHtml();
       var newRow=document.querySelector('[data-igen]');
@@ -2237,7 +2329,6 @@ function saveImageGen(btn){
     .then(function(){busy(btn,false);});
 }
 
-/* ============================== 群管理 ============================== */
 var grpModal={openid:'',nextCursor:'',members:[]};
 var grpEscBound=false;
 
@@ -2248,11 +2339,19 @@ function grpPermHint(msg){
 }
 
 function removeGroupRow(openid){
-  if(!confirm('从群列表移除这个群？只影响后台列表，不影响机器人运行。'))return;
-  api('POST','/api/groups/remove',{openid:openid}).then(function(){
-    toast('已移除','ok');
-    return loadWorkspaces(); // 群卡片已并入工作区列表，刷新整个列表
-  }).catch(function(e){toast(e.message,'bad');});
+  confirmDialog({
+    title:'从这个列表移除群？',
+    message:'只影响后台的这个群卡片，不影响机器人继续在该群工作。',
+    detail:openid,
+    confirm:'移除',
+    danger:true
+  }).then(function(yes){
+    if(!yes)return;
+    api('POST','/api/groups/remove',{openid:openid}).then(function(){
+      toast('已移除','ok');
+      return loadWorkspaces();
+    }).catch(function(e){toast(e.message,'bad');});
+  });
 }
 
 function copyGrpId(text){
@@ -2264,7 +2363,6 @@ function copyGrpId(text){
   }
 }
 
-/* ---- 群管理弹窗：群资料 + 成员/禁言 ---- */
 
 function grpInfoHtml(info,state){
   var h='<dl class="dl">';
@@ -2412,7 +2510,6 @@ function bindGrpModal(){
   $('grp-members-btn').addEventListener('click',function(){loadGrpMembers('');});
   $('grp-members-more').addEventListener('click',function(){loadGrpMembers(grpModal.nextCursor);});
   $('grp-manual-btn').addEventListener('click',muteGrpManual);
-  $('grp-manual-mid').addEventListener('keydown',function(e){if(e.key==='Enter')muteGrpManual();});
   $('grp-m-members').addEventListener('click',onGrpMemberClick);
   var infoBox=$('grp-m-info');
   if(infoBox)infoBox.addEventListener('click',onGrpMemberClick);
@@ -2504,7 +2601,6 @@ function openGrpModal(openid,autoMembers){
   if(autoMembers)loadGrpMembers('');
 }
 
-/* ============================== 定时任务 ============================== */
 var remState={items:[]};
 
 function loadReminders(){
@@ -2543,7 +2639,6 @@ function renderReminders(){
     updateDelSelBtn();
     return;
   }
-  // 表格布局：勾选 / 内容 / 目标 / 时间 / 状态 / 操作
   var h='<table class="rem-table"><thead><tr>'
     +'<th class="rem-th-check"></th>'
     +'<th>内容</th><th class="rem-th-target">目标</th>'
@@ -2575,21 +2670,36 @@ function renderReminders(){
     var cancelBtn=e.target&&e.target.closest?e.target.closest('[data-remcancel]'):null;
     if(cancelBtn){
       var id=Number(cancelBtn.getAttribute('data-remcancel'));
-      if(!confirm('取消这条定时任务？'))return;
-      api('POST','/api/reminders/cancel',{id:id}).then(function(){
-        toast('已取消','ok');
-        loadReminders();
-      }).catch(function(err){toast(err.message,'bad');});
+      confirmDialog({
+        title:'取消这条定时任务？',
+        message:'取消后这条任务不会再触发，但仍会留在列表里，可以之后重新创建。',
+        confirm:'取消任务',
+        cancel:'再想想'
+      }).then(function(yes){
+        if(!yes)return;
+        api('POST','/api/reminders/cancel',{id:id}).then(function(){
+          toast('已取消','ok');
+          loadReminders();
+        }).catch(function(err){toast(err.message,'bad');});
+      });
       return;
     }
     var delBtn=e.target&&e.target.closest?e.target.closest('[data-remdel]'):null;
     if(delBtn){
       var did=Number(delBtn.getAttribute('data-remdel'));
-      if(!confirm('删除这条定时任务？删除后不可恢复。'))return;
-      api('POST','/api/reminders/delete',{id:did}).then(function(){
-        toast('已删除','ok');
-        loadReminders();
-      }).catch(function(err){toast(err.message,'bad');});
+      confirmDialog({
+        title:'删除这条定时任务？',
+        message:'删除后不可恢复。',
+        detail:'如果只是想让它不再触发，可以选择「取消任务」，那样记录会保留。',
+        confirm:'删除',
+        danger:true
+      }).then(function(yes){
+        if(!yes)return;
+        api('POST','/api/reminders/delete',{id:did}).then(function(){
+          toast('已删除','ok');
+          loadReminders();
+        }).catch(function(err){toast(err.message,'bad');});
+      });
       return;
     }
   };
@@ -2597,7 +2707,6 @@ function renderReminders(){
     var t=e.target;
     if(!t||!t.matches)return;
     if(t.matches('[data-remsel]')){
-      // 单条取消勾选时，把工具栏的「全选」也放掉
       var selAll=$('rem-sel-all');
       var all=box.querySelectorAll('input[data-remsel]');
       var checked=box.querySelectorAll('input[data-remsel]:checked');
@@ -2606,7 +2715,6 @@ function renderReminders(){
     }
   };
 
-  // 工具栏「全选」：在表格外，单独绑定（每次渲染后重绑，元素是静态的所以只绑一次）
   var selAllBox=$('rem-sel-all');
   if(selAllBox&&!selAllBox.__bound){
     selAllBox.__bound=true;
@@ -2617,7 +2725,6 @@ function renderReminders(){
       updateDelSelBtn();
     });
   }
-  // 表格重渲染后，把全选状态按当前勾选情况同步一次
   if(selAllBox){
     var allNow=box.querySelectorAll('input[data-remsel]');
     var checkedNow=box.querySelectorAll('input[data-remsel]:checked');
@@ -2646,30 +2753,32 @@ function updateDelSelBtn(){
 function deleteSelectedReminders(){
   var ids=selectedReminderIds();
   if(!ids.length){ toast('先勾选要删除的任务','bad'); return; }
-  if(!confirm('删除选中的 '+ids.length+' 条定时任务？删除后不可恢复。'))return;
-  api('POST','/api/reminders/delete',{ids:ids}).then(function(d){
-    toast('已删除 '+(d&&d.deleted||ids.length)+' 条','ok');
-    loadReminders();
-  }).catch(function(err){ toast(err.message,'bad'); });
+  confirmDialog({
+    title:'删除选中的 '+ids.length+' 条定时任务？',
+    message:'删除后不可恢复。',
+    detail:'如果只是想让它不再触发，可以逐条点「取消」保留记录。',
+    confirm:'删除 '+ids.length+' 条',
+    danger:true
+  }).then(function(yes){
+    if(!yes)return;
+    api('POST','/api/reminders/delete',{ids:ids}).then(function(d){
+      toast('已删除 '+(d&&d.deleted||ids.length)+' 条','ok');
+      loadReminders();
+    }).catch(function(err){ toast(err.message,'bad'); });
+  });
 }
 
-/* ============================== 路由 ============================== */
-// 路径路由：/status、/config、/ai、/groups、/workspace、/logs（旧 /imagegen 重定向到 AI 模型页）
-// 不再用 #hash，地址栏就是干净的 /status 这种。
-// 注意：不能用带 \/ 的正则字面量——ADMIN_JS 是模板字符串，\/ 会被吃成 /，
-// 导致正则非法、整段脚本语法错误、页面一行 JS 都不执行（坑过一次）。
 function route(){
   var p = String(location.pathname || '/').split('/').filter(function(x){ return x; });
   var tab = p.length ? p[0] : 'status';
   if(tab==='config')showConfig();
   else if(tab==='ai')showAi();
-  else if(tab==='imagegen')showAi(); // 生图已并入 AI 模型页
-  else if(tab==='workspace'||tab==='groups')showWorkspace(); // 群管理已并入工作区
+  else if(tab==='imagegen')showAi();
+  else if(tab==='workspace'||tab==='groups')showWorkspace();
   else if(tab==='logs')showLogs();
   else showStatus();
 }
 
-/* ============================== 启动 ============================== */
 applyTheme(currentTheme());
 
 var logoutBtn=$('logout');
@@ -2699,13 +2808,10 @@ if(burger&&side){
   window.addEventListener('popstate',closeSide);
 }
 
-/* SPA 导航：拦截侧边栏里的站内链接，用 pushState + 客户端 route() 切换，
-   不做整页刷新。这样点 /config、/logs 时骨架屏立刻渲染，数据再异步加载。 */
 var navLinks = document.querySelectorAll('.tabs a, .side-links a[href^="/"]');
 for (var ni = 0; ni < navLinks.length; ni++) {
   navLinks[ni].addEventListener('click', function (ev) {
     var href = this.getAttribute('href') || '';
-    // 只接管站内的后台路径，外链/首页(/)仍走默认跳转
     if (href.charAt(0) !== '/' || href === '/') return;
     if (href === location.pathname) return;
     ev.preventDefault();

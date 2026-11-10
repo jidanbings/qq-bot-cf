@@ -1,7 +1,3 @@
-/**
- * 极简 ZIP 打包（stored，不压缩）：纯 JS，无依赖。
- * 只支持 UTF-8 文本文件，够沙箱用。
- */
 
 function crc32(buf) {
   let crc = 0xffffffff;
@@ -28,10 +24,6 @@ function dosDateTime(d = new Date()) {
   return { time, date };
 }
 
-/**
- * @param {{path: string, content: string}[]} entries
- * @returns {Uint8Array}
- */
 export function buildZip(entries) {
   const enc = new TextEncoder();
   const { time, date } = dosDateTime();

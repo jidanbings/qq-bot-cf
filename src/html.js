@@ -511,8 +511,6 @@ ${HOME_CSS}
   }
   function applyTheme(){
     var d=isDark();
-    // .dark 手动指定黑夜；.t-light 手动指定白天。只有两个类都没有时才交给
-    // CSS 里的 prefers-color-scheme 决定，避免"手动选白天"在深色系统上被反压回去。
     root.className='home motion'+(d?' dark':(theme==='light'?' t-light':''));
   }
   function markTheme(){
@@ -543,7 +541,6 @@ ${HOME_CSS}
   window.addEventListener('scroll',onScroll,{passive:true});
   onScroll();
 
-  // 锚点平滑滚动。动效默认开启，但系统设了「减少动态效果」时不滚动画。
   var smooth=!(window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches);
   var links=document.querySelectorAll('a[href^="#"]');
   for(var i=0;i<links.length;i++){
@@ -575,11 +572,6 @@ const SECRET_REQUIREMENTS = [
 
 const DB_BINDING_FLAG = 'D1 数据库绑定（DB）';
 
-/**
- * 「D1 没绑定」专用页。
- * 这种情况下 env.DB 整个不存在，任何 env.DB.prepare 都会抛 TypeError，
- * 所以不能复用 setupPage（那里假设数据库是好的、只差密钥）。
- */
 export function dbMissingPage(nonce) {
   return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${FAVICON_LINKS}<title>QQ Bot · 缺少数据库绑定</title><meta name="robots" content="noindex"><style nonce="${nonce}">
 ${LOGIN_CSS}

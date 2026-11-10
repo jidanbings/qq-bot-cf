@@ -34,21 +34,13 @@ const MENTION_RE = /<@[!&]?[^>\s]{0,64}>/g;
 const MAX_SESSIONS = 300;
 const SESSION_IDLE_MS = 60 * 60 * 1000;
 const MAX_PENDING_MESSAGES = 200;
-// WebSocket ↔ Webhook 切换的宽限期（毫秒）。
-// 平台侧切换事件订阅后，两条通道可能短暂同时推送（平台侧生效有延迟、或两边各推一半）。
-// 宽限期内：不立即断开旧通道、也不因反向的自动信号来回改模式，靠 msg_id 去重兜底，
-// 这样才能做到「切换不丢消息、不来回震荡」。
 const SWITCH_GRACE_MS = 60 * 1000;
-// 「原生表情」在群聊/单聊官方 API 里发不了（表情表态仅频道支持），
-// 这里用 Unicode emoji 代替：QQ 客户端会按表情样式渲染。
 const EMOJIS = [
   '😀', '😄', '😊', '😉', '😍', '🤔', '😅', '😂', '🤣', '😭',
   '😴', '🥹', '😎', '👍', '👏', '🙏', '💪', '🤝', '🎉', '✨',
   '🔥', '💯', '🌟', '☕', '🌙', '🐟', '🍚',
 ];
-// 发图后配的一句话（AI 没写配图文案时兜底；像正常人那样图后还说一句）
 const IMAGE_CAPTIONS = ['画好啦，看看喜不喜欢～', '喏，画好了 ✨', '画出来啦，还满意吗？', '给你画好了，慢慢看～'];
-// 生图通常要 1~2 分钟，先回一句免得用户以为没反应
 const IMAGE_WAIT_LINES = ['好，我画一下，大概要一分多钟，等我～', '收到，开始画了，稍等一下下～', '在画了在画了，这个模型有点慢，等我一会儿～'];
 const MEME_CAPTIONS = ['（递上梗图）', '看图你就懂了', '这张太应景了', '来，接梗～'];
 
@@ -56,10 +48,6 @@ function stripMentions(text) {
   return String(text ?? '').replace(MENTION_RE, '').trim();
 }
 
-/**
- * 剥掉模型复述出来的「系统记录」占位（历史里给模型看的内部记录，不该发给用户）。
- * 只匹配整行都是括号记录的情况，不误伤正文。
- */
 function stripToolRecords(text) {
   return String(text ?? '')
     .split('\n')
@@ -75,7 +63,6 @@ function stripToolRecords(text) {
     .trim();
 }
 
-/** 字节数组 → base64，分块处理避免大数组爆栈（块大小必须是 3 的倍数，否则拼接处会出现非法 padding） */
 function toBase64(bytes) {
   const CHUNK = 3 * 0x4000;
   let out = '';
@@ -88,7 +75,6 @@ function toBase64(bytes) {
   return out;
 }
 
-/** base64 → 字节数组（TTS 返回二进制音频时用） */
 function fromBase64(b64) {
   const bin = atob(b64);
   const bytes = new Uint8Array(bin.length);
@@ -96,7 +82,6 @@ function fromBase64(b64) {
   return bytes;
 }
 
-/** 按文件魔数识别图片 MIME，避免把非图片内容发给 AI */
 function sniffImageMime(bytes, contentType) {
   const h = (len, offset = 0) => {
     let s = '';
@@ -154,8 +139,6 @@ export class QQBotDO {
     this.retiredAt = 0;
     this.lastEventAt = 0;
     this._eventAtSaved = 0;
-    // 平台切换宽限期：记录「最近一次切换方向 + 时间」，用于抑制宽限期内的反向自动切换。
-    // 只有「后台显式点按钮」会立即生效，自动信号（收到推送/网关 READY）在宽限期内不来回改。
     this._switchMark = null;
     this._switchAt = 0;
     this._retireTimer = null;
@@ -172,18 +155,8 @@ export class QQBotDO {
         this.logger.info(
           `DO init: desiredRunning=${this.desiredRunning} transport=${this.transportName()}`
         );
-        // Webhook 模式不建长连接（不计持续时间）。running 语义退化为「是否接收事件」，
-        // 让后台「运行中/已停止」的展示保持不变。
         if (!this.isWsTransport()) this.running = this.desiredRunning;
-        // 构造函数是所有唤醒的必经之路（Webhook 每次事件、后台查状态、WS 首次拉起、
-        // alarm 到点），在这里补排 alarm 就能摆脱对「每分钟 cron 排期」的依赖。
-        //
-        // ⚠ 但必须先看有没有已排的 alarm：官方文档明确提醒，被 alarm 唤醒时
-        // 构造函数先于 alarm() 执行，此时若直接 setAlarm 会覆盖掉正要触发的那一个。
-        // 只在「当前没有 alarm」时补排，才安全。
         await this.ensureAlarmScheduled().catch(() => {});
-        // 存储清理：没有 cron 兜底了，改成「距上次清理超过 24 小时才做」，
-        // 避免每次唤醒都扫一遍存储
         if (state && typeof state.waitUntil === 'function') {
           state.waitUntil(this.pruneDaily());
         }
@@ -195,7 +168,6 @@ export class QQBotDO {
     });
   }
 
-  /** 每天最多清理一次过期会话 */
   async pruneDaily() {    try {
       const last = Number(await this.state.storage.get('pruned_at')) || 0;
       if (Date.now() - last < 24 * 60 * 60 * 1000) return;
@@ -206,28 +178,13 @@ export class QQBotDO {
     }
   }
 
-  /**
-   * 传输方式判定：跟随 QQ 开放平台的实际设置。
-   *
-   * 平台侧才是真正的开关。判定存成**显式的双向模式**（platformMode），
-   * 而不是「有过 Webhook 痕迹就一直当 Webhook」—— 否则从 Webhook 切回
-   * WebSocket 时永远翻不回来（webhookVerifiedAt 是历史记录，不会自己消失）。
-   *
-   * 证据来源：
-   *   → webhook：收到 /event 真实推送，或 op=13 校验通过
-   *   → ws     ：从网关长连接收到真实的 DISPATCH 消息事件
-   *
-   * 默认 'ws'：首次接入的人多半是长连接，且能保证「还没配回调」时不断掉唯一通道。
-   */
   transportName() {
     if (!this.config) return 'ws';
     const mode = this.config.platformMode;
     if (mode === 'webhook' || mode === 'ws') return mode;
-    // 兼容老数据：没存过 platformMode 时就按旧的痕迹推断
     return this.platformUsesWebhook() ? 'webhook' : 'ws';
   }
 
-  /** 平台是否已经切到 Webhook（仅在没有显式 platformMode 时作为兜底推断） */
   platformUsesWebhook() {
     const cfg = this.config || {};
     if (cfg.webhookVerifiedAt) return true;
@@ -235,22 +192,6 @@ export class QQBotDO {
     return false;
   }
 
-  /**
-   * 把「平台已切 Webhook」写进显式模式，并在宽限期后停掉多余的长连接。
-   *
-   * 为什么不能一收到推送就立刻 teardown：
-   * 平台侧把事件订阅改成 Webhook 后，网关长连接往往不会立刻断（服务端有延迟），
-   * 反而可能出现「两条通道同时推送」的窗口。立刻断掉长连接，等于主动放弃
-   * 网关那边还能补发的事件，切换瞬间就容易丢消息。
-   *
-   * 所以改成「先切内存模式、宽限期后回收连接」：
-   *   - 立即更新 platformMode，新收到的推送按 Webhook 处理；
-   *   - 长连接不急着断，让它在宽限期内继续接收（可能还有事件），靠 msg_id 去重；
-   *   - 宽限期结束后再 teardown，避免一直烧 GB-s。
-   * 落盘仍不阻塞切换（见下）。
-   *
-   * force=true 时（后台显式点按钮）跳过宽限期，立即断连接。
-   */
   async markPlatformWebhook(reason, { force = false } = {}) {
     if (!this.config) return false;
     const already = this.transportName() === 'webhook' && this.config.platformMode === 'webhook';
@@ -263,7 +204,6 @@ export class QQBotDO {
     this._switchAt = now;
     this.running = this.desiredRunning;
 
-    // 1) 宽限期：不立刻断连接；force 或已有连接才立即回收
     if (force) {
       this._retireWs('平台已切 Webhook（手动）');
     } else if (this.ws || this.heartbeatTimer || this.reconnectTimer) {
@@ -271,7 +211,6 @@ export class QQBotDO {
       this._scheduleWsRetire(now);
     }
 
-    // 2) 再尝试落盘，失败也不影响本次切换
     try {
       const { saveConfig } = await import('./db.js');
       await saveConfig(this.env, { platformMode: 'webhook', webhookVerifiedAt: String(now) });
@@ -282,22 +221,11 @@ export class QQBotDO {
     return true;
   }
 
-  /**
-   * 反向：平台切回了 WebSocket 网关。
-   *
-   * 这个方向只能靠两个信号：
-   *   - 手动：后台「我在平台改成了 WebSocket」按钮（force）
-   *   - 自动：长连接还活着、收到 READY/RESUMED/DISPATCH（说明平台在用 WebSocket）
-   *
-   * 自动信号同样受宽限期保护：刚从 Webhook 切过来或刚切到 Webhook 的短时间内，
-   * 不因一条偶然的网关事件就来回改模式（避免切换震荡）。
-   */
   async markPlatformWs(reason, { force = false } = {}) {
     if (!this.config) return false;
     const already = this.transportName() === 'ws' && this.config.platformMode === 'ws';
     if (already) return false;
 
-    // 自动信号在宽限期内被抑制：刚切到 webhook，旧连接还可能吐一条 READY 之类
     if (!force && this._switchAt && Date.now() - this._switchAt < SWITCH_GRACE_MS) {
       this.logger.info(`忽略宽限期内的自动 WS 信号（${reason}）`);
       return false;
@@ -317,27 +245,23 @@ export class QQBotDO {
       this.logger.warn(`markPlatformWs 落盘失败（本次仍已切换）: ${e.message}`);
     }
 
-    // 切回长连接：如果此刻没有连接，就把它建起来
     if (this.isWsTransport() && this.desiredRunning && !this.isAlive()) {
       this.state.waitUntil(this.startBot());
     }
     return true;
   }
 
-  /** 宽限期结束后回收多余的长连接（只在当前仍是 webhook 模式时执行） */
   _scheduleWsRetire(fromNow) {
     const delay = SWITCH_GRACE_MS + 500;
     if (this._retireTimer) clearTimeout(this._retireTimer);
     this._retireTimer = setTimeout(() => {
       this._retireTimer = null;
-      // 宽限期内又切回 ws 了，就别断
       if (!this.isWsTransport()) {
         this._retireWs('Webhook 宽限期结束');
       }
     }, delay);
   }
 
-  /** 真正断开长连接（切换宽限期结束 / 手动强制） */
   _retireWs(why) {
     if (this._retireTimer) {
       clearTimeout(this._retireTimer);
@@ -350,17 +274,6 @@ export class QQBotDO {
     }
   }
 
-  /**
-   * 探测：网关是否可达 + 凭据是否有效。
-   *
-   * ⚠ 重要：**探测结果不能用来判断平台的推送方式。**
-   * QQ 网关对任何机器人都接受 WebSocket 连接，跟平台侧设的是 Webhook 还是
-   * WebSocket 无关。所以「能连上」不能证明平台在用 WebSocket ——
-   * 早期版本按这个判据自动切换，结果把用户刚设好的 Webhook 又改回了 WS，属于反向 bug。
-   *
-   * 因此这里只做**诊断**：报告凭据是否可用、网关是否可达、最近有没有收到推送，
-   * 由后台展示给用户，切换必须由用户显式点按钮（action=to-ws / to-webhook）。
-   */
   async probePlatform() {
     const out = {
       before: this.transportName(),
@@ -382,7 +295,6 @@ export class QQBotDO {
       return out;
     }
 
-    // 1) 先问网关要地址 —— 仅用来确认凭据可用，和推送方式无关
     let gwUrl = '';
     try {
       const res = await fetch(`${this.apiBase()}/gateway/bot`, {
@@ -405,7 +317,6 @@ export class QQBotDO {
       return out;
     }
 
-    // 2) 试连一次，只用于确认网关可达（不据此改模式！）
     out.probed = true;
     try {
       const httpUrl = gwUrl.replace(/^wss:/i, 'https:').replace(/^ws:/i, 'http:');
@@ -432,7 +343,6 @@ export class QQBotDO {
       out.reason = `连接网关异常：${e.message}`;
     }
 
-    // 3) 只报告，不切换。附上「最近有没有收到推送」这个唯一可信的旁证
     const lastEvent = Number(this.lastEventAt) || 0;
     out.lastEventAt = lastEvent || null;
     out.sinceEventMs = lastEvent ? Date.now() - lastEvent : null;
@@ -447,9 +357,6 @@ export class QQBotDO {
     return out;
   }
 
-  /**
-   * 仅报告当前状态（不探测）。给不需要真连网关的场景用。
-   */
   async detectPlatform() {
     const now = Date.now();
     const lastEvent = Number(this.lastEventAt) || 0;
@@ -470,15 +377,6 @@ export class QQBotDO {
     return this.transportName() === 'ws';
   }
 
-  /**
-   * 网关会话状态（sessionId + seq）落盘。
-   *
-   * QQ 网关支持 RESUME：带上 session_id 和最后收到的 seq，网关会补发之后漏掉的事件。
-   * 这些状态必须落盘 —— DO 会被驱逐（Webhook 模式频繁休眠、或部署重启），
-   * 只存内存就会丢，重启后只能重新 IDENTIFY（补不回消息，还多烧一次会话配额）。
-   *
-   * 写操作低频（只在 READY/RESUMED/每收到事件时），成本可忽略。
-   */
   saveGwState() {
     try {
       const payload = { sessionId: this.sessionId || '', seq: this.seq ?? null, at: Date.now() };
@@ -491,7 +389,6 @@ export class QQBotDO {
     try {
       const saved = await this.state.storage.get('gw_state');
       if (!saved) return;
-      // 会话超过 24 小时基本已失效，没必要再拿它去 RESUME（会被 4006 拒掉）
       if (saved.at && Date.now() - Number(saved.at) > 24 * 60 * 60 * 1000) return;
       if (saved.sessionId) {
         this.sessionId = String(saved.sessionId);
@@ -509,12 +406,10 @@ export class QQBotDO {
     return this.running && (s === 0 || s === 1);
   }
 
-  /** 统一的「接收开关」：不建连接时也要把内存态和持久态一起改掉 */
   async setDesiredRunning(on) {
     this.desiredRunning = !!on;
     await this.state.storage.put('desired_running', !!on);
     if (!this.isWsTransport()) this.running = this.desiredRunning;
-    // 开关变化要重排 alarm：开启时挂上自检，关闭时退化成只管提醒
     await this.scheduleNextAlarm().catch(() => {});
   }
 
@@ -537,30 +432,22 @@ export class QQBotDO {
         await this.stopBot();
         return Response.json({ ok: true, msg: 'Bot stopped' });
       case '/event': {
-        // Webhook 模式的事件入口（Worker 已验签）：立即返回 200，处理交给 waitUntil
         if (!this.desiredRunning) return Response.json({ ok: true, skipped: 'stopped' });
         let payload = null;
         try {
           payload = await request.json();
         } catch {}
         if (!payload || typeof payload !== 'object') return Response.json({ ok: false, error: 'bad payload' });
-        // 记下「最近一次收到真实事件」的时间：后台据此判断 Webhook 通道是否真的通
-        // （只写内存 + 低频落盘，避免每条消息都多一次写操作）
         this.lastEventAt = Date.now();
-        // 能收到真实推送 = 平台侧确实配了 Webhook。这是最硬的证据，
-        // 立刻把本地模式同步过去（但长连接不立刻断，进入宽限期，避免切换瞬间丢消息）
         await this.markPlatformWebhook('收到平台推送').catch(() => {});
         if (!this._eventAtSaved || this.lastEventAt - this._eventAtSaved > 60000) {
           this._eventAtSaved = this.lastEventAt;
           this.state.storage.put('last_event_at', this.lastEventAt).catch(() => {});
-          // 顺带补排 alarm：每 60 秒最多一次，成本可忽略，
-          // 但能保证「只要有人在用，alarm 一定不会被漏排」
           this.scheduleNextAlarm().catch(() => {});
         }
         const t = String(payload.t || '');
         const d = payload.d || {};
         if (t === 'GROUP_AT_MESSAGE_CREATE' || t === 'GROUP_MESSAGE_CREATE' || t === 'C2C_MESSAGE_CREATE') {
-          // handleMessage 返回该会话队列的尾巴；挂到 waitUntil 上防止对象在处理中途被驱逐
           this.state.waitUntil(
             Promise.resolve(this.handleMessage(t, d)).catch((e) =>
               this.logger.error(`Handle error: ${e.message}`)
@@ -576,9 +463,6 @@ export class QQBotDO {
         return Response.json({ ok: true, t });
       }
       case '/detect-platform': {
-        // 后台「重新检测」：真的去连一次网关，探测平台当前推送方式。
-        // 为什么必须手动触发：Webhook 模式下本对象不连网关、收不到 WS 事件，
-        // 平台切回 WebSocket 时没有任何被动信号能自动发现。
         const action = url.searchParams.get('action') || 'probe';
         if (action === 'to-ws') {
           await this.markPlatformWs('后台手动切回', { force: true });
@@ -589,15 +473,12 @@ export class QQBotDO {
           return Response.json({ ok: true, transport: this.transportName(), switched: 'webhook' });
         }
         if (action === 'status') {
-          // 只读当前状态，不连网关
           return Response.json({ ok: true, ...(await this.detectPlatform()) });
         }
-        // 默认：真探测（会尝试连一次网关）
         const probe = await this.probePlatform();
         return Response.json({ ok: true, ...probe });
       }
       case '/group-manage': {
-        // 后台「群管理」：群资料 + 机器人群内状态 + 禁言状态，各自容错（白名单权限可能只有其一）
         const openid = url.searchParams.get('openid') || '';
         if (!openid) return Response.json({ ok: false, error: '缺少群 openid' });
         const [info, state, mute] = await Promise.all([
@@ -631,7 +512,6 @@ export class QQBotDO {
         }
       }
       case '/group-mute': {
-        // body: { openid, members: [{op, member_openid, mute_expire_at}] }
         let body = null;
         try {
           body = await request.json();
@@ -649,13 +529,12 @@ export class QQBotDO {
         }
       }
       case '/reload': {
-        // 后台改完配置/AI 后调用：立即热更新，不用重启机器人
         const prevWelcome = this.config.welcomeEnabled;
         const prevTransport = this.transportName();
+        const prevCreds = `${this.config.appId || ''}|${this.config.secret || ''}|${this.config.sandbox || ''}`;
         await this.loadConfig();
+        const credsChanged = prevCreds !== `${this.config.appId || ''}|${this.config.secret || ''}|${this.config.sandbox || ''}`;
         this.logSystem('后台修改配置，已热更新生效');
-        // 传输方式被改过：走宽限期切换（webhook 不立刻断连接、ws 补建连接），
-        // 而不是立即 teardown —— 平台切换生效有延迟，立刻断连接会丢切换瞬间的消息。
         if (prevTransport !== this.transportName()) {
           const now = this.transportName();
           this.logger.info(`传输方式变化 ${prevTransport} → ${now}，走宽限期切换`);
@@ -664,23 +543,23 @@ export class QQBotDO {
           } else {
             await this.markPlatformWs('配置热更新');
           }
+        } else if (this.isWsTransport() && this.running && credsChanged) {
+          this.logger.info(`凭据变化，重连以使用新的 AppID / Secret`);
+          this.teardown();
+          this.state.waitUntil(this.startBot());
         } else if (this.isWsTransport() && this.running && prevWelcome !== this.config.welcomeEnabled) {
           this.logger.info('welcome 开关变化，重启连接以应用新 intents');
           this.teardown();
           this.state.waitUntil(this.startBot());
         }
-        return Response.json({ ok: true, reloaded: true, running: this.running });
+        return Response.json({ ok: true, reloaded: true, running: this.running, reconnected: credsChanged });
       }
       case '/reload-quiet':
-        // 群回复开关这类轻量配置变更：只重读配置立即生效，不写系统日志、不动 WebSocket
         await this.loadConfig();
         return Response.json({ ok: true, reloaded: true, running: this.running });
       case '/ensure': {
-        // 每分钟 cron 看门狗顺带热更新配置：即使 reload 通知丢了，配置最多 1 分钟内也会生效
         const prevTransport = this.transportName();
         try { await this.loadConfig(); } catch {}
-        // 传输方式变了（典型场景：QQ 平台刚校验通过回调地址）：
-        // 走宽限期切换，不要立刻 teardown —— 平台切换生效有延迟，立即断连接会丢消息。
         if (prevTransport !== this.transportName()) {
           const now = this.transportName();
           this.logger.info(`Watchdog: 传输方式 ${prevTransport} → ${now}，走宽限期切换`);
@@ -690,11 +569,8 @@ export class QQBotDO {
             await this.markPlatformWs('看门狗检测');
           }
         }
-        // 到点的定时提醒：正常由 alarm 精确驱动，这里是兜底（cron 每 6 小时一次）
         try { await this.fireDueReminders(); } catch (e) { this.logger.warn(`Reminder scan: ${e.message}`); }
-        // 顺带把下一次 alarm 排上：部署新版本后新 DO 没有 alarm，靠这里补
         await this.scheduleNextAlarm().catch(() => {});
-        // 会话清理：cron 本身已经很稀疏，直接执行
         if (this.state && typeof this.state.waitUntil === 'function') {
           this.state.waitUntil(this.pruneStoredSessions());
         }
@@ -717,9 +593,7 @@ export class QQBotDO {
         }
 
         if (!this.desiredRunning) return Response.json({ ok: true, action: 'idle' });
-        // Webhook 模式没有连接要守：接收开关开着就算活着，不要拉起网关
         if (!this.isWsTransport()) return Response.json({ ok: true, action: 'alive', transport: 'webhook' });
-        // WS 模式：cron 只做兜底，正常靠 DO 自己的 alarm 每 60 秒自检
         await this.scheduleNextAlarm().catch(() => {});
         if (this.fatalStop) return Response.json({ ok: true, action: 'halted', error: this.fatalStop });
         if (Date.now() < this.quotaWaitUntil) {
@@ -866,7 +740,6 @@ export class QQBotDO {
 
   async getToken() {
     if (this.token && Date.now() < this.tokenExpiry) return this.token;
-    // Webhook 模式每次唤醒都是新实例：token 落盘，避免每条消息都重新换一次凭证
     if (!this.token) {
       try {
         const saved = await this.state.storage.get('token');
@@ -906,7 +779,6 @@ export class QQBotDO {
 
   async startBot() {
     if (!this.isWsTransport()) {
-      // Webhook 模式：没有连接可建，只把「接收开关」打开
       await this.setDesiredRunning(true);
       this.lastStartAt = Date.now();
       return;
@@ -929,8 +801,6 @@ export class QQBotDO {
     this.reconnectAttempt = 0;
     try {
       await this.state.storage.put('desired_running', true);
-      // 先把上次的网关会话捞回来：有就能走 RESUME 续上，不用重新 IDENTIFY，
-      // 断线期间漏掉的事件由网关补发（这是「不丢消息」的关键）
       await this.loadGwState().catch(() => {});
       const token = await this.getToken();
       if (!this.running || generation !== this.generation) return;
@@ -964,12 +834,10 @@ export class QQBotDO {
           this.logger.error(this.lastError);
           this.running = false;
           await this.state.storage.put('desired_running', true);
-          // 配额耗尽不是永久停机：排上自检，到点自动重试（不再依赖 cron）
           await this.scheduleNextAlarm().catch(() => {});
           return;
         }
       }
-      // WS 模式启动后立刻挂上自检，这样即使 cron 很久才跑一次也不会失联
       await this.scheduleNextAlarm().catch(() => {});
       this.state.waitUntil(this.connectWS(gwData.url, generation));
     } catch (e) {
@@ -981,7 +849,6 @@ export class QQBotDO {
   }
 
   teardown() {
-    // 断开前先把 seq 存下来：下次 RESUME 要带上它，网关才会补发这之后漏掉的事件
     if (this.sessionId && this.seq != null) this.saveGwState();
     this.generation++;
     this.running = false;
@@ -1012,8 +879,6 @@ export class QQBotDO {
     const ws = this.ws;
     this.ws = null;
     this.connecting = false;
-    // 记下断线时的位置：优先用内存里的 seq；若内存已丢（对象被驱逐后重建），
-    // 用之前落盘的 resumeSeq 兜住，保证 RESUME 能带上正确的 seq
     this.resumeSeq = this.seq != null ? this.seq : this.resumeSeq;
     this.seq = null;
     if (this.sessionId && this.resumeSeq != null) this.saveGwState();
@@ -1031,7 +896,6 @@ export class QQBotDO {
       this.reconnectTimer = null;
       this.state.waitUntil(this.connectWS(wsUrl, nextGeneration));
     }, delay);
-    // 同时排 alarm 兜底：万一这条 setTimeout 随对象驱逐一起没了，自检还能把连接拉起来
     this.scheduleNextAlarm().catch(() => {});
   }
 
@@ -1067,8 +931,6 @@ export class QQBotDO {
       this.connecting = false;
       this.seq = null;
       this.logger.info('WebSocket connected');
-      // 连接建立后重排自检：此刻连接在、对象会被长连接钉在内存里，
-      // 但一旦连接断开而对象又被驱逐，setTimeout 就没了，只能靠 alarm 兜住
       this.scheduleNextAlarm().catch(() => {});
       const isCurrent = () => this.running && generation === this.generation && this.ws === ws;
 
@@ -1175,9 +1037,6 @@ export class QQBotDO {
     if (op === QQ_OPCODE.DISPATCH) {
       if (s != null) {
         this.seq = s;
-        // seq 是 RESUME 补发的起点，必须尽量新。但每条事件都写存储太浪费，
-        // 所以节流成「最多每 5 秒落一次盘」；真正断线时 teardown/scheduleReconnect
-        // 还会再补一次，所以最坏也只丢几秒的精度。
         const now = Date.now();
         if (!this._seqSavedAt || now - this._seqSavedAt > 5000) {
           this._seqSavedAt = now;
@@ -1190,11 +1049,7 @@ export class QQBotDO {
         this.lastError = null;
         this.sessionId = d?.session_id || null;
         this.logger.info(`Bot ready: ${d?.user?.username} session=${this.sessionId || 'none'}`);
-        // 把会话与 seq 落盘：DO 被驱逐后重启还能用 RESUME 续上，
-        // 不用重新 IDENTIFY，中间漏的事件也能补发
         this.saveGwState();
-        // 能从网关拿到 READY，说明平台此刻用的是 WebSocket 推送。
-        // 如果是「平台已切回 WS 但本地还记着 webhook」，这一下就能纠正过来。
         this.markPlatformWs('网关 READY').catch(() => {});
       } else if (t === 'RESUMED') {
         this.reconnectAttempt = 0;
@@ -1204,9 +1059,6 @@ export class QQBotDO {
         this.saveGwState();
         this.markPlatformWs('网关 RESUMED').catch(() => {});
       } else if (t === 'GROUP_AT_MESSAGE_CREATE' || t === 'GROUP_MESSAGE_CREATE' || t === 'C2C_MESSAGE_CREATE') {
-        // 收到真实消息事件 —— 平台确实在用 WebSocket。
-        // 交给 markPlatformWs 统一处理：它内部有宽限期抑制，
-        // 刚切到 Webhook 时旧连接可能还吐消息，不能因此把模式来回改。
         this.markPlatformWs('收到网关消息事件').catch(() => {});
         await this.handleMessage(t, d);
       } else if (t === 'GROUP_MEMBER_ADD') {
@@ -1231,7 +1083,6 @@ export class QQBotDO {
     }
   }
 
-  /** 新成员加入群聊：发欢迎语（支持 @新成员 占位符） */
   async handleGroupMemberAdd(data) {
     if (this.config.welcomeEnabled !== '1') return;
     const groupOpenid = data?.group_openid;
@@ -1249,7 +1100,6 @@ export class QQBotDO {
     this.logSystem('新成员加入群聊，已自动发送欢迎语');
   }
 
-  /** 机器人被拉进新群 */
   async handleGroupAddRobot(data) {
     const groupOpenid = data?.group_openid;
     if (!groupOpenid) return;
@@ -1261,7 +1111,6 @@ export class QQBotDO {
     this.logSystem('机器人加入新群，已发送欢迎语');
   }
 
-  /** 系统事件写入聊天记录（kind=system），失败不影响主流程 */
   logSystem(text) {
     addChatLog(this.env, {
       kind: 'system',
@@ -1273,7 +1122,6 @@ export class QQBotDO {
     }).catch(() => {});
   }
 
-  /** 把一次「非文本回复」（发图 / 发梗图 / 指令回复）也写进聊天记录，后台才能看到完整对话 */
   logExchange({ isC2C, scopeId, userId, userContent, aiReply, model }) {
     addChatLog(this.env, {
       kind: isC2C ? 'c2c' : 'group',
@@ -1285,49 +1133,28 @@ export class QQBotDO {
     }).catch((e) => this.logger.warn(`Chat log write failed: ${e.message}`));
   }
 
-  /** 记录群 openid 到 D1 groups 表（后台「群管理」页的数据源），失败不影响主流程 */
   touchGroup(openid) {
     upsertGroup(this.env, openid, 'auto').catch(() => {});
   }
 
-  /**
-   * 下载用户发来的文件附件，转成 AI 能读的内容。
-   *
-   * 处理策略：
-   *   - 文本类（.md/.py/.js/.json/.csv/代码/日志/配置…）→ 直接解码，主要路径
-   *   - docx/xlsx/pptx → 本质是 zip，抽里面的 XML 文本
-   *   - 图片 → 交给识图（走 imageUrl 那条路）
-   *   - .so/.zip/.exe 等二进制 → 明确告诉 AI「读不了」，避免它瞎编内容
-   *
-   * 不做 PDF：文本层抽取在纯 JS 下不可靠（字体编码、子集化、扫描件都会失败），
-   * 与其给模型一堆乱码，不如明确说读不了。
-   */
   async downloadAttachment(url, contentType, filenameHint) {
     const MAX_BYTES = 4 * 1024 * 1024; // 4MB 原始文件上限
-    const MAX_TEXT = 200000;           // 仅作极端保护（模型上下文有限，真正的截断在喂模型那一步做）
+    const MAX_TEXT = 200000;
     const ct = String(contentType || '').toLowerCase();
     const name = String(filenameHint || url.split('?')[0].split('/').pop() || '').slice(0, 80);
     const extMatch = name.match(/\.([a-z0-9]+)$/i);
     const ext = extMatch ? extMatch[1].toLowerCase() : '';
 
-    // 文本类扩展名白名单：代码、标记、配置、数据、日志都算
     const TEXT_EXT = new RegExp(
       '^(' +
         [
-          // 文档 / 标记
           'txt', 'md', 'markdown', 'rst', 'adoc', 'org', 'tex', 'bib',
-          // 数据 / 配置
           'json', 'jsonl', 'ndjson', 'csv', 'tsv', 'yml', 'yaml', 'toml', 'ini', 'conf', 'cfg', 'env', 'properties', 'lock', 'gitignore', 'gitattributes', 'editorconfig', 'dockerfile',
-          // 前端
           'html', 'htm', 'css', 'scss', 'sass', 'less', 'js', 'mjs', 'cjs', 'jsx', 'ts', 'tsx', 'vue', 'svelte', 'astro',
-          // 后端 / 脚本
           'py', 'pyi', 'rb', 'php', 'java', 'kt', 'kts', 'scala', 'groovy', 'cs', 'fs', 'go', 'rs', 'swift', 'm', 'mm',
           'c', 'h', 'cc', 'cpp', 'cxx', 'hpp', 'hh', 'lua', 'pl', 'r', 'jl', 'dart', 'ex', 'exs', 'erl', 'clj', 'hs', 'ml',
-          // 命令 / 构建
           'sh', 'bash', 'zsh', 'fish', 'ps1', 'psm1', 'bat', 'cmd', 'makefile', 'mk', 'cmake', 'gradle', 'pom', 'sbt',
-          // 查询 / 序列化
           'sql', 'graphql', 'gql', 'proto', 'xml', 'xsd', 'xsl', 'svg', 'plist',
-          // 日志 / 字幕 / 纯文本数据
           'log', 'out', 'err', 'srt', 'ass', 'vtt', 'diff', 'patch',
         ].join('|') +
       ')$',
@@ -1358,14 +1185,10 @@ export class QQBotDO {
     };
 
     try {
-      // 1) 图片：交给识图链路，这里只报类型
       if (ct.startsWith('image/') || /^(png|jpe?g|gif|webp|bmp|ico)$/.test(ext)) {
         return { ok: false, reason: '这是图片，已按识图处理', isImage: true };
       }
 
-      // 2) Office 必须排在文本判断之前：
-      //    docx/xlsx/pptx 的 content-type 里带 "xml" 字样，会被 isText 误判成文本，
-      //    然后卡在二进制检查上，永远走不到解压分支。
       if (/^(docx|xlsx|pptx)$/.test(ext)) {
         const b = await getBytes();
         const text = await this.extractOfficeText(b, ext);
@@ -1373,7 +1196,6 @@ export class QQBotDO {
         return { ok: true, text, full: text, filename: name, bytes: b.length, kind: ext };
       }
 
-      // 3) 文本类：直接解码
       if (isText) {
         const b = await getBytes();
         const zeros = b.reduce((n, v) => n + (v === 0 ? 1 : 0), 0);
@@ -1381,12 +1203,9 @@ export class QQBotDO {
           return { ok: false, reason: '内容看起来是二进制（不是纯文本）' };
         }
         const text = new TextDecoder('utf-8', { fatal: false }).decode(b);
-        // 注意：这里返回**完整全文**，不做截断。
-        // 截断只应发生在「喂给模型」时；存进沙箱必须逐字完整，否则用户要回原文件就是残缺的。
         return { ok: true, text, full: text, filename: name, bytes: b.length, kind: 'text' };
       }
 
-      // 4) 其它二进制：明确说读不了，别让模型瞎猜
       const known = {
         so: '编译好的动态库', dll: 'Windows 动态库', exe: '可执行文件', dylib: '动态库',
         zip: '压缩包', rar: '压缩包', '7z': '压缩包', tar: '压缩包', gz: '压缩包',
@@ -1400,10 +1219,8 @@ export class QQBotDO {
     }
   }
 
-  /** raw deflate 解压（Office 的 zip 条目用 raw deflate） */
   async inflateRaw(bytes) {
     if (typeof DecompressionStream === 'undefined') throw new Error('环境不支持解压');
-    // 先试 raw deflate；失败再试 zlib（带 2 字节头）
     for (const fmt of ['deflate-raw', 'deflate']) {
       try {
         const ds = new DecompressionStream(fmt);
@@ -1415,12 +1232,10 @@ export class QQBotDO {
     throw new Error('解压失败');
   }
 
-  /** 从 docx/xlsx/pptx（zip）里抽 XML 文字 */
   async extractOfficeText(bytes, kind) {
     const entries = await this.unzipEntries(bytes);
     const texts = [];
     for (const [path, data] of entries) {
-      // 只挑真正含正文的 XML
       const wanted =
         (kind === 'docx' && path === 'word/document.xml') ||
         (kind === 'pptx' && /^ppt\/slides\/slide\d+\.xml$/.test(path)) ||
@@ -1428,7 +1243,6 @@ export class QQBotDO {
         (kind === 'xlsx' && /^xl\/worksheets\/sheet\d+\.xml$/.test(path));
       if (!wanted) continue;
       const xml = new TextDecoder('utf-8', { fatal: false }).decode(data);
-      // <w:t> 是 Word，<a:t> 是 PPT，<t> 是 Excel 共享字符串
       const parts = xml.match(/<(?:w|a)?:?t(?:\s[^>]*)?>([^<]*)<\/(?:w|a)?:?t>/g) || [];
       for (const p of parts) {
         const inner = p.replace(/^<[^>]+>/, '').replace(/<\/[^>]+>$/, '');
@@ -1449,10 +1263,6 @@ export class QQBotDO {
       .replace(/&amp;/g, '&');
   }
 
-  /**
-   * 极简 zip 解包（读中央目录，支持 stored 与 deflate）。
-   * Office 文件是标准 zip，deflate 条目必须解压才能拿到 XML。
-   */
   async unzipEntries(bytes) {
     const out = [];
     const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -1481,13 +1291,11 @@ export class QQBotDO {
       else if (method === 8) jobs.push([name, comp]);
       p += 46 + nameLen + extraLen + commentLen;
     }
-    // deflate 条目异步解压
     for (const [name, comp] of jobs) {
       try {
         const raw = await this.inflateRaw(Uint8Array.from(comp));
         out.push([name, raw]);
       } catch {
-        /* 解不开就跳过这个条目，不影响其它 */
       }
     }
     return out;
@@ -1519,9 +1327,8 @@ export class QQBotDO {
     let content = normalizeFaceTags(stripMentions(data.content));
     if (/^@\S+\s+/.test(content)) content = content.replace(/^@\S+\s+/, '');
     const attachments = Array.isArray(data.attachments) ? data.attachments : [];
-    // 群聊/单聊的附件结构不一定一样：优先挑 content_type 是图片（或 URL 长得像图片）的那一项
     let imageUrl = null;
-    let fileAttachment = null; // 非图片附件（txt / md / pdf 等）
+    let fileAttachment = null;
     for (const a of attachments) {
       if (!a) continue;
       const url = String(a.url || a.src || a.file_url || '').trim();
@@ -1536,7 +1343,6 @@ export class QQBotDO {
       }
     }
     if (!imageUrl) {
-      // 少数情况下图片以 <img src="..."> 形式内联在 content 里
       const inline = content.match(/<img[^>]+src=["']([^"']+)["']/i);
       if (inline) imageUrl = inline[1];
     }
@@ -1554,11 +1360,8 @@ export class QQBotDO {
     }
     if (!content && !imageUrl && !fileAttachment) return;
     if (!content) content = imageUrl ? '请描述这张图片' : '（我发了一个文件）';
-    // 用户原话（不含后面拼进来的文件全文）。
-    // 定时提醒只能在这句上匹配 —— 否则文章里出现「X 点提醒」就会误建提醒。
     const userText = content;
 
-    // 文件附件：把内容读进来交给 AI，让它能真正「看到」文件
     let fileText = '';
     let fileName = '';
     if (fileAttachment) {
@@ -1572,8 +1375,6 @@ export class QQBotDO {
           fileText = r.text;
           const name = fileAttachment.filename || r.filename || '附件';
           fileName = name;
-          // 把文件按原始文件名直接存进 AiDO 沙箱，不经 AI：
-          // 「保存用户给的原始内容」不需要模型参与，让模型做反而容易建出空文件。
           let savedNote = '';
           try {
             const aidNs = this.env && this.env.AIDO;
@@ -1586,8 +1387,6 @@ export class QQBotDO {
                   name,
                   content: r.full || fileText,
                   owner: await maskId(userId || scopeId),
-                  // 带上 scope/kind，AiDO 才能同步 D1 索引里的「文件 N 个」。
-                  // 不传的话后台沙箱页会一直显示旧的文件数（实际 2 个却显示 1 个）。
                   scope: this.ownerKey({ isC2C, scopeId, userId }),
                   kind: isC2C ? 'c2c' : 'group',
                 }),
@@ -1603,16 +1402,12 @@ export class QQBotDO {
           } catch (e) {
             this.logger.warn(`auto-save inbound file failed: ${e.message}`);
           }
-          // 喂给模型的内容可以截断（上下文有限），但存沙箱的必须是完整全文。
-          // 截断时明确告知模型「只看到前 N 字」，避免它以为全文就这么短。
-          // 尽量让模型看到全文；只有特别大（>6 万字）才截断，并明确告知全文已存好
           const shown = fileText.length > 60000
             ? fileText.slice(0, 60000) + `\n…（内容较长，这里展示前 6 万字，全文 ${fileText.length} 字已完整存入工作区）`
             : fileText;
           content = `${content}\n\n【用户发来文件：${name}，共 ${r.bytes} 字节】\n\`\`\`\n${shown}\n\`\`\`${savedNote}`.slice(0, 80000);
           this.logger.info(`Inbound file attached: ${name} (${r.bytes}B, kind=${r.kind})`);
         } else if (r.isImage && !imageUrl) {
-          // 附件其实是图片但没被上面识别到：补上，让它走识图
           imageUrl = fileAttachment.url;
         } else {
           this.logger.warn(`Inbound file not readable: ${r.reason}`);
@@ -1626,12 +1421,6 @@ export class QQBotDO {
     if (!isC2C && this.groupBlacklist.has(scopeId)) return;
     if (this.sensitiveWords.some((w) => content.includes(w))) return;
 
-    // 会话键按「人」隔离（与 ownerKey 一致），而不是按群共享：
-    //   - 单聊：c2c:<user>
-    //   - 群聊：group:<群>:u:<user>
-    // 这样群里不同人 @ 机器人走各自的队列和 ChatDO 实例，可以**并行处理**，
-    // 不会出现「A 的消息还没答完，B 就必须干等」的串行阻塞；同时每个人的
-    // 对话上下文彼此隔离，不会串味。
     const key = this.ownerKey({ isC2C, scopeId, userId });
     if (!isC2C) this.touchGroup(scopeId);
     const job = { isC2C, userId, scopeId, content, imageUrl, msgId: data.id, userText, fileName, fileText };
@@ -1647,28 +1436,21 @@ export class QQBotDO {
         if (this.messageQueues.get(key) === next) this.messageQueues.delete(key);
       });
     this.messageQueues.set(key, next);
-    // 返回整条队列的尾巴：Webhook 模式下调用方用 waitUntil 挂住它，
-    // 否则对象可能在处理中途被驱逐（长任务会直接断掉）
     return next;
   }
 
   async processMessage(key, job) {
     const { isC2C, userId, scopeId, content, imageUrl, msgId, userText, fileName, fileText } = job;
 
-    // Webhook 模式下可能是全新实例：先把这条消息的 msg_seq 计数从存储里捞回来，
-    // 否则第一次回复又会从 1 开始被 QQ 判为重复
     await this.loadMsgSeq(msgId);
 
-    // 梗图缓存（首次读取 D1，之后走内存；失败不阻塞聊天）
     await this.ensureMemes().catch(() => {});
 
-    // /菜单 指令：发送带按钮的面板（指令按钮自动往输入框填 @我 内容，跳转按钮直接开链接）
     if (/^\/?(菜单|menu|按钮)(\s|$)/i.test(content)) {
       await this.sendMenu({ isC2C, scopeId, msgId });
       return;
     }
 
-    // /帮助 指令：列出机器人能干什么（后台开了 Markdown 回复时用排版版，否则用纯文本版）
     if (/^\/?(帮助|help|指令|命令)(\s|$)/i.test(content)) {
       const md = this.config.markdownReply === '1';
       await this.sendReply({
@@ -1723,7 +1505,6 @@ export class QQBotDO {
       return;
     }
 
-    // /撤回 指令：撤回本会话最近一条机器人消息
     if (/^\/?(撤回|recall|undo)(\s|$)/.test(content)) {
       const session = await this.loadSession(key);
       const lastBotMsg = session?.lastBotMsg;
@@ -1742,7 +1523,6 @@ export class QQBotDO {
       return;
     }
 
-    // /画 指令：调用生图模型画图
     if (/^\/?(画图|画|image|draw|生成图片|生成图)(\s|$)/.test(content)) {
       const prompt = content.replace(/^\/?(画图|画|image|draw|生成图片|生成图)\s*/, '').trim();
       if (!prompt) {
@@ -1753,14 +1533,11 @@ export class QQBotDO {
       return;
     }
 
-    // 自然语言直接点「画图」：不绕对话模型，直接生图
     const genIntent = content.match(
       /^(?:帮我|给我|请|麻烦)?\s*(?:画一张|画一幅|画一个|画一只|画只|画张|画幅|画个|画一下|画图|画图片|绘制一张|绘制一幅|绘制一个|绘制图|绘制|生成一张图|生成一幅图|生成一张|生成一幅|生成一个|生成图片|生成图|生成个|来一张)\s*(.+)$/s
     );
     if (genIntent) {
-      // 「画张图」这类没带主体的，去掉量词后为空就提示用法，别拿「图」当提示词去画
       const genPrompt = genIntent[1].trim().replace(/^(?:一张|一幅|一个|一只|只|个|张|幅|下|图)\s*/, '').trim();
-      // 「生成一张表格/二维码」这类不是要画画的，交给对话模型处理
       const notDrawing = /二维码|条形码|表格|代码|文档|名单|清单|报告|文件|链接|文案|密码/.test(genPrompt);
       if (!notDrawing) {
         if (!genPrompt) {
@@ -1781,7 +1558,6 @@ export class QQBotDO {
       }
     }
 
-    // /梗图 /表情包：发内置梗图（不写名字就随机来一张）
     if (/^\/?(梗图|表情包|meme)(\s|$)/i.test(content)) {
       const name = content.replace(/^\/?(梗图|表情包|meme)\s*/i, '').trim();
       const sent = await this.sendMeme({ isC2C, scopeId, msgId, name, userId, userContent: content });
@@ -1803,7 +1579,6 @@ export class QQBotDO {
       return;
     }
 
-    // /表情：发一个 emoji（官方接口不支持群聊/单聊发原生表情包，用 Unicode emoji 代替）
     if (/^\/?(表情|emoji)(\s|$)/i.test(content)) {
       await this.sendReply({
         isC2C,
@@ -1814,7 +1589,6 @@ export class QQBotDO {
       return;
     }
 
-    // /语音 文字：内置 TTS（Workers AI MeloTTS）合成语音发送
     if (/^\/?(语音|voice)(\s|$)/i.test(content)) {
       const text = content.replace(/^\/?(语音|voice)\s*/i, '').trim();
       if (!text) {
@@ -1833,21 +1607,16 @@ export class QQBotDO {
       return;
     }
 
-    // /工作 <任务>：在独立的 AI 工作区 DO 里执行（任务清单 / 笔记 / 多步任务）
     if (/^\/?(工作|工作区|do)(\s|$)/i.test(content)) {
       await this.handleWorkspaceCommand({ isC2C, scopeId, msgId, content, userId });
       return;
     }
 
-    // /沙箱 <任务>：AiDO 沙箱（最高自由度，但只能在它自己的虚拟文件系统里活动）
     if (/^\/?(沙箱|ai|sandbox)(\s|$)/i.test(content)) {
       await this.handleAiSandbox({ isC2C, scopeId, msgId, content, userId });
       return;
     }
 
-    // 定时提醒：识别「X 点提醒我…」直接落库，不绕 AI（AI 未配置也能用）。
-    // 只在用户原话上解析：content 里可能拼了几千字文件内容，
-    // 正文出现「提醒」字样会误建提醒。
     const reminderIntent = parseReminder(userText || content);
     if (reminderIntent) {
       await addReminder(this.env, {
@@ -1862,7 +1631,6 @@ export class QQBotDO {
         reminderIntent.whenText ||
         new Date(reminderIntent.dueAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
       const warn = isC2C ? '' : await this.proactiveWarning(scopeId);
-      // 新提醒落库后立刻重排 alarm，让它到点被唤醒（不再依赖每分钟 cron）
       await this.scheduleNextAlarm().catch(() => {});
       await this.sendReply({
         isC2C,
@@ -1874,7 +1642,6 @@ export class QQBotDO {
       return;
     }
 
-    // 单聊：AI 思考期间给「正在输入」反馈（官方 msg_type=6），失败静默
     if (isC2C && msgId) this.state.waitUntil(this.sendTyping({ scopeId, msgId }));
 
     let providers = (this.config.aiProviders || []).filter(
@@ -1901,7 +1668,6 @@ export class QQBotDO {
       this.sessions.set(key, session);
     }
     session.lastUsed = Date.now();
-    // 后台改了人设/生图模型后，已有会话的系统提示词立即跟随（聊天记录保留）
     const sysKey = this.sysKey();
     if (session.sysKey !== sysKey) {
       session.history[0] = { role: 'system', content: this.buildSystemPrompt() };
@@ -1916,7 +1682,6 @@ export class QQBotDO {
       if (!aiImage) this.logger.warn('Image download failed, sending text-only to AI');
     }
 
-    // 带图消息只发给声明支持识图的模型（后台每个 AI 可单独设置；auto 按模型名判断）
     if (aiImage) {
       const visionProviders = providers.filter((p) => providerSupportsVision(p));
       if (!visionProviders.length) {
@@ -1937,7 +1702,6 @@ export class QQBotDO {
     let used = null;
 
     if (useAiDo) {
-      // 会话历史与模型调用都交给独立的 ChatDO（长请求不阻塞 QQ 网关）
       try {
         const out = await this.askAiDo({
           key,
@@ -1972,7 +1736,6 @@ export class QQBotDO {
       history.push({ role: 'user', content });
       while (history.length > historyLimit + 1) history.splice(1, 1);
       const msgs = history.slice();
-      // 早前对话的压缩摘要（历史被裁剪后，长期记忆靠它保留）
       if (session.summary) msgs.splice(1, 0, { role: 'system', content: `【早前对话摘要】${session.summary}` });
       if (aiImage) {
         msgs[msgs.length - 1] = {
@@ -1996,7 +1759,6 @@ export class QQBotDO {
                   ? 0.8
                   : Number(provider.temperature),
               }),
-              // 带图请求 vision 模型处理更慢，超时 180 秒；纯文本 90 秒（长回答不再答到一半被超时切断、切下一个模型重答）
               signal: AbortSignal.timeout(imageUrl ? 180000 : 90000),
             });
             if (!res.ok) {
@@ -2009,7 +1771,6 @@ export class QQBotDO {
           }, {
             maxAttempts: 2,
             delay: 800,
-            // 超时不重试（重试只会再等一轮），直接换下一个 AI
             shouldRetry: (e) =>
               !(e?.name === 'TimeoutError' || e?.name === 'AbortError') &&
               (e.status === undefined || e.status === 429 || e.status >= 500),
@@ -2020,7 +1781,6 @@ export class QQBotDO {
           const text = stripMentions(aiData.choices?.[0]?.message?.content);
           const clean = /^@\S+\s+/.test(text) ? text.replace(/^@\S+\s+/, '') : text;
           if (!clean) throw new Error('AI 返回空内容');
-          // 模型可能把历史里的内部记录（「（系统记录：…）」）复述出来，发出去前剥掉
           const stripped = stripToolRecords(clean);
           if (!stripped) throw new Error('AI 只返回了内部记录');
           reply = stripped;
@@ -2037,7 +1797,6 @@ export class QQBotDO {
     if (!reply) {
       this.logger.error(`All AI failed: ${aiErr ? aiErr.message : 'unknown'}`);
       this.logSystem('所有 AI 均不可用，已回复兜底话术');
-      // 自动撤回：把之前这条「没答上来」的消息撤掉（可选）
       const lastBotMsg = session?.lastBotMsg;
       if (this.config.autoRecall === '1' && lastBotMsg?.msgId) {
         await this.recallMessage({ isC2C, scopeId, msgId: lastBotMsg.msgId });
@@ -2057,17 +1816,14 @@ export class QQBotDO {
       return;
     }
 
-    // AI 判断用户要画图时，输出 [GEN_IMAGE] 标记 → 调用生图模型
     if (this.config.imageGenModel) {
       const genMatch = reply.match(/\[GEN_IMAGE\]\s*([\s\S]+)/);
       if (genMatch) {
         await this.rememberAssistant({ key, session, history, text: '（系统记录：已生成图片并发送给用户）', useAiDo, historyLimit, providers });
-        // 标记前面如果写了话，就当作配图文案（图发完再发这句）
         const caption = reply.slice(0, reply.indexOf('[GEN_IMAGE]')).trim();
         await this.handleImageGen({ isC2C, scopeId, msgId, prompt: genMatch[1].trim(), caption, userId, userContent: content });
         return;
       }
-      // 兜底：AI 声称「生成好了」却漏了标记，用用户描述 + 回复内容补画
       if (/生成好|画好|已生成|出图|做好了|马上画|正在画/.test(reply)) {
         const prompt = `${content}\n${reply.replace(/\[GEN_IMAGE\]/g, '')}`
           .trim()
@@ -2080,19 +1836,13 @@ export class QQBotDO {
       }
     }
 
-    // 工具调用：[TOOL]{"name":...} 标记 → 执行内置工具（提醒 / 群信息 / 禁言状态 / 画图）
     if (this.config.toolCalling !== '0') {
       const toolCall = this.extractToolCall(reply);
       if (toolCall) {
-        // 模型偶尔会在调用前加一句「好的，我这就去…」：只保留工具结果，避免一次回两条重复消息
         const toolResult = await this.runTool(toolCall, { isC2C, scopeId, key, msgId, userId, userContent: content, useAiDo });
         await this.rememberAssistant({ key, session, history, text: this.toolRecordNote(toolCall), useAiDo, historyLimit, providers });
-        // 有长期价值的结果（发过文件 / 做过任务 / 定过提醒）单独进 facts 层；
-        // 图片、梗图、表情这类一次性产物不记，避免上下文膨胀
         const fact = this.factFromTool(toolCall, toolResult);
         if (fact) await this.rememberFact({ key, text: fact, useAiDo });
-        // 工具这条也要进聊天记录，并且带上实际用的模型 ——
-        // 否则后台「聊天记录」里工具类回复只会显示成一条没有模型的空白记录
         this.logExchange({
           isC2C,
           scopeId,
@@ -2108,7 +1858,6 @@ export class QQBotDO {
     }
 
     let sentId = null;
-    // 图片回复：AI 回复里带 markdown 图片时，先发图再补文字
     const imgMatch = reply.match(/!\[[^\]]*\]\((https?:\/\/[^)\s]+)\)/);
     if (imgMatch) {
       const imageUrl = imgMatch[1];
@@ -2116,12 +1865,10 @@ export class QQBotDO {
       sentId = await this.sendImage({ isC2C, scopeId, imageUrl, msgId });
       if (sentId) {
         if (textOnly) {
-          // 图是被动回复 seq=1，这条文字跟同一个 msg_id 走 seq=2，不烧主动消息额度
           const textId = await this.sendReply({ isC2C, scopeId, content: textOnly, msgId });
           if (textId) sentId = textId;
         }
       } else {
-        // 图片上传失败：降级为纯文本，图片地址转成可点链接，避免露出 markdown 原文
         const fallback = (textOnly ? textOnly + '\n' : '') + imageUrl;
         sentId = await this.sendReply({ isC2C, scopeId, content: fallback, msgId });
       }
@@ -2141,21 +1888,16 @@ export class QQBotDO {
     if (session) {
       session.lastUsed = Date.now();
       await this.saveSession(key, session);
-      // 本地模式的摘要压缩；ChatDO 模式下它自己管历史与摘要
       if (!useAiDo && used && this.state && typeof this.state.waitUntil === 'function') {
         this.state.waitUntil(this.maybeSummarize(key, session, used));
       }
     }
     this.logger.info(`Replied to ${isC2C ? 'c2c' : 'group'} chat: ${reply.slice(0, 50)}...`);
 
-    // 聊天记录写库不阻塞队列：它只是「留痕」，不是回复的必要条件。
-    // 同步 await 会拖慢同会话下一条消息（队列是串行的），改成 waitUntil
-    // 让队列立即释放，记录在后台异步完成；失败也不影响主流程。
     const logWrite = addChatLog(this.env, {
       kind: isC2C ? 'c2c' : 'group',
       scopeId,
       userId,
-      // 带图的消息在记录里标一下，后台能看出这是图片消息
       userContent: imageUrl ? `[图片] ${content}` : content,
       aiReply: normalizeFaceTags(reply),
       model: used ? `${used.name} · ${used.model}`.slice(0, 128) : null,
@@ -2166,17 +1908,9 @@ export class QQBotDO {
       await logWrite;
     }
 
-    // 把这个人登记进「工作区」索引（不动文件、不动 runs）。
-    // 之前只有写/读文件时才建索引，导致只聊天的人在工作区页面里根本看不到。
     this.touchWorkspace({ isC2C, scopeId, userId, lastTask: String(userText || content).slice(0, 60) });
   }
 
-  /**
-   * 轻量登记：让这个人出现在后台「工作区」列表里。
-   *
-   * 不阻塞主流程（挂 waitUntil），失败只记日志。
-   * 索引里已经有他时，只更新 lastTask，不动 updatedAt/files/runs。
-   */
   touchWorkspace({ isC2C, scopeId, userId, lastTask }) {
     const ns = this.env && this.env.AIDO;
     if (!ns || typeof ns.idFromName !== 'function') return;
@@ -2202,7 +1936,6 @@ export class QQBotDO {
     this.state.waitUntil(run);
   }
 
-  /** 组装系统提示词（人设 + 生图能力 + 工具调用说明） */
   buildSystemPrompt() {
     const basePrompt = this.config.systemPrompt ||
       '你是一个友好、靠谱、乐于助人的QQ机器人助手。回答保持简洁、自然、口语化，用中文交流。';
@@ -2252,14 +1985,6 @@ export class QQBotDO {
     );
   }
 
-  /** 工具执行后写回历史的一行内部记录（不发给用户，模型也不该复述） */
-  /**
-   * 工具执行留痕：写进对话历史的那一行。
-   *
-   * 设计原则（防止上下文膨胀）：**只记「做过什么」，不记结果全文**。
-   * 图片、梗图、表情这类一次性产物只需留个痕迹；
-   * 文件/任务这种「以后还会问起」的，另外用 rememberFact() 写进长期记忆。
-   */
   toolRecordNote(call) {
     const args = (call && call.args) || {};
     const name = (call && call.name) || '工具';
@@ -2276,20 +2001,10 @@ export class QQBotDO {
     return `（系统记录：已执行 ${name}${detail}，结果已发送给用户）`;
   }
 
-  /**
-   * 值得长期记住的工具结果 → 交给 ChatDO 的 facts 层。
-   *
-   * 哪些算「值得」：用户会重复问起的东西。
-   *   - 发过的文件（路径 + 名字）：下次说「把上次那个文件发我」要能想起来
-   *   - 做过的任务（一句话摘要）：下次问「我之前让你做的呢」要答得上
-   *   - 定的提醒：什么时候提醒什么
-   *
-   * 不记：图片 prompt、梗图名、emoji —— 这些是一次性产物，记了只占地方。
-   */
   async rememberFact({ key, text, useAiDo }) {
     const clean = String(text || '').trim().slice(0, 120);
     if (!clean) return;
-    if (!useAiDo) return; // 没有 ChatDO 就没有 facts 层，跳过
+    if (!useAiDo) return;
     try {
       const stub = this.chatDoStub(key);
       if (!stub) return;
@@ -2303,19 +2018,12 @@ export class QQBotDO {
     }
   }
 
-  /**
-   * 沙箱任务完成后，把「做了什么 + 产出哪些文件」写进长期记忆。
-   *
-   * 为什么放在任务完成之后：沙箱是后台异步跑的，runTool 返回时还不知道结果。
-   * 只有跑完才能拿到真实文件列表，这时记下来才准。
-   */
   async rememberSandboxFact({ key, task, isC2C, scopeId, userId, useAiDo }) {
     if (!useAiDo) return;
     const parts = [];
     const t = String(task || '').trim().slice(0, 50);
     if (t) parts.push(`做过任务「${t}」`);
     try {
-      // 直接问 AiDO 要当前文件列表（比解析发送队列可靠）
       const ns = this.env && this.env.AIDO;
       if (ns && typeof ns.idFromName === 'function') {
         const stub = ns.get(ns.idFromName(this.ownerKey({ isC2C, scopeId, userId })));
@@ -2332,7 +2040,6 @@ export class QQBotDO {
     if (parts.length) await this.rememberFact({ key, text: parts.join('，'), useAiDo });
   }
 
-  /** 从工具调用里挑出值得进长期记忆的那条事实（没有就返回 null） */
   factFromTool(call, result) {
     const args = (call && call.args) || {};
     const name = (call && call.name) || '';
@@ -2357,19 +2064,12 @@ export class QQBotDO {
     return null; // image / meme / voice / 查询类都不记
   }
 
-  /* ------------------------------ 独立工具 DO ------------------------------ */
 
-  /**
-   * 私密数据的归属键：工作区 / 沙箱都按「人」存，不再按群共享。
-   * - 单聊：c2c:<user>
-   * - 群聊：group:<群>:u:<user>（同一个人在同群里的任务/文件只有他自己能看到）
-   */
   ownerKey({ isC2C, scopeId, userId }) {
     return isC2C ? `c2c:${userId || scopeId}` : `group:${scopeId}:u:${userId || 'unknown'}`;
   }
 
 
-  /** 调 ToolDO 执行工具；没有绑定时返回 null，走本地实现 */
   async execToolDo(tool, args, { isC2C, scopeId, msgId, caption, userId }) {
     const ns = this.env && (this.env.WORK || this.env.TOOL);
     if (!ns || typeof ns.idFromName !== 'function') return null;
@@ -2411,7 +2111,6 @@ export class QQBotDO {
     return { ok: !!(out && out.ok), note: (out && out.note) || '' };
   }
 
-  /** /沙箱 <任务>：在 AiDO 沙箱里执行（最高自由度，但只能动沙箱自己的文件） */
   async handleAiSandbox({ isC2C, scopeId, msgId, content, userId, background = false }) {
     const ns = this.env && this.env.AIDO;
     if (!ns || typeof ns.idFromName !== 'function') {
@@ -2499,8 +2198,6 @@ export class QQBotDO {
       return;
     }
     if (isC2C && msgId) this.state.waitUntil(this.sendTyping({ scopeId, msgId }));
-    // 长任务（写文章/多步）可能要几分钟，先给个反馈
-    // 单聊被动回复只有 4 条额度：不发「开始处理」，把额度留给文件和结果；后台模式已经发过提示
     if (!background && msgId && !isC2C) {
       try {
         await this.sendReply({
@@ -2526,7 +2223,6 @@ export class QQBotDO {
       await this.sendReply({ isC2C, scopeId, content: `沙箱执行失败：${(out && out.error) || '未知错误'}`, msgId });
       return;
     }
-    // AI 在沙箱里要求发送的文件（file.send）：这里真正上传并发送
     const sentFiles = [];
     const failedFiles = [];
     const passiveOk = !!msgId && Date.now() - startedAt < 240000;
@@ -2534,14 +2230,12 @@ export class QQBotDO {
     if (Array.isArray(out.send) && out.send.length) {
       const sendList = out.send.slice(0, 50);
       if (sendList.length > 3) {
-        // 超过 3 个文件：打包成一个 zip 发送
         const entries = [];
         for (const p of sendList) {
           try {
             const f = await callDo('/file', { path: p });
             if (f && !f.error) entries.push({ path: f.path, content: String(f.content || '') });
           } catch {
-            /* 跳过读不到的文件 */
           }
         }
         if (entries.length > 3) {
@@ -2571,7 +2265,6 @@ export class QQBotDO {
             const r = await this.execToolDo(
               'file',
               { path: f.path, content: f.content, name: f.path.split('/').pop() },
-              // 任务跑了很久时 msg_id 可能已过期，改用主动消息发送
               { isC2C, scopeId, msgId: passiveOk ? msgId : '', userId }
             );
             if (r && r.ok) {
@@ -2580,7 +2273,6 @@ export class QQBotDO {
               failedFiles.push(`${f.path.split('/').pop()}（${(r && r.note) || '发送失败'}）`);
             }
             if (r && !r.ok && !isC2C) {
-              // 群聊发文件失败：把内容分段当文本发出来，并提示私聊拿完整文件
               const text = String(f.content || '');
               const chunks = [];
               for (let k = 0; k < text.length && chunks.length < 3; k += 1400) chunks.push(text.slice(k, k + 1400));
@@ -2599,7 +2291,6 @@ export class QQBotDO {
           failedFiles.push(`${p.split('/').pop()}（${e.message.slice(0, 40)}）`);
           this.logger.warn(`sandbox send failed: ${e.message}`);
         }
-        // 连续上传容易撞限流，间隔一下
         await new Promise((res) => setTimeout(res, 600));
       }
     }
@@ -2615,7 +2306,6 @@ export class QQBotDO {
     const finalText = `${out.reply}${sentNote}\n\n（沙箱：${out.steps} 步 · ${out.files} 个文件）`;
     const sent = await this.sendReply({ isC2C, scopeId, content: finalText, msgId });
     if (!sent && msgId) {
-      // 被动回复窗口（5 分钟）可能已经过了，改发主动消息兜底
       await this.sendReply({ isC2C, scopeId, content: finalText });
     }
     this.logExchange({
@@ -2624,12 +2314,10 @@ export class QQBotDO {
       userId,
       userContent: content,
       aiReply: `[沙箱] ${String(out.reply).slice(0, 300)}`,
-      // 用沙箱里真正跑通的模型（AiDO 会把 provider 带回来），拿不到才退回泛称
       model: String(out.model || '').slice(0, 128) || 'AiDO',
     });
   }
 
-  /* ------------------------------ AI 工作区（/工作） ------------------------------ */
 
   async handleWorkspaceCommand({ isC2C, scopeId, msgId, content, userId }) {
     const ns = this.env && (this.env.WORK || this.env.WORKSPACE);
@@ -2719,15 +2407,11 @@ export class QQBotDO {
       userId,
       userContent: content,
       aiReply: `[工作区] ${String(out.reply).slice(0, 300)}`,
-      // 用工作区里真正跑通的模型，拿不到才退回泛称
       model: String(out.model || '').slice(0, 128) || '工作区',
     });
   }
 
-  /* -------------------- 独立的 ChatDO（会话历史 + 模型调用） -------------------- */
 
-  /** 调 ChatDO 完成一轮对话；没有绑定时返回 null，走本地逻辑 */
-  /** 取 ChatDO 的 stub（每次重试都重新取，避免打到已被重启的旧实例） */
   chatDoStub(key) {
     const ns = this.env && (this.env.CHAT || this.env.AI_WORKER);
     if (!ns || typeof ns.idFromName !== 'function') return null;
@@ -2739,7 +2423,6 @@ export class QQBotDO {
     if (!ns || typeof ns.idFromName !== 'function') return null;
     const payload = JSON.stringify({ key, providers, systemPrompt, historyLimit, content, image });
     let lastErr = null;
-    // 部署 / 休眠会让 DO 实例重启：每次重试都重建 stub，给新实例接管的时间
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
         const stub = this.chatDoStub(key);
@@ -2760,7 +2443,6 @@ export class QQBotDO {
   }
 
   async recordAiDo({ key, assistant, historyLimit, providers }) {
-    // 带上 providers：ChatDO 压缩滚出的消息时要用它调模型生成摘要
     const payload = JSON.stringify({ key, assistant, historyLimit, providers });
     let lastErr = null;
     for (let attempt = 1; attempt <= 2; attempt++) {
@@ -2783,7 +2465,6 @@ export class QQBotDO {
     throw lastErr;
   }
 
-  /** 记录助手这轮内容：走 ChatDO 就写进 ChatDO，否则写本地会话 */
   async rememberAssistant({ key, session, history, text, useAiDo, historyLimit, providers }) {
     if (useAiDo) {
       try {
@@ -2796,32 +2477,21 @@ export class QQBotDO {
     history.push({ role: 'assistant', content: text });
   }
 
-  /** 系统提示词指纹：人设 / 生图模型 / 工具开关变了就要重建 session 里的 system 消息 */
   sysKey() {
     return `${this.config.systemPrompt || ''}|${this.config.imageGenModel || ''}|${this.config.toolCalling || ''}`;
   }
 
-  /**
-   * 同一 msg_id 的被动回复需要递增 msg_seq（不传默认 1，第二条起会被去重/拒绝）。
-   *
-   * ⚠ msg_seq 必须跨实例连续：Webhook 模式下每条消息都可能是一个全新的 DO 实例
-   * （处理完就休眠、下一次醒来内存全清），如果计数只在内存里，
-   * 那条消息的第二次回复会重新从 1 开始，被 QQ 当成重复发送直接拒掉。
-   * 所以这里同步写一份到存储，并在新实例里按 msg_id 懒加载。
-   */
   nextMsgSeq(msgId) {
     if (!msgId) return 1;
     if (!this.msgSeqMap) this.msgSeqMap = new Map();
     const n = (this.msgSeqMap.get(msgId) || 0) + 1;
     this.msgSeqMap.set(msgId, n);
-    // 防胀：只留最近 100 个 msg_id 的计数（被动回复窗口只有几分钟，足够了）
     if (this.msgSeqMap.size > 200) {
       for (const k of this.msgSeqMap.keys()) {
         this.msgSeqMap.delete(k);
         if (this.msgSeqMap.size <= 100) break;
       }
     }
-    // 落盘（不 await：sendReply 是热路径，写失败只影响极端场景下的去重，不影响发送）
     try {
       const storage = this.state && this.state.storage;
       if (storage && typeof storage.put === 'function') {
@@ -2835,7 +2505,6 @@ export class QQBotDO {
     return `seq:${msgId}`;
   }
 
-  /** 新实例第一次回复某个 msg_id 时，把计数从存储里捞回来 */
   async loadMsgSeq(msgId) {
     if (!msgId) return;
     if (!this.msgSeqMap) this.msgSeqMap = new Map();
@@ -2860,7 +2529,6 @@ export class QQBotDO {
     if (!finalContent) finalContent = '……';
 
     const useMarkdown = this.config.markdownReply === '1' && this.isMarkdownSafe(finalContent);
-    // 被动回复带 msg_id + 递增 msg_seq；不带 msg_id 就是主动消息（不要发空的 msg_id 字段）
     const passive = msgId ? { msg_id: msgId, msg_seq: this.nextMsgSeq(msgId) } : {};
     const buildPayload = (md) =>
       md
@@ -2894,7 +2562,6 @@ export class QQBotDO {
         onRetry: (err, attempt) => this.logger.warn(`Send retry ${attempt}: ${err.message}`),
       });
     } catch (e) {
-      // Markdown 被拒（比如机器人没有 markdown 权限）→ 自动降级纯文本再发一次
       if (useMarkdown && e.status && e.status < 500 && e.status !== 429) {
         this.logger.warn(`Markdown send rejected (HTTP ${e.status}), falling back to plain text`);
         try {
@@ -2919,7 +2586,6 @@ export class QQBotDO {
     }
   }
 
-  /** 单聊「正在输入」状态（官方 msg_type=6，最长 60 秒）：AI 思考期间给用户反馈 */
   async sendTyping({ scopeId, msgId }) {
     if (!msgId) return;
     try {
@@ -2937,11 +2603,9 @@ export class QQBotDO {
       });
       if (!res.ok) await res.body?.cancel();
     } catch {
-      // 输入状态是锦上添花，失败不打扰主流程
     }
   }
 
-  /** /菜单：markdown + 按钮面板（指令按钮=自动填 @我 内容；跳转按钮=直接开链接） */
   async sendMenu({ isC2C, scopeId, msgId }) {
     const token = await this.getToken();
     const sendUrl = isC2C
@@ -3011,13 +2675,10 @@ export class QQBotDO {
     }
   }
 
-  /** 发送富媒体（图片）消息：先上传拿 file_info，再发 msg_type=7，返回新消息 id */
-  /** 发图片（富媒体消息）——兼容原调用 */
   async sendImage({ isC2C, scopeId, imageUrl, msgId }) {
     return this.sendMedia({ isC2C, scopeId, msgId, fileType: 1, source: imageUrl });
   }
 
-  /** 发富媒体消息（图片 / 语音 / 视频 / 文件）：先上传拿 file_info，再 msg_type=7 发送 */
   async sendMedia({ isC2C, scopeId, msgId, fileType, source, fileExt }) {
     const token = await this.getToken();
     const base = this.apiBase();
@@ -3045,11 +2706,6 @@ export class QQBotDO {
     return data.id || null;
   }
 
-  /**
-   * 上传富媒体拿 file_info（官方富媒体流程）。
-   * source 支持 data URI（二进制直传）或公网 URL（平台代拉取）；
-   * fileType：1 图片 / 2 视频 / 3 语音 / 4 文件。
-   */
   async uploadRichMedia({ isC2C, scopeId, source, token, fileType = 1, fileExt }) {
     const base = this.apiBase();
     const uploadUrl = isC2C
@@ -3059,7 +2715,6 @@ export class QQBotDO {
     let body;
     const dataUri = source.match(/^data:([^;]+);base64,(.+)$/i);
     if (dataUri) {
-      // 二进制直传（官方 file_data 字段，≤5MB）
       const mime = dataUri[1].toLowerCase();
       const ext =
         fileExt || (mime === 'image/jpeg' ? 'jpg' : mime === 'audio/mpeg' ? 'mp3' : mime.split('/')[1] || 'bin');
@@ -3070,14 +2725,12 @@ export class QQBotDO {
       body = { file_type: fileType, file_name: `${prefix}.${ext}`, file_data: dataUri[2], srv_send_msg: false };
       this.logger.info(`Rich media upload: ${prefix}.${ext} ≈ ${Math.round(dataUri[2].length * 0.75 / 1024)}KB`);
     } else {
-      // 公网 URL：平台代拉取（srv_send_msg=false 只预上传拿 file_info，不占主动消息额度）
       body = { file_type: fileType, url: source, srv_send_msg: false };
     }
     const res = await fetch(uploadUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `QQBot ${token}` },
       body: JSON.stringify(body),
-      // 公网 URL 要等平台把图拉下来（生图常见 2048px / 9MB），30 秒可能不够
       signal: AbortSignal.timeout(body.url ? 60000 : 30000),
     });
     if (!res.ok) {
@@ -3093,9 +2746,7 @@ export class QQBotDO {
     return data.file_info;
   }
 
-  /* ------------------------------ 内置 TTS（Cloudflare Workers AI · MeloTTS） ------------------------------ */
 
-  /** 文本 → MP3 字节（不用额外 Key，走 Workers AI 绑定） */
   async synthVoice(text, lang = 'zh') {
     const ai = this.env && this.env.AI;
     if (!ai || typeof ai.run !== 'function') {
@@ -3117,13 +2768,11 @@ export class QQBotDO {
     return bytes;
   }
 
-  /** 合成语音并发送（QQ 语音消息：file_type=3，mp3 可直接用） */
   async sendVoice({ isC2C, scopeId, msgId, text, userId, userContent }) {
     const clean = String(text || '').trim().slice(0, 300);
     if (!clean) return null;
     try {
       let bytes = await this.synthVoice(clean, this.config.voiceLang || 'zh');
-      // 音量增益（后台可选关 / +6dB / +9dB）：只改 MP3 global_gain，不重编码
       const gainDb = Math.max(0, Math.min(12, Number(this.config.voiceGain || '6') || 0));
       if (gainDb > 0) {
         try {
@@ -3152,7 +2801,6 @@ export class QQBotDO {
   }
 
 
-  /** 下载图片并转成 base64 data URI（供不支持外链抓取的 AI 服务商识别） */
   async downloadImageAsBase64(imageUrl) {
     if (!imageUrl) return null;
     const fetchImage = async (withReferer) => {
@@ -3176,7 +2824,6 @@ export class QQBotDO {
       const contentType = res.headers.get('content-type') || '';
       const buf = new Uint8Array(await res.arrayBuffer());
       const size = buf.byteLength;
-      // 群里的手机原图可能很大；base64 会再涨 1/3，10MB 以内都收
       if (size < 16 || size > 10 * 1024 * 1024) {
         this.logger.warn(`Image size invalid (${size} bytes), skipping`);
         return null;
@@ -3196,7 +2843,6 @@ export class QQBotDO {
     }
   }
 
-  /** 撤回消息（官方接口） */
   async recallMessage({ isC2C, scopeId, msgId }) {
     if (!msgId) return false;
     const token = await this.getToken();
@@ -3217,7 +2863,6 @@ export class QQBotDO {
     return true;
   }
 
-  /** 官方群管理 API 通用调用：自动带 Access Token，失败抛出带 QQ 错误码的异常 */
   async qqApi(path, init) {
     const token = await this.getToken();
     const res = await fetch(`${this.apiBase()}${path}`, {
@@ -3241,31 +2886,23 @@ export class QQBotDO {
     return text ? JSON.parse(text) : {};
   }
 
-  /** 获取群基本信息：群名/简介/分类/标签/人数（需开放平台白名单权限） */
   qqGroupInfo(openid) {
     return this.qqApi(`/v2/groups/${openid}/info`, { method: 'GET' });
   }
 
-  /** 获取机器人在群内的状态：角色/入群时间/消息接收设置/是否接受主动推送 */
   qqBotState(openid) {
     return this.qqApi(`/v2/groups/${openid}/bot_state`, { method: 'GET' });
   }
 
-  /** 群成员列表（每页最多 30 条，cursor 分页；内邀能力，可能无权限） */
   qqGroupMembers(openid, cursor) {
     const q = cursor ? `?cursor=${encodeURIComponent(String(cursor))}` : '';
     return this.qqApi(`/v2/groups/${openid}/members${q}`, { method: 'GET' });
   }
 
-  /** 查询群禁言状态：全员禁言模式 + 当前被禁言的成员列表（机器人需群管理员身份） */
   qqMuteState(openid) {
     return this.qqApi(`/v2/groups/${openid}/restrict_chat_setting`, { method: 'GET' });
   }
 
-  /**
-   * 批量设置群成员禁言：members 每项 {op: add|update|del, member_openid, mute_expire_at}
-   * 单次最多 20 个，机器人需有群管理员身份，禁言最长 30 天
-   */
   qqMuteMembers(openid, members) {
     return this.qqApi(`/v2/groups/${openid}/restrict_chat_setting`, {
       method: 'POST',
@@ -3274,9 +2911,7 @@ export class QQBotDO {
     });
   }
 
-  /* ------------------------------ 内置梗图（D1 存储，部署时自动导入） ------------------------------ */
 
-  /** 从 D1 读梗图（名字 + 描述 + base64），进程内缓存；部署换版本时 DO 会重启，天然刷新 */
   async ensureMemes() {
     if (this.memesCache) return this.memesCache;
     try {
@@ -3289,7 +2924,6 @@ export class QQBotDO {
     return this.memesCache;
   }
 
-  /** 给了名字就精确/模糊匹配，没给就随机 */
   async pickMeme(name) {
     const list = await this.ensureMemes();
     if (!list.length) return null;
@@ -3300,7 +2934,6 @@ export class QQBotDO {
     return list.find((m) => m.name.includes(q) || q.includes(m.name)) || null;
   }
 
-  /** 发一张内置梗图（base64 直传，走官方富媒体图片消息）；发完再补一句配文 */
   async sendMeme({ isC2C, scopeId, msgId, name, caption, userId, userContent }) {
     const meme = await this.pickMeme(name);
     if (!meme) return null;
@@ -3331,7 +2964,6 @@ export class QQBotDO {
     }
   }
 
-  /** /画 指令：调用生图模型（OpenAI 兼容 /images/generations），把图发回会话，再补一句配文 */
   async handleImageGen({ isC2C, scopeId, msgId, prompt, caption, userId, userContent }) {
     const model = String(this.config.imageGenModel || '').trim();
     const provider = (this.config.aiProviders || []).find(
@@ -3357,7 +2989,6 @@ export class QQBotDO {
       });
       return;
     }
-    // 生图也在独立的 ToolDO 里执行（没有绑定时走下面的本地实现）
     const toolNs = this.env && (this.env.WORK || this.env.TOOL);
     if (toolNs && typeof toolNs.idFromName === 'function') {
       if (msgId) {
@@ -3389,7 +3020,6 @@ export class QQBotDO {
     }
 
     this.logger.info(`Image gen: model=${model} prompt=${prompt.slice(0, 40)}...`);
-    // 先给个反馈：生图模型普遍要 1~2 分钟，别让用户以为没反应
     if (msgId) {
       try {
         await this.sendReply({
@@ -3422,20 +3052,17 @@ export class QQBotDO {
         {
           maxAttempts: 2,
           delay: 1500,
-          // 4xx（模型不存在/参数错）不重试，只重试超时、网络、429、5xx
           shouldRetry: (e) => e.status === undefined || e.status === 429 || e.status >= 500,
           onRetry: (err, attempt) => this.logger.warn(`Image gen retry ${attempt}: ${err.message}`),
         }
       );
       const data = await res.json();
       const item = data.data?.[0] || {};
-      // 有的生图接口只回 b64_json：转成 data URI，上传时走 file_data 二进制直传
       const url = item.url || (item.b64_json ? `data:image/png;base64,${item.b64_json}` : '');
       if (!url) throw new Error('生图接口没有返回图片地址');
       const sent = await this.sendImage({ isC2C, scopeId, imageUrl: url, msgId });
       if (!sent) throw new Error('图片发送失败');
       this.logger.info('Image gen: sent');
-      // 图发完补一句，像正常人那样说句话（AI 写了配文就用它的）
       const line = String(caption || '').trim() || IMAGE_CAPTIONS[Math.floor(Math.random() * IMAGE_CAPTIONS.length)];
       await this.sendReply({ isC2C, scopeId, content: line, msgId });
       this.logExchange({
@@ -3457,17 +3084,8 @@ export class QQBotDO {
     }
   }
 
-  /** 判断文本是否适合用 Markdown 发送（含标题/列表/引用/链接等富格式才切） */
-  /**
-   * 判断这条回复该不该按 Markdown 发送。
-   *
-   * 只认「确实用到了 Markdown 语法」的回复，避免把普通聊天也套 markdown 格式。
-   * 表格必须单独识别：`| a | b |` + `|---|---|` 在 QQ 里按纯文本发会露出一堆竖线，
-   * 之前漏了这条判据，导致「只有表格没有别的标记」的回复被当成纯文本发出去。
-   */
   isMarkdownSafe(text) {
     const s = String(text || '');
-    // 表格：至少一行 | a | b |，且存在分隔行 |---|---|
     if (/^\s*\|.*\|\s*$/m.test(s) && /^\s*\|[\s:|-]+\|\s*$/m.test(s)) return true;
     return /(^|\n)\s*#{1,6}\s|\*\*|~~|^\s*[-*]\s|\n\s*>|^>|\[[^\]]+\]\(https?:/m.test(s);
   }
@@ -3484,7 +3102,6 @@ export class QQBotDO {
     }
   }
 
-  /* -------------------- 会话持久化（DO SQLite 存储：重启/驱逐后上下文不丢） -------------------- */
 
   sessionKey(key) {
     return `sess:${key}`;
@@ -3509,7 +3126,6 @@ export class QQBotDO {
     this.sessions.set(key, session);
     try {
       let payload = session;
-      // DO 单个值有大小上限：历史太长时只保留 system + 最近 30 条再落盘
       if (JSON.stringify(session).length > 110000 && Array.isArray(session.history) && session.history.length > 31) {
         payload = { ...session, history: session.history.slice(0, 1).concat(session.history.slice(-30)) };
       }
@@ -3519,7 +3135,6 @@ export class QQBotDO {
     }
   }
 
-  /** 每分钟 cron 顺带清理长时间不用的会话（内存 + DO 存储） */
   async pruneStoredSessions() {
     const cutoff = Date.now() - SESSION_IDLE_MS;
     for (const [k, s] of [...this.sessions.entries()]) {
@@ -3537,7 +3152,6 @@ export class QQBotDO {
     }
   }
 
-  /** 一次非流式 AI 调用（摘要压缩等内部用途） */
   async chatOnce(provider, messages, { timeout = 60000 } = {}) {
     const res = await fetch(`${provider.baseUrl}/chat/completions`, {
       method: 'POST',
@@ -3553,7 +3167,6 @@ export class QQBotDO {
     return String(data.choices?.[0]?.message?.content || '').trim();
   }
 
-  /** 历史太长时把最早的一批消息压成摘要（后台异步，失败只丢旧消息） */
   async maybeSummarize(key, session, provider) {
     const limit = Number(this.config.historyLimit) || 10;
     if (!Array.isArray(session.history) || session.history.length <= limit + 4) return;
@@ -3582,40 +3195,24 @@ export class QQBotDO {
     await this.saveSession(key, session);
   }
 
-  /* ------------------------------ 定时提醒（AI 自主任务） ------------------------------ */
 
-  /**
-   * WebSocket 模式的连接自愈周期。
-   * 长连接模式下「断线要重连、配额到点要恢复」，本来靠每分钟 cron 兜底；
-   * cron 降频到 6 小时后必须由 DO 自己看护，否则一次断线可能几小时没人管。
-   */
   static get WS_WATCHDOG_MS() {
     return 60 * 1000;
   }
 
-  /**
-   * 把下一次唤醒排到「最近一条待发提醒」的时刻，或 WS 模式下的下次自检。
-   *
-   * 为什么不用 cron 每分钟轮询：那是每天固定 1,440 次调用，而绝大多数时刻根本没有
-   * 待发提醒。改成 alarm 之后，只在实际有活要干时才唤醒，且能精确到秒。
-   * 一个 DO 同时只能挂一个 alarm，所以每次都算「最该先做的那件事」，然后覆盖。
-   */
   async scheduleNextAlarm() {
     try {
       const now = Date.now();
       let when = null;
 
-      // 1) WS 模式：定期自检连接（断线重连 / 配额到点恢复 / 心跳死了也能发现）
       if (this.isWsTransport() && this.desiredRunning) {
         when = now + QQBotDO.WS_WATCHDOG_MS;
       }
 
-      // 2) 到点的提醒：只有更早才覆盖
       const nextDue = await nextReminderDue(this.env);
       if (nextDue) {
         const at = new Date(nextDue).getTime();
         if (Number.isFinite(at)) {
-          // 过去的时刻（例如刚重启、或有积压）立刻唤醒
           const dueAt = Math.max(at, now + 500);
           if (when === null || dueAt < when) when = dueAt;
         }
@@ -3630,11 +3227,6 @@ export class QQBotDO {
     }
   }
 
-  /**
-   * 只在「当前没有 alarm」时补排一个。
-   * 构造函数里必须走这个而不是 scheduleNextAlarm()：被 alarm 唤醒时构造函数先跑，
-   * 直接 setAlarm 会覆盖掉正要触发的那条，等于把它往后推。
-   */
   async ensureAlarmScheduled() {
     try {
       const existing = await this.state.storage.getAlarm();
@@ -3646,36 +3238,27 @@ export class QQBotDO {
     }
   }
 
-  /**
-   * WS 模式自检：由 DO 自己按时唤醒，检查连接是否需要重连。
-   * 只在长连接模式下生效；Webhook 模式没有连接要守，什么都不做。
-   */
   async wsWatchdog() {
     if (!this.isWsTransport() || !this.desiredRunning) return;
     if (this.fatalStop) return;
-    // 配额等待期内不重连，到点后下一轮自然拉起
     if (this.quotaWaitUntil && Date.now() < this.quotaWaitUntil) return;
     if (this.isAlive()) return;
-    // 刚启动还在连，给握手留时间
     if (Date.now() - this.lastStartAt < 90000) return;
     this.logger.info('Watchdog: 连接已断，自动重连');
     this.teardown();
     await this.startBot();
   }
 
-  /** alarm 回调：发到点的提醒 + WS 自检，然后把下一次排上 */
   async alarm() {
     try {
       await this.loadConfig().catch(() => {});
       await this.fireDueReminders().catch((e) => this.logger.warn(`alarm reminders: ${e.message}`));
       await this.wsWatchdog().catch((e) => this.logger.warn(`alarm watchdog: ${e.message}`));
     } finally {
-      // 无论成功失败都要重排，否则一次失败就再也不唤醒了
       await this.scheduleNextAlarm().catch(() => {});
     }
   }
 
-  /** 主动消息（不带 msg_id）：返回详细错误，后台能看到失败原因 */
   async sendProactive({ isC2C, scopeId, content }) {
     const token = await this.getToken();
     const sendUrl = isC2C
@@ -3695,7 +3278,6 @@ export class QQBotDO {
     return { ok: true, id: data.id || null };
   }
 
-  /** 群聊主动消息需要「允许主动推送」：没开就在创建提醒时提前警告 */
   async proactiveWarning(scopeId) {
     try {
       const st = await this.qqBotState(scopeId);
@@ -3706,7 +3288,6 @@ export class QQBotDO {
     return '';
   }
 
-  /** 到点的提醒：主动消息发送；重复任务顺延，普通任务标记完成 */
   async fireDueReminders() {
     if (!this.isAlive()) return;
     const due = await dueReminders(this.env, new Date().toISOString(), 5);
@@ -3714,7 +3295,6 @@ export class QQBotDO {
       const claimed = await claimReminder(this.env, r.id);
       if (!claimed) continue;
       const isC2C = !!r.is_c2c;
-      // 群聊先看有没有主动推送权限，没有就直接记清楚原因，不白发一次请求
       if (!isC2C) {
         const st = await this.qqBotState(r.scope_id).catch(() => null);
         if (st && st.allow_proactive_msg === false) {
@@ -3748,9 +3328,7 @@ export class QQBotDO {
     }
   }
 
-  /* ------------------------------ 工具调用 ------------------------------ */
 
-  /** 从 AI 回复里提取 [TOOL]{json} 调用（花括号配对扫描，正文里有花括号也不会误伤） */
   extractToolCall(reply) {
     const s = String(reply || '');
     const idx = s.indexOf('[TOOL]');
@@ -3788,7 +3366,6 @@ export class QQBotDO {
         name: String(parsed.name || parsed.tool || '').trim(),
         args: parsed.args && typeof parsed.args === 'object' ? parsed.args : {},
         text: head,
-        // 工具行后面写的话：发图类工具会把它当作「配图文案」发出去
         tail: tail.slice(end + 1).trim(),
       };
     } catch {
@@ -3798,11 +3375,9 @@ export class QQBotDO {
 
   async runTool(call, { isC2C, scopeId, key, msgId, userId, userContent, useAiDo }) {
     const name = call.name;
-    // sandbox 工具：把「写长文 / 做文件 / 多步任务」交给私有工作区执行
     if (name === 'sandbox') {
       const task = String(call.args.task || '').trim();
       if (!task) return this.sendReply({ isC2C, scopeId, content: '要做什么？给我一句任务描述吧～', msgId });
-      // 长任务放后台跑，别把整个会话队列（同群其他人的消息）堵住
       const running = this.sandboxRunning || 0;
       if (running >= 2) {
         return this.sendReply({ isC2C, scopeId, content: '前面还有任务在跑，等它完成我再处理这个～', msgId });
@@ -3821,15 +3396,12 @@ export class QQBotDO {
       const runner = async () => {
         try {
           await this.handleAiSandbox({ isC2C, scopeId, msgId, content: '沙箱 ' + task, userId, background: true });
-          // 任务完成后才真正知道「做了什么、产出了哪些文件」，这时再写长期记忆最准。
-          // 只记一行摘要，不记文件全文，避免上下文膨胀。
           await this.rememberSandboxFact({ key, task, isC2C, scopeId, userId, useAiDo });
         } catch (e) {
           this.logger.warn(`sandbox background failed: ${e.message}`);
           try {
             await this.sendReply({ isC2C, scopeId, content: `工作区执行失败：${e.message.slice(0, 80)}` });
           } catch {
-            /* ignore */
           }
         } finally {
           this.sandboxRunning = Math.max(0, (this.sandboxRunning || 1) - 1);
@@ -3840,7 +3412,6 @@ export class QQBotDO {
       return { ok: true };
     }
 
-    // file 工具：从 AiDO 沙箱读文件，再交给 ToolEngine 当附件发出去
     if (name === 'file') {
       const ns = this.env && this.env.AIDO;
       if (!ns || typeof ns.idFromName !== 'function') {
@@ -3871,7 +3442,6 @@ export class QQBotDO {
         return this.sendReply({ isC2C, scopeId, content: `文件发送失败：${e.message.slice(0, 60)}`, msgId });
       }
     }
-    // 工具真正在独立的 ToolDO 里执行（QQBotDO 只管收发）
     const toolNs = this.env && this.env.TOOL;
     if (toolNs && typeof toolNs.idFromName === 'function') {
       try {

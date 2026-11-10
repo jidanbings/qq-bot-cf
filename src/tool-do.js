@@ -1,12 +1,3 @@
-/**
- * ToolEngine —— 工具执行器（由 WorkDO 内部持有，不是一个独立的 DO）。
- *
- * 机器人主 DO（QQBotDO）只负责收发与派发；真正的工具动作都在这里做：
- * 生图、梗图、语音、定时提醒、查群资料 / 状态 / 禁言。
- *
- * 需要 QQ 能力的信息（access_token、API base）由调用方随请求传入，
- * 本 DO 不保存凭据、不申请 token。
- */
 import { addReminder, listMemes } from './db.js';
 import { applyMp3Gain } from './utils/mp3-gain.js';
 import { parseReminder } from './utils/reminder.js';
@@ -34,7 +25,6 @@ export class ToolEngine {
     this.seq = 0;
   }
 
-  /* ------------------------------ 发送原语 ------------------------------ */
 
   msgUrl(ctx, withId = false) {
     const t = ctx.isC2C ? `users/${ctx.scopeId}` : `groups/${ctx.scopeId}`;
@@ -137,7 +127,6 @@ export class ToolEngine {
     return data.id || null;
   }
 
-  /* ------------------------------ 工具实现 ------------------------------ */
 
   async toolImage(ctx, args, cfg) {
     const model = String(cfg.imageGenModel || '').trim();
@@ -210,7 +199,6 @@ export class ToolEngine {
       try {
         bytes = applyMp3Gain(bytes, gain);
       } catch {
-        /* 增益失败就用原音频 */
       }
     }
     await this.sendMedia(ctx, { fileType: 3, source: `data:audio/mpeg;base64,${toBase64(bytes)}`, fileExt: 'mp3' });
@@ -303,7 +291,6 @@ export class ToolEngine {
     return lines.join('\n');
   }
 
-  /* ------------------------------ 入口 ------------------------------ */
 
   async exec({ tool, args, ctx, cfg }) {
     this.seq = 0;
@@ -329,7 +316,6 @@ export class ToolEngine {
       try {
         await this.sendText(ctx, `工具「${tool}」执行失败：${String(e.message).slice(0, 80)}`);
       } catch {
-        /* 连错误都发不出去就放弃 */
       }
       return { ok: false, used: this.seq, note: `工具 ${tool} 失败：${e.message.slice(0, 60)}` };
     }

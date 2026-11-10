@@ -1,5 +1,3 @@
-// 内置梗图：图片放仓库 assets/memes/*.jpg + assets/memes.json（名称→描述），
-// 部署时自动生成 SQL 导入 D1（不进 Worker 包体）。本地可用 --local 手动导入。
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { ROOT, DB_NAME, DEPLOY_CONFIG_FILE, wrangler } from './cf.mjs';
@@ -14,7 +12,6 @@ export function memeManifest() {
   return JSON.parse(readFileSync(MANIFEST, 'utf8'));
 }
 
-/** 读仓库里的图片，生成「整表替换」的 SQL */
 export function buildMemesSql() {
   const manifest = memeManifest();
   const now = new Date().toISOString();
@@ -41,7 +38,6 @@ export function buildMemesSql() {
   return { sql: lines.join('\n'), count, bytes };
 }
 
-/** 把梗图导入 D1（默认 --remote；本地开发用 --local） */
 export function syncMemes({ local = false } = {}) {
   const { sql, count } = buildMemesSql();
   mkdirSync(resolve(ROOT, '.wrangler'), { recursive: true });
@@ -53,7 +49,6 @@ export function syncMemes({ local = false } = {}) {
   return { ok: res.ok, count, output: `${res.stdout || ''}${res.stderr || ''}` };
 }
 
-// 直接运行：node scripts/memes.mjs [--local]
 if (process.argv[1] && process.argv[1].endsWith('memes.mjs')) {
   const local = process.argv.includes('--local');
   console.log(`同步内置梗图到 D1（${local ? '本地' : '线上'}）…`);

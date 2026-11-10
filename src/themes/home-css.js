@@ -1,10 +1,7 @@
 
 export const HOME_CSS = `
-/* 网格线是画在 background 里的颜色，注册成 <color> 才能在切主题时被 transition 覆盖 */
 @property --grid-line{syntax:'<color>';inherits:true;initial-value:rgba(15,23,42,.07)}
 
-/* ============================ 设计令牌 ============================ */
-/* 白天（默认） */
 .home{
   --bg:#eef1f8;
   --panel:rgba(15,23,42,.028);
@@ -14,7 +11,6 @@ export const HOME_CSS = `
   --fg:#0d1424;
   --fg-2:#4d5972;
   --fg-3:#6b7690;
-  /* 白底上必须用深一号的强调色，否则对比度不够 */
   --brand:#4f46e5;
   --brand-2:#0e7490;
   --brand-3:#7c3aed;
@@ -52,7 +48,6 @@ export const HOME_CSS = `
   --wave:rgba(99,102,241,.18);
   --wave-line:rgba(15,23,42,.09);
   --wave-line-2:rgba(15,23,42,.06);
-  /* 液态玻璃：底色几乎全透，靠边缘高光立形状 */
   --glass:rgba(255,255,255,.16);
   --glass-chip:rgba(255,255,255,.20);
   --glass-sel:rgba(255,255,255,.55);
@@ -74,7 +69,6 @@ export const HOME_CSS = `
   line-height:1.6;
   overflow-x:hidden;
 }
-/* 黑夜 */
 .home.dark{
   --bg:#05070f;
   --panel:rgba(255,255,255,.035);
@@ -121,7 +115,6 @@ export const HOME_CSS = `
   --wave:rgba(99,102,241,.30);
   --wave-line:rgba(255,255,255,.09);
   --wave-line-2:rgba(255,255,255,.06);
-  /* 黑夜同样是玻璃：底色几乎不挡光，靠白色高光描边 */
   --glass:rgba(255,255,255,.055);
   --glass-chip:rgba(255,255,255,.055);
   --glass-sel:rgba(255,255,255,.16);
@@ -134,8 +127,6 @@ export const HOME_CSS = `
   --glass-textsh:rgba(0,0,0,.55);
   --shadow:var(--sh-window);
 }
-/* 跟随系统：默认（白天）令牌已在 .home 上，这里只补系统为深色时该覆盖的部分。
-   覆盖必须放在文件末尾，靠源码顺序压过 .home.dark —— 详见文末「主题模式」一节。 */
 .home *,.home *::before,.home *::after{box-sizing:border-box}
 .home h1,.home h2,.home h3,.home h4,.home p,.home ul,.home li,.home figure{margin:0;padding:0}
 .home ul{list-style:none}
@@ -144,7 +135,6 @@ export const HOME_CSS = `
 .home b,.home strong{font-weight:650;color:var(--fg)}
 .home ::selection{background:rgba(99,102,241,.42)}
 
-/* ============================ 版心与分节 ============================ */
 .home .wrap{width:100%;max-width:var(--maxw);margin:0 auto;padding:0 24px}
 .home .sec{padding:96px 0;position:relative}
 .home .sec-head{max-width:720px;margin:0 auto 54px;text-align:center}
@@ -152,7 +142,6 @@ export const HOME_CSS = `
 .home .sec-head.left{margin:0 0 46px;text-align:left;max-width:620px}
 .home .sec-head.last{margin-bottom:34px}
 
-/* 眉标：小圆点 + 全大写字母间距 */
 .home .eyebrow{
   display:inline-flex;align-items:center;gap:8px;
   font-size:12px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;
@@ -162,7 +151,6 @@ export const HOME_CSS = `
 .home h2.title{font-size:34px;font-weight:700;letter-spacing:-.025em;line-height:1.24}
 .home .lede{font-size:15px;color:var(--fg-2);line-height:1.85;margin-top:16px}
 
-/* ============================ 按钮 ============================ */
 .home .btn{
   display:inline-flex;align-items:center;justify-content:center;gap:8px;
   padding:12px 22px;border-radius:999px;border:1px solid transparent;
@@ -180,7 +168,6 @@ export const HOME_CSS = `
 .home .btn-ghost:hover{background:var(--panel-2);border-color:var(--line-2);transform:translateY(-2px)}
 .home .btn-sm{padding:9px 18px;font-size:13px}
 
-/* ============================ 顶部导航 ============================ */
 .home .nav{
   position:sticky;top:0;z-index:40;
   backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);
@@ -205,10 +192,8 @@ export const HOME_CSS = `
 }
 .home .nav-links a:hover{color:var(--fg);background:var(--panel)}
 .home .nav .btn{margin-left:4px;flex:0 0 auto}
-/* 窄屏把「管理后台」缩成「后台」，省下来的宽度留给三个章节入口 */
 .home .nav-short{display:none}
 
-/* ============================ Hero ============================ */
 .home .hero{position:relative;padding:86px 0 96px;overflow:hidden}
 .home .glow{position:absolute;border-radius:50%;filter:blur(90px);pointer-events:none;z-index:0}
 .home .glow.g1{width:620px;height:620px;top:-320px;left:-160px;background:var(--glow-g1)}
@@ -218,7 +203,6 @@ export const HOME_CSS = `
   position:absolute;inset:0;pointer-events:none;z-index:0;
   background-image:var(--grid);
   background-size:56px 56px;
-  /* 用 --grid-line 变量画线：@property 让它能在主题切换时平滑过渡 */
   background-image:
     linear-gradient(var(--grid-line) 1px,transparent 1px),
     linear-gradient(90deg,var(--grid-line) 1px,transparent 1px);
@@ -246,7 +230,6 @@ export const HOME_CSS = `
   -webkit-background-clip:text;background-clip:text;color:transparent;
 }
 .home .hero .lede{font-size:16.5px;max-width:520px}
-/* 正文里夹的行内代码：dependencies、npm run deploy 之类，要跟普通文字区分开 */
 .home .lede code,.home .tile p code{
   font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   font-size:.9em;padding:1px 6px;border-radius:5px;
@@ -262,7 +245,6 @@ export const HOME_CSS = `
 }
 .home .fact i{width:5px;height:5px;border-radius:50%;background:var(--brand-2);flex:0 0 auto}
 
-/* ---------------------- Hero 右侧：产品界面预览 ---------------------- */
 .home .preview{position:relative}
 .home .window{
   border:1px solid var(--window-line);border-radius:var(--r);overflow:hidden;
@@ -329,7 +311,6 @@ export const HOME_CSS = `
 .home .metric span{display:block;font-size:10.5px;color:var(--fg-3);margin-top:3px}
 .home .metric .ok{color:var(--up)}
 
-/* 悬浮的小卡片，制造层次 */
 .home .float{
   position:absolute;z-index:2;display:flex;align-items:center;gap:10px;
   padding:10px 14px;border-radius:14px;border:1px solid var(--line-2);
@@ -346,13 +327,11 @@ export const HOME_CSS = `
 .home .float b{display:block;font-size:12.5px;color:var(--fg)}
 .home .float span{display:block;font-size:10.5px;color:var(--fg-3)}
 
-/* 预览图底部渐隐，避免被硬切 */
 .home .preview .window{
   -webkit-mask-image:linear-gradient(#000 94%,rgba(0,0,0,.72));
   mask-image:linear-gradient(#000 94%,rgba(0,0,0,.72));
 }
 
-/* ============================ Bento 特性区 ============================ */
 .home .bento{display:grid;grid-template-columns:repeat(6,1fr);gap:16px}
 .home .tile{
   position:relative;grid-column:span 2;overflow:hidden;
@@ -387,7 +366,6 @@ export const HOME_CSS = `
 }
 .home .step b{color:var(--fg);font-weight:600}
 
-/* 纯 CSS 装饰波纹 */
 .home .wave{
   position:absolute;right:-90px;bottom:-120px;width:320px;height:320px;border-radius:50%;
   background:radial-gradient(circle at 30% 30%,var(--wave),transparent 62%);
@@ -398,10 +376,8 @@ export const HOME_CSS = `
   border:1px solid var(--wave-line);
 }
 .home .wave::after{inset:72px;border-color:var(--wave-line-2)}
-/* 关掉动效时，波纹退回到一个静态的柔和底纹，而不是整块消失 */
 .home .wave{opacity:.85}
 
-/* ============================ 数据条 ============================ */
 .home .band{border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:linear-gradient(180deg,rgba(255,255,255,.03),transparent)}
 .home .band-in{display:grid;grid-template-columns:repeat(4,1fr)}
 .home .band .cell{padding:30px 8px;text-align:center;border-left:1px solid var(--line)}
@@ -409,7 +385,6 @@ export const HOME_CSS = `
 .home .band b{display:block;font-size:27px;font-weight:700;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
 .home .band span{display:block;font-size:12.5px;color:var(--fg-3);margin-top:5px}
 
-/* ============================ 架构流程 ============================ */
 .home .flow{display:grid;grid-template-columns:1fr 1fr;gap:56px;align-items:start}
 .home .flow-list{display:flex;flex-direction:column;gap:6px}
 .home .fitem{
@@ -426,7 +401,6 @@ export const HOME_CSS = `
 .home .fitem h4{font-size:14.5px;font-weight:600}
 .home .fitem p{font-size:13px;color:var(--fg-2);line-height:1.75;margin-top:6px}
 
-/* 01 事件接入：两条并列路径（Webhook / WebSocket） */
 .home .fitem.fork{padding-bottom:20px}
 .home .paths{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:11px}
 .home .path{
@@ -472,7 +446,6 @@ export const HOME_CSS = `
 .home .split .node .n-v{font-size:12.5px}
 .home .split .node .n-d{font-size:10.5px;word-break:break-word}
 
-/* ============================ 收尾 CTA ============================ */
 .home .final{position:relative;padding:104px 0;text-align:center;overflow:hidden}
 .home .final .glow.g4{width:760px;height:420px;left:50%;top:36%;margin-left:-380px;background:var(--glow-g4)}
 .home .final .wrap{position:relative;z-index:1}
@@ -480,7 +453,6 @@ export const HOME_CSS = `
 .home .final .cta{justify-content:center;margin-top:0}
 .home .final .lede{max-width:560px;text-align:center}
 
-/* ============================ 页脚 ============================ */
 .home .foot{border-top:1px solid var(--line);background:var(--panel);padding:26px 0}
 .home .copyright{
   text-align:center;
@@ -498,35 +470,26 @@ export const HOME_CSS = `
 .home .foot-link svg{width:15px;height:15px;opacity:.85;flex:0 0 auto}
 .home .foot-link:hover{color:var(--brand-2);border-color:var(--line-2);background:var(--panel-2)}
 
-/* ============================ 焦点可见 ============================ */
 .home a:focus-visible,.home .btn:focus-visible,.home .seg button:focus-visible{
   outline:2px solid var(--brand-2);outline-offset:3px;border-radius:8px;
 }
 
-/* ============================ 右下角控制条（液态玻璃） ============================
-   刻意不用 backdrop-filter：这里的诉求是「能看穿背景」，而 blur 恰恰是把背景糊掉。
-   玻璃感靠三样东西撑起来——很低的底色不透明度、边缘的折射高光、上亮下暗的内阴影。
-   代价是压在密集文字上会略微影响可读性，所以文字用了深色卡片阴影兜底。 */
 .home .fx-dock{
   position:fixed;right:18px;bottom:18px;z-index:60;
   display:flex;align-items:center;gap:9px;
   padding:7px 9px 7px 15px;border-radius:999px;
-  /* 比 --panel 还轻，背景要能透过来 */
   background:var(--glass);
   border:1px solid var(--glass-edge);
-  /* 外描边做折射边，两条内阴影做「玻璃厚度」：顶部反光、底部背光 */
   box-shadow:
     var(--glass-glow),
     inset 1px 1px 0 var(--glass-hi),
     inset -1px -1px 1px var(--glass-lo);
-  /* 文字在透明底上可能压到亮背景，给元素自身叠一层很淡的投影兜底 */
   filter:drop-shadow(0 1px 2px var(--glass-textsh));
 }
 .home .dock-label{
   font-size:11.5px;color:var(--fg-3);font-weight:600;
   letter-spacing:.06em;
 }
-/* 三选一开关：跟随系统 / 白天 / 黑夜 */
 .home .seg{
   display:inline-flex;align-items:center;gap:3px;
   padding:3px;border-radius:999px;
@@ -541,7 +504,6 @@ export const HOME_CSS = `
   transition:background .18s ease,color .18s ease,box-shadow .18s ease;
 }
 .home .seg button:hover{color:var(--fg);background:var(--glass-hover)}
-/* 选中态也是一个玻璃块：半透明底 + 内高光，而不是实心色块 */
 .home .seg button[aria-checked="true"]{
   background:var(--glass-sel);
   color:var(--fg);
@@ -558,7 +520,6 @@ export const HOME_CSS = `
   .home .seg button{padding:5px 9px}
 }
 
-/* ============================ 进场动效 ============================ */
 .home .reveal{opacity:1}
 @media (prefers-reduced-motion:no-preference){
   .home.motion .reveal{opacity:0;transform:translateY(var(--reveal-shift));animation:home-in .62s cubic-bezier(.22,.68,.32,1) forwards}
@@ -568,8 +529,6 @@ export const HOME_CSS = `
   .home.motion .reveal.d4{animation-delay:.27s}
   @keyframes home-in{to{opacity:1;transform:none}}
 
-  /* 光晕：位移要够大才看得出来（太小会被 blur 糊掉，等于静止）。
-     12 秒挪 90px 并配合缩放，肉眼能感到「在呼吸」。 */
   .home.motion .glow.g1{animation:home-drift 12s ease-in-out infinite alternate}
   .home.motion .glow.g2{animation:home-drift 15s ease-in-out infinite alternate-reverse}
   .home.motion .glow.g3{animation:home-drift 18s ease-in-out infinite alternate}
@@ -582,8 +541,6 @@ export const HOME_CSS = `
   .home.motion .float.f2{animation:home-bob 8.5s ease-in-out infinite reverse}
   @keyframes home-bob{from{transform:translateY(-6px)}to{transform:translateY(6px)}}
 
-  /* 波纹：真正的涟漪 —— 缩放 + 透明度从外向内衰减
-     （只改 opacity 在一团模糊图形上完全看不出来） */
   .home.motion .wave{animation:home-ripple 4.5s ease-out infinite}
   @keyframes home-ripple{
     0%{transform:scale(.62);opacity:0}
@@ -593,24 +550,18 @@ export const HOME_CSS = `
   .home.motion .wave::before{animation:home-ripple 4.5s ease-out infinite .35s}
   .home.motion .wave::after{animation:home-ripple 4.5s ease-out infinite .7s}
 
-  /* 光标：全页周期最短、最容易被注意到的一个，保留并加强亮度 */
   .home.motion .caret{animation:home-blink 1.05s steps(1,end) infinite}
   @keyframes home-blink{0%,50%{opacity:1}50.01%,100%{opacity:0}}
 
-  /* 主题按钮的点击反馈 */
   .home.motion .seg button[aria-checked="true"]{
     transition:background .18s ease,color .18s ease,box-shadow .18s ease;
   }
 }
 
-/* ============================ 主题模式 ============================ */
-/* 切换主题时让底色和文字色平滑过渡（transform 类动效不受影响） */
 .home,.home .window,.home .nav,.home .tile,.home .float,.home .node,.home .fx-dock{
   transition:background-color .28s ease,color .28s ease,border-color .28s ease;
 }
-/* 跟随系统：只在用户明确选了「跟随系统」时才生效。
    :not(.dark) 保证「手动选黑夜」在系统是浅色时依然压得住；
-   选择器权重与 .home.dark 相同，靠源码顺序（在其之后）取胜。 */
 @media (prefers-color-scheme:dark){
   .home:not(.t-light):not(.dark){
     --bg:#05070f;
@@ -663,7 +614,6 @@ export const HOME_CSS = `
   }
 }
 
-/* ============================ 响应式 ============================ */
 @media (max-width:1080px){
   .home .hero-in{grid-template-columns:1fr;gap:52px}
   .home .hero .lede{max-width:none}
@@ -673,7 +623,6 @@ export const HOME_CSS = `
   .home .diagram{position:static;top:auto}
 }
 @media (max-width:860px){
-  /* 移动端不再隐藏章节入口：收窄内边距与字号，让「功能/工作原理/部署」留在导航里 */
   .home .nav-in{gap:14px;height:60px}
   .home .nav-links{gap:0;margin-left:auto}
   .home .nav-links a{padding:7px 9px;font-size:13px}
@@ -691,7 +640,6 @@ export const HOME_CSS = `
 }
 @media (max-width:640px){
   .home .wrap{padding:0 18px}
-  /* 手机上把导航收紧：品牌只留图标+短名，三个章节入口与后台按钮都留在第一行 */
   .home .nav-in{gap:10px;height:58px}
   .home .brand{gap:8px;font-size:14px}
   .home .brand small{display:none}

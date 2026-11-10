@@ -70,15 +70,6 @@ import { signValidation, verifyWebhookSignature } from './utils/qq-sign.js';
 export { QQBotDO } from './qq-bot-do.js';
 export { RateLimiter } from './rate-limit-do.js';
 
-/**
- * 校验后台传上来的 ownerKey（scope）。
- *
- * 这些值会直接喂给 env.AIDO.idFromName() / env.CHAT.idFromName()：
- * 一个 DO 实例就是一份存储，任意字符串都能新开一个实例。
- * 不校验的话，攻击者可以用超长或畸形字符串刷出大量 DO 实例。
- *
- * 合法形态：c2c:<用户>、group:<群>:u:<用户>、以及聊天记录用的 8 位十六进制指纹。
- */
 function assertScope(raw) {
   const scope = String(raw || '');
   if (!scope) throw new HttpError(400, 'invalid_scope', '缺少 scope');
@@ -115,7 +106,6 @@ async function callBot(env, action, body) {
   return res.json();
 }
 
-/** 让旧版本 DO 实例退休：先通知它断开连接，再启动当前版本的实例 */
 async function switchDoVersion(env, force) {
   let prev = '';
   try {
@@ -130,8 +120,6 @@ async function switchDoVersion(env, force) {
     return { ok: true, switched: false, version: APP_VERSION, action: (await res.json()).action };
   }
   const retired = [];
-  // v2.4.0 之前 DO id 固定为 'main'，之后是 'bot:<version>'；
-  // v2.4.0 初版曾在升级时误建过 'bot' 实例，升级到 2.4.1 时一并退休掉。
   const oldIds = prev ? ['bot:' + prev] : ['main'];
   if (prev === '2.4.0') oldIds.push('bot');
   for (const idName of oldIds) {
@@ -180,7 +168,6 @@ async function resolveModelEndpoint(env, body) {
   return { baseUrl, apiKey };
 }
 
-/** 测试生图模型：调 OpenAI 兼容 /images/generations，返回是否可用与测试图地址 */
 async function testImageGen(baseUrl, apiKey, model) {
   try {
     const res = await fetch(`${baseUrl}/images/generations`, {
@@ -195,7 +182,6 @@ async function testImageGen(baseUrl, apiKey, model) {
     }
     const data = await res.json();
     const item = data.data?.[0] || {};
-    // b64_json 也算成功：转 data URI，预览 <img> 直接能显示
     const url = item.url || (item.b64_json ? `data:image/png;base64,${item.b64_json}` : '');
     if (!url) return { ok: false, error: '生图接口没有返回图片地址（data[0].url 为空）' };
     return { ok: true, url };
@@ -204,7 +190,6 @@ async function testImageGen(baseUrl, apiKey, model) {
   }
 }
 
-/** 测试 AI 模型配置：调 OpenAI 兼容 /chat/completions 发一句话，返回是否可用与回复 */
 async function testAiChat(baseUrl, apiKey, model, temperature) {
   const payload = {
     model,
@@ -265,11 +250,6 @@ async function handleLogin(request, env, ip) {
   );
 }
 
-/**
- * QQ Webhook 的 ACK / 验证响应一律用「裸」JSON。
- * 不能用 jsonResult()：它会把结果包成 {ok:true,data:{...}}，
- * 而 QQ 只认根节点上的 plain_token / signature / op，套一层就报「签名校验不通过」。
- */
 function qqJson(obj) {
   return new Response(JSON.stringify(obj), {
     status: 200,
@@ -277,37 +257,19 @@ function qqJson(obj) {
   });
 }
 
-/** op=12：告诉平台「已收到事件」 */
 function qqAck() {
   return qqJson({ op: 12, d: {} });
 }
 
-/**
- * op=13 回调地址验证的响应体：根节点必须是 plain_token + signature。
- * 单独抽出来为了能直接测（套一层 {ok,data} 会让平台报「签名校验不通过」）。
- */
 export async function qqValidationResponse(secret, d) {
   const signature = await signValidation(secret, d && d.event_ts, d && d.plain_token);
   return qqJson({ plain_token: d && d.plain_token, signature });
 }
 
-/**
- * QQ 开放平台 Webhook 入口（POST /qq/webhook）
- *
- * 为什么走 Webhook 而不是网关长连接：
- * QQBotDO 用出站 WebSocket 连网关时，Cloudflare 会对 ws.accept() 的对象整段连接时长计费
- * （官方：Calling accept() on a WebSocket incurs duration charges for the entire time
- * the WebSocket is connected），而且出站 WebSocket 不支持 Hibernation API。
- * 改成 Webhook 后 QQBotDO 不再持有任何长连接，处理完事件就能休眠，持续时间≈0。
- *
- * 流程：读原始字节 → 验 Ed25519 签名 → op13 回签名 / op0 交给 DO → 立刻 ACK
- * QQ 要求 3 秒内响应，否则会重试，所以业务一律丢给 DO 的 waitUntil 异步跑。
- */
 async function handleQqWebhook(request, env, ctx) {
   if (request.method !== 'POST') {
     return new Response('Method Not Allowed', { status: 405, headers: { Allow: 'POST' } });
   }
-  // 必须拿原始字节验签，先 clone 一份给后面解析用
   const body = new Uint8Array(await request.arrayBuffer());
 
   let payload = null;
@@ -318,16 +280,6 @@ async function handleQqWebhook(request, env, ctx) {
   }
   const op = Number(payload && payload.op);
 
-  /**
-   * 取 Bot Secret。
-   *
-   * 关键：**只读 secret 这一项**，不要走完整的 getConfig()。
-   * getConfig 会连带解密 AI providers、执行 migrateLegacyAi / dropLegacyKeys
-   * 这些**写操作**，任何一步抛错都会让 op=13 变成 503，
-   * 而 QQ 平台把非 200 一律显示成「签名校验不通过」—— 极易误导。
-   *
-   * 首次配置回调地址时尤其容易踩：那时库里可能还有旧的、解不开的残留数据。
-   */
   let secret = '';
   try {
     const raw = await readRawConfig(env);
@@ -337,9 +289,7 @@ async function handleQqWebhook(request, env, ctx) {
     return jsonFail(503, 'secret_unavailable', '读取 Secret 失败，请检查 CONFIG_ENC_KEY 是否与库里一致');
   }
 
-  // op=13：开放平台校验回调地址，必须用私钥对 event_ts + plain_token 签名后原样返回
   if (op === 13) {
-    // d 正常是对象；个别情况下平台会把它序列化成字符串，两种都兼容
     let d = payload.d;
     if (typeof d === 'string') {
       try {
@@ -352,10 +302,6 @@ async function handleQqWebhook(request, env, ctx) {
     if (!secret) return jsonFail(503, 'no_secret', '尚未配置 Secret');
     try {
       const res = await qqValidationResponse(secret, d);
-      // 记下「平台已校验通过」：DO 的自动模式据此把长连接停掉，改走 Webhook。
-      // ⚠ 必须挂 ctx.waitUntil：响应一返回 Worker 就会被冻结，
-      // 单纯 Promise.resolve().then(...) 这样的「发后不管」不会被调度，写库会丢，
-      // 于是平台明明校验通过了、后台却一直显示「尚未验证」。
       const markVerified = (async () => {
         await saveConfig(env, { webhookVerifiedAt: String(Date.now()) });
         await callBot(env, 'reload').catch(() => {});
@@ -373,7 +319,6 @@ async function handleQqWebhook(request, env, ctx) {
 
   if (!secret) return jsonFail(503, 'no_secret', '尚未配置 Secret');
 
-  // 其余事件一律验签，防止伪造推送
   const ok = await verifyWebhookSignature({
     secret,
     signature: request.headers.get('X-Signature-Ed25519') || '',
@@ -386,11 +331,9 @@ async function handleQqWebhook(request, env, ctx) {
   }
 
   if (op !== 0) {
-    // 心跳/鉴权类 opcode 在 Webhook 模式下没有意义，直接 ACK 掉
     return qqAck();
   }
 
-  // 转给 QQBotDO；DO 内部 waitUntil 异步处理，这里不等结果，保证 3 秒内回 ACK
   try {
     const stub = botStub(env);
     const res = await stub.fetch('https://qqbot/event', {
@@ -401,16 +344,11 @@ async function handleQqWebhook(request, env, ctx) {
     });
     if (!res.ok) console.error('webhook: DO /event HTTP', res.status);
   } catch (err) {
-    // 超时或 DO 抖动都不影响 ACK：QQ 只关心我们有没有收下
     console.error('webhook: 转发 DO 失败:', redact(String(err && err.message ? err.message : err)));
   }
   return qqAck();
 }
 
-/**
- * 后台配置读取：在库里的配置之外，补上「事件接收方式」的实时判定结果。
- * transport 是只读的 —— 由 DO 根据 QQ 开放平台的实际状态算出，后台只负责展示。
- */
 async function readPublicConfig(env) {
   const cfg = await getConfig(env, { decrypt: false });
   const pub = toPublicConfig(cfg);
@@ -494,7 +432,7 @@ async function handleApi(request, env, url) {
     case '/api/config': {
       if (method === 'GET') return jsonResult(await readPublicConfig(env));
       const body = await readJson(request);
-      delete body.transport; // 只读字段，忽略前端误传
+      delete body.transport;
       const result = await saveConfig(env, body);
       if (!result.ok) throw new HttpError(400, 'invalid_config', result.error);
       let botReloaded = false;
@@ -508,7 +446,6 @@ async function handleApi(request, env, url) {
     case '/api/detect-platform': {
       if (method !== 'POST') throw new HttpError(405, 'method_not_allowed', '请使用 POST');
       const body = await readJson(request).catch(() => ({}));
-      // 明确指定要切到哪个方向时直接执行，否则只做检测
       const target = body && (body.action === 'to-ws' || body.action === 'to-webhook') ? body.action : 'detect';
       const qs = target === 'detect' ? '' : `?action=${target}`;
       return jsonResult(await callBot(env, `detect-platform${qs}`));
@@ -629,7 +566,6 @@ async function handleApi(request, env, url) {
       }
       break;
 
-    /* -------- 群管理 -------- */
 
     case '/api/groups':
       if (method === 'GET') {
@@ -674,7 +610,6 @@ async function handleApi(request, env, url) {
     }
 
     case '/api/groups/reply': {
-      // 开/关本机器人在某个群的回复（写入 groupBlacklist 配置）
       if (method !== 'POST') throw new HttpError(405, 'method_not_allowed', '请使用 POST');
       const body = await readJson(request);
       const openid = String(body?.openid || '').trim();
@@ -684,7 +619,6 @@ async function handleApi(request, env, url) {
       const list = String(cfg.groupBlacklist || '').split(/[,，]/).map((s) => s.trim()).filter(Boolean);
       const next = enabled ? list.filter((s) => s !== openid) : [...new Set([...list, openid])];
       await saveConfig(env, { groupBlacklist: next.join(',') });
-      // 立刻让 DO 重读配置，不等每分钟的巡检（失败也不影响：巡检 1 分钟内会兜底）
       try {
         await callBot(env, 'reload-quiet');
       } catch {}
@@ -732,7 +666,6 @@ async function handleApi(request, env, url) {
       }
       const members = [{ member_openid: memberOpenid, op }];
       if (op !== 'del') {
-        // QQ 要求 RFC3339；把时间戳加 8 小时后按 UTC 格式化，墙钟即东八区
         const expire = new Date(Date.now() + minutes * 60000 + 8 * 3600 * 1000);
         members[0].mute_expire_at = expire.toISOString().replace(/\.\d{3}Z$/, '+08:00');
       }
@@ -743,7 +676,6 @@ async function handleApi(request, env, url) {
       return jsonResult({ openid, memberOpenid, op });
     }
 
-    /* -------- AiDO 沙箱 -------- */
 
     case '/api/sandboxes': {
       if (method !== 'GET') throw new HttpError(405, 'method_not_allowed', '请使用 GET');
@@ -786,7 +718,6 @@ async function handleApi(request, env, url) {
       return jsonResult({ cleared: true });
     }
 
-    /* -------- 用户记忆（ChatDO 三层：原文/摘要/事实） -------- */
 
     case '/api/memory': {
       if (method !== 'POST') throw new HttpError(405, 'method_not_allowed', '请使用 POST');
@@ -815,7 +746,6 @@ async function handleApi(request, env, url) {
       return jsonResult({ cleared: true });
     }
 
-    /* -------- AI 工作区 -------- */
 
     case '/api/workspaces': {
       if (method !== 'GET') throw new HttpError(405, 'method_not_allowed', '请使用 GET');
@@ -859,7 +789,6 @@ async function handleApi(request, env, url) {
       return jsonResult({ cleared: true });
     }
 
-    /* -------- 定时提醒 -------- */
 
     case '/api/reminders':
       if (method === 'GET') {
@@ -957,7 +886,6 @@ function base64Bytes(b64) {
   return out;
 }
 
-/** 站点图标路由：/favicon.svg、/favicon.ico、/favicon-32.png、/apple-touch-icon.png */
 const ICON_ROUTES = {
   '/favicon.svg': { type: 'image/svg+xml; charset=utf-8', body: () => FAVICON_SVG },
   '/favicon.ico': { type: 'image/x-icon', body: () => base64Bytes(FAVICON_ICO) },
@@ -965,7 +893,6 @@ const ICON_ROUTES = {
   '/apple-touch-icon.png': { type: 'image/png', body: () => base64Bytes(APPLE_TOUCH_PNG) },
 };
 
-/** 汇总各 Durable Object 的绑定与实例情况（给后台「连接详情」用） */
 async function doStatuses(env, data) {
   const count = async (sql) => {
     try {
@@ -977,13 +904,10 @@ async function doStatuses(env, data) {
   };
   const workN = await count('SELECT COUNT(*) AS n FROM workspaces');
   const sandboxN = await count('SELECT COUNT(*) AS n FROM sandboxes');
-  // chat_log 里出现过的会话数 ≈ ChatDO 实例数（按需创建，闲置会休眠）
   const chatN = await count('SELECT COUNT(DISTINCT scope_id) AS n FROM chat_log');
   const bound = (ns) => !!(ns && typeof ns.idFromName === 'function');
   const running = !!(data && data.running);
   const byWebhook = !!(data && data.transport === 'webhook');
-  // Webhook 模式下没有常驻连接，running 只代表「接收开关开着」。
-  // 这时写「运行中」会让人以为还有常驻实例在跑，所以按模式换措辞。
   const botState = byWebhook
     ? (running ? '已启用（按需唤醒）' : '已停用')
     : (running ? '运行中（常驻连接）' : '已停止');
@@ -1000,8 +924,6 @@ async function handle(request, env, ctx) {
   const url = new URL(request.url);
   const path = url.pathname;
 
-  // QQ 开放平台的事件推送：必须在所有鉴权/建表逻辑之前处理
-  // （QQ 不带任何 Cookie，也要尽快 ACK，3 秒内不响应会被重试）
   if (path === '/qq/webhook') {
     try {
       return await handleQqWebhook(request, env, ctx);
@@ -1026,9 +948,6 @@ async function handle(request, env, ctx) {
 
   const missingSecrets = ['ADMIN_TOKEN', 'CONFIG_ENC_KEY'].filter((k) => !env[k]);
 
-  // 没有 D1 绑定：后面所有 env.DB.prepare 都会抛 TypeError，被全局 catch 包成
-  // internal_error，用户只看到「服务器内部错误」，根本猜不到是缺绑定。
-  // 这里提前拦下来，给出能直接照做的说明。
   if (!env.DB) {
     const tip =
       'D1 数据库未绑定（env.DB 不存在）。常见原因：部署命令用了 npx wrangler deploy 而不是 npm run deploy，' +
@@ -1090,14 +1009,11 @@ async function handle(request, env, ctx) {
   }
 
   if (path === '/login' && request.method === 'GET') {
-    // 已登录直接进后台首页，不用再看登录表单
     if (await requireSession(request, env)) return redirect('/status');
     const nonce = randomHex(16);
     return htmlResponse(loginPage(nonce), nonce);
   }
 
-  // 后台页面：/status、/config、/ai、/groups、/workspace、/logs（生图已并入 /ai）
-  // 必须登录才能访问，未登录一律跳 /login（不带任何参数）。
   const ADMIN_PATHS = new Set(['status', 'config', 'ai', 'groups', 'workspace', 'logs']);
   const seg = path.slice(1);
   const isAdminPage =
@@ -1126,10 +1042,6 @@ export default {
     }
   },
 
-  /**
-   * cron 触发器已移除（见 wrangler.toml 注释），保活与提醒全部由 DO 的 alarm 驱动。
-   * 保留这个 handler 是为了「有人在 Cloudflare 后台手动加回 cron」时不至于报错。
-   */
   async scheduled(event, env, ctx) {
     ctx.waitUntil(ensureBot(env));
   },

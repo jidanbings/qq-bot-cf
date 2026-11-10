@@ -1,5 +1,3 @@
-// 本地开发启动器：确保 .wrangler/deploy.toml（含 D1 绑定）存在，再起 wrangler dev。
-// 本地 D1 是独立的 sqlite，database_id 用固定占位值即可（不需要真实库 ID）。
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { ROOT, DEPLOY_CONFIG_FILE, buildDeployConfig, wrangler } from './cf.mjs';

@@ -1,11 +1,3 @@
-/**
- * 定时提醒的时间解析（北京时间 +08:00）。
- * 支持的说法：
- *   - 「10 分钟后提醒我喝水」「半小时后叫我开会」
- *   - 「今天 18:30 提醒我下班」「明天 8:00 提醒我开会」「后天提醒我体检」+ 点
- *   - 「每天 8:00 提醒我背单词」「每周一 9:00 提醒我周会」
- * 解析结果：{ dueAt: ISO, text: 提醒内容, repeatRule: 'daily'|'weekly:N'|null, whenText }
- */
 
 const TRIGGER = /(?:提醒我一下|提醒一下我|提醒一下|提醒我|叫我一下|叫我|记得提醒我|记得提醒)/;
 const TZ_MS = 8 * 3600 * 1000;
@@ -31,7 +23,6 @@ function bjNow(nowMs) {
   return { y: d.getUTCFullYear(), mo: d.getUTCMonth() + 1, d: d.getUTCDate(), h: d.getUTCHours(), mi: d.getUTCMinutes() };
 }
 
-/** 北京时间某年月日时分 → UTC 毫秒（Date.UTC 负责处理跨天溢出） */
 function bjInstant(y, mo, d, h, mi) {
   return Date.UTC(y, mo - 1, d, h, mi) - TZ_MS;
 }
@@ -45,7 +36,6 @@ const WEEKDAY_CN = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 日: 7, 天
 const WEEKDAY_NAME = ['', '一', '二', '三', '四', '五', '六', '日'];
 
 function bjWeekday(nowMs) {
-  // getUTCDay: 0=周日 … 6=周六 → 转 ISO 1..7
   return ((new Date(nowMs + TZ_MS).getUTCDay() + 6) % 7) + 1;
 }
 
@@ -81,7 +71,6 @@ export function parseReminder(content, nowMs = Date.now()) {
   const s = String(content || '').replace(/\s+/g, ' ').trim();
   if (!s || !TRIGGER.test(s)) return null;
 
-  // 1) 相对时间：N 分钟/小时/秒后（「半小时后」= 30 分钟）
   const rel = /([0-9]+|[一二两三四五六七八九十半]+)\s*(秒钟|秒|分钟|分|小时|个小时)\s*后/.exec(s);
   if (rel) {
     const half = rel[1] === '半';
@@ -100,7 +89,6 @@ export function parseReminder(content, nowMs = Date.now()) {
     }
   }
 
-  // 2) 每天 hh:mm
   const daily = /每天\s*([0-9]{1,2}|[一二两三四五六七八九十]{1,2})\s*[:：点时]\s*([0-9]{1,2}|[一二三四五六七八九十]{1,2})?\s*分?/.exec(s);
   if (daily) {
     const h = toInt(daily[1]);
@@ -118,7 +106,6 @@ export function parseReminder(content, nowMs = Date.now()) {
     }
   }
 
-  // 3) 每周X hh:mm
   const weekly = /每(?:周|星期)([一二三四五六日天])\s*([0-9]{1,2}|[一二两三四五六七八九十]{1,2})\s*[:：点时]\s*([0-9]{1,2}|[一二三四五六七八九十]{1,2})?\s*分?/.exec(s);
   if (weekly) {
     const wd = WEEKDAY_CN[weekly[1]];
@@ -137,7 +124,6 @@ export function parseReminder(content, nowMs = Date.now()) {
     }
   }
 
-  // 4) 今天/明天/后天 + hh:mm（不写日期时：过点就顺延到明天）
   const abs = /(今天|今晚|今早|明天|明早|明晚|后天)?\s*([0-9]{1,2}|[一二两三四五六七八九十]{1,2})\s*[:：点时]\s*([0-9]{1,2}|[一二三四五六七八九十]{1,2})?\s*分?/.exec(s);
   if (abs) {
     const dayWord = abs[1] || '';
@@ -162,7 +148,6 @@ export function parseReminder(content, nowMs = Date.now()) {
   return null;
 }
 
-/** 重复任务：算出下一次到期时间（错过多次会自动追上） */
 export function nextDueFrom(repeatRule, dueIso, nowMs = Date.now()) {
   const due = new Date(dueIso).getTime();
   if (!Number.isFinite(due)) return null;

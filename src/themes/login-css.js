@@ -41,7 +41,6 @@ h1{font-size:20px;font-weight:650;letter-spacing:-.01em}
 .msg.ok{color:var(--green)}
 .foot{margin-top:24px;padding-top:16px;border-top:1px solid var(--border);font-size:12px;color:var(--muted)}
 
-/* ---------------- 未配置页（缺 Worker Secrets 时显示） ---------------- */
 .setup{width:100%;max-width:620px;background:var(--surface);border:1px solid var(--border);border-radius:18px;box-shadow:0 1px 2px rgba(16,24,40,.04),0 18px 48px rgba(16,24,40,.09);padding:36px 34px 30px;text-align:left}
 .setup .head{text-align:center;margin-bottom:24px}
 .setup .badge{display:inline-flex;align-items:center;gap:7px;padding:5px 13px;border-radius:999px;background:#fef3c7;color:var(--amber);font-size:12px;font-weight:600;margin-bottom:16px}

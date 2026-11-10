@@ -1,22 +1,8 @@
-/**
- * AiDO —— 给 AI 的最高权限沙箱（一个会话一个实例）。
- *
- * 设计边界（写进系统提示词，也由代码强制执行）：
- * - 只能读写自己实例内的虚拟文件系统（最多 20 个文件、单文件 8KB、总量 40KB）
- * - 不能发 QQ 消息、不能访问网络、不能调用其他 DO、不能执行任意代码或命令
- * - 每轮最多执行 4 个文件操作，最多 6 轮，避免死循环
- *
- * AI 通过 [ENV]{"op":...} 行申请操作，沙箱执行后把结果喂回去，直到它给出最终答案。
- */
 import { withRetry } from './utils/retry.js';
 
 const META = 'meta';
 const FILE_PREFIX = 'file:';
 const LEGACY_KEY = 'sandbox';
-// 按 Cloudflare SQLite 型 DO 的真实上限设定，不再人为压小：
-//   - 单个 key+value 合计上限 2MB → 单文件取 1.9MB，留一点给 key 与元数据
-//   - 每个 DO 存储上限 10GB → 总量取 1GB（远低于上限，避免单实例被塞满影响其它会话）
-//   - 文件数不设死，按总量兜底
 const MAX_FILES = 5000;
 const MAX_FILE_BYTES = 1.9 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 1024 * 1024 * 1024;
@@ -62,12 +48,10 @@ function safePath(p) {
   return s;
 }
 
-/** 每个用户的文件根目录：users/<masked-openid>/ */
 function userBase(sb) {
   return sb && sb.owner ? `users/${sb.owner}/` : '';
 }
 
-/** 把用户/AI 给的相对路径解析成真实存储路径（已带 users/ 前缀的保持不变） */
 function resolveIn(sb, p) {
   const s = safePath(p);
   if (!s) return null;
@@ -75,7 +59,6 @@ function resolveIn(sb, p) {
   return userBase(sb) + s;
 }
 
-/** 把毫秒时间戳格式化成「2026-10-27 22:07」，给 AI 和后台共用 */
 function fmtTime(ms) {
   const n = Number(ms);
   if (!n) return '';
@@ -84,13 +67,6 @@ function fmtTime(ms) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
-/**
- * 把沙箱文件清单渲染成给 AI 看的纯文本。
- *
- * 刻意用「一行一个文件」而不是 Markdown 表格：表格在手机 QQ 里会被折行折成一团，
- * 而且模型照抄表格时很容易把「修改时间」写成「暂不可知」这类占位符。
- * 每行都带真实时间，模型就没有编造的余地。
- */
 function renderFiles(sb) {
   const paths = Object.keys(sb.files);
   if (!paths.length) return '\n\n【当前沙箱】\n文件：（空）';
@@ -111,7 +87,6 @@ export function parseEnvOps(text) {
     const line = lines[i];
     const trimmed = line.trim();
 
-    // 块语法：[ENV:WRITE path="a.md"] … [/ENV]
     const block = /^\[ENV:(WRITE|APPEND)\s+path="([^"]+)"\s*\]$/i.exec(trimmed);
     if (block) {
       const path = block[2];
@@ -122,7 +97,6 @@ export function parseEnvOps(text) {
         content.push(lines[j]);
       }
       if (j >= lines.length) {
-        // 没有结束标记：当作普通文本，避免吞掉后续内容
         kept.push(line);
         continue;
       }
@@ -140,7 +114,6 @@ export function parseEnvOps(text) {
         const op = JSON.parse(trimmed.slice(5).trim());
         if (op && typeof op.op === 'string') ops.push(op);
       } catch {
-        /* 解析失败丢弃该行 */
       }
       continue;
     }
@@ -164,7 +137,6 @@ export function applyEnvOps(sb, ops) {
         if (!paths.length) {
           results.push('文件列表：（空）');
         } else {
-          // 每行带上大小与修改时间，模型直接照着转述即可，不需要自己编
           const lines = paths.map((p) => {
             const t = fmtTime((sb.fileMeta || {})[p]);
             const b = Buffer.byteLength(sb.files[p], 'utf8');
@@ -251,9 +223,7 @@ export class AiDO {
       const list = await this.state.storage.list({ prefix: FILE_PREFIX });
       for (const [k, v] of list) files[k.slice(FILE_PREFIX.length)] = String(v);
     } catch {
-      /* 测试环境 / 旧实例不支持 list 时留空 */
     }
-    // 兼容旧版：整包存在 'sandbox' 里的数据迁移过来
     if (!Object.keys(files).length) {
       try {
         const legacy = await this.state.storage.get(LEGACY_KEY);
@@ -268,18 +238,13 @@ export class AiDO {
           await this.state.storage.delete(LEGACY_KEY);
         }
       } catch {
-        /* ignore */
       }
     }
-    // 每个文件的最后修改时间：{ 路径: 毫秒时间戳 }。
-    // 不记这个的话 file.list / getState 只能给出路径和大小，AI 被问到「什么时候改的」
-    // 就只能编一张「系统未返回修改时间，暂不可知」的表格糊弄用户。
     const fileMeta = meta.fileMeta && typeof meta.fileMeta === 'object' ? meta.fileMeta : {};
     return {
       files,
       fileMeta,
       owner: typeof meta.owner === 'string' ? meta.owner : '',
-      // scope/kind 存下来，putFile 这类不带参数的写入也能同步 D1 索引
       scope: typeof meta.scope === 'string' ? meta.scope : '',
       kind: typeof meta.kind === 'string' ? meta.kind : '',
       runs: Number(meta.runs) || 0,
@@ -288,20 +253,16 @@ export class AiDO {
     };
   }
 
-  /** 只写有变化的文件 + 元信息（before 是操作前的文件快照） */
   async save(sb, before) {
     sb.updatedAt = Date.now();
     const prev = before || {};
     const puts = {};
-    // 逐个文件记下改动时间：新建的、内容变了的都刷成 now；删掉的清掉记录。
-    // 没变的保持原来的时间，避免「读一次目录所有文件时间都变成现在」。
     const fileMeta = { ...(sb.fileMeta || {}) };
     for (const [p, v] of Object.entries(sb.files)) {
       if (prev[p] !== v) {
         puts[FILE_PREFIX + p] = v;
         fileMeta[p] = sb.updatedAt;
       } else if (!fileMeta[p]) {
-        // 老数据没有记录：用沙箱的 updatedAt 兜底，保证界面上永远有时间可显示
         fileMeta[p] = sb.updatedAt;
       }
     }
@@ -363,7 +324,6 @@ export class AiDO {
     const basePrompt = String(systemPrompt || '') + AIDO_ENV_RULES + renderFiles(sb);
     const messages = [
       { role: 'system', content: basePrompt },
-      // 上限 16000：用户发来的文件全文会拼进 task，太小会截断导致 AI 瞎编
       { role: 'user', content: String(task || '').slice(0, 16000) },
     ];
 
@@ -377,7 +337,6 @@ export class AiDO {
       for (const provider of providers || []) {
         try {
           raw = await this.callProvider(provider, messages);
-          // 记下真正跑通的那个 provider，后台聊天记录要显示它的模型名
           usedProvider = provider;
           break;
         } catch (e) {
@@ -416,7 +375,6 @@ export class AiDO {
       });
     }
 
-    // 闸门：任务里没有「发送文件」的意图时，不允许把文件推给用户（防止每问一句都发同一个文件）
     const wantsSend = /(发我|发给我|发一下|发过来|发送|给我|附件|下载|传给我|导出|打包|zip)/i.test(String(task || ''));
     if (!wantsSend && sendQueue.length) {
       sendQueue.length = 0;
@@ -433,24 +391,15 @@ export class AiDO {
       files: Object.keys(sb.files).length,
       runs: sb.runs,
       send: sendQueue,
-      // 实际跑通的模型，后台聊天记录用这个显示（而不是写死 "AiDO"）
       model: usedProvider ? `${usedProvider.name} · ${usedProvider.model}` : '',
     };
   }
 
-  /**
-   * 只把这个人登记进后台索引，不执行任务、不写文件。
-   *
-   * 为什么需要：工作区页面是按索引表列人的。用户只是普通聊天、没让我写过文件时，
-   * 索引里就没有他，后台看不到这个人 —— 但实际上他早就在用机器人了。
-   * 所以每次对话都轻轻登记一下（已存在就只更新 lastTask，不动 files/runs/updatedAt）。
-   */
   async touch({ scope, kind, owner, lastTask }) {
     const sb = await this.load();
     if (owner && !sb.owner) sb.owner = String(owner).slice(0, 32);
     const task = String(lastTask || '').slice(0, 120);
     await this.syncIndex(scope || sb.scope || '', kind || sb.kind || 'group', sb, task, {
-      // touch 不刷新 updatedAt，避免「聊一句天」就把工作区时间顶到最新
       keepUpdatedAt: true,
     });
     return { ok: true };
@@ -481,9 +430,7 @@ export class AiDO {
       files: Object.keys(sb.files).map((p) => ({
         path: p,
         bytes: Buffer.byteLength(sb.files[p], 'utf8'),
-        // 每个文件真实的最后修改时间（毫秒），后台与 AI 都靠它
         updatedAt: Number((sb.fileMeta || {})[p]) || sb.updatedAt || 0,
-        // 后台预览：单文件最多 4KB
         content: sb.files[p].slice(0, 4000),
       })),
       runs: sb.runs,
@@ -491,24 +438,10 @@ export class AiDO {
     };
   }
 
-  /**
-   * 直接写入一个文件（不经 AI）。
-   *
-   * 用途：用户发来文件时说「存进我的目录」，这件事不需要模型参与 ——
-   * 让模型做反而容易建出空文件。由代码按原始文件名直接落盘，准确且省 token。
-   *
-   * 限制与 AI 写入一致：单文件 1.9MB、总量 1GB、最多 5000 个；
-   * 路径自动归档到 users/<编号>/ 下，保持隐私隔离。
-   *
-   * scope / kind 用来同步 D1 索引（后台工作区靠它统计文件数）。
-   */
   async putFile({ name, content, path, owner, scope, kind }) {
     const sb = await this.load();
-    // 先设 owner：resolveIn 依赖 sb.owner 拼出 users/<编号>/ 前缀，
-    // 不设的话文件会落到根目录，和 getState/readFile 的路径对不上。
     if (owner) sb.owner = String(owner).slice(0, 32);
     const rawName = String(name || '').trim() || 'upload.txt';
-    // 只取 basename，防止传进来的名字带路径跳出用户目录
     const base = rawName.replace(/\\/g, '/').split('/').pop().slice(0, 80) || 'upload.txt';
     const target = resolveIn(sb, String(path || base));
     if (!target) return { error: '非法文件名' };
@@ -527,7 +460,6 @@ export class AiDO {
     if (scope) sb.scope = String(scope).slice(0, 120);
     if (kind) sb.kind = String(kind).slice(0, 16);
     await this.save(sb, before);
-    // 必须同步 D1 索引，否则后台工作区的文件数会停在旧值
     await this.syncIndex(sb.scope || '', sb.kind || '', sb, sb.lastTask || '');
     return { ok: true, path: target, bytes: Buffer.byteLength(text, 'utf8') };
   }
@@ -542,7 +474,6 @@ export class AiDO {
         const v = await this.state.storage.get(FILE_PREFIX + p);
         if (typeof v === 'string') return { path: p, content: v, bytes: Buffer.byteLength(v, 'utf8') };
       } catch {
-        /* ignore */
       }
     }
     return { error: '文件不存在' };
@@ -554,7 +485,6 @@ export class AiDO {
       const keys = [...list.keys()];
       if (keys.length) await this.state.storage.delete(keys);
     } catch {
-      /* ignore */
     }
     await this.state.storage.delete(META);
     await this.state.storage.delete(LEGACY_KEY).catch?.(() => {});

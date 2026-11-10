@@ -1,56 +1,20 @@
-/**
- * 聊天 Durable Object（ChatDO）：每个会话一个实例，负责上下文与模型调用。
- *
- * QQBotDO 只管 QQ 收发和工具；上下文、分层记忆压缩、按优先级调 AI（含识图过滤、
- * 重试、故障转移）都在这里。同一会话天然串行，慢请求（带图 180s）不卡别的群。
- *
- * 分层记忆三层：
- *   messages   最近 N 条原文（短期）      —— 逐字保真，负责当前话题
- *   summary    滚动摘要 ≤1500 字（中期）  —— 覆盖已滚出的历史
- *   facts      结构化长期事实（长期）      —— 按槽位覆盖更新，负责「这个人是谁」
- *
- * 每累积 20 条才压缩一次；压缩失败一律回滚，宁可这轮不压，也不能丢消息却没摘要。
- */
 import { withRetry } from './utils/retry.js';
 import { providerSupportsVision } from './utils/vision.js';
 
 const PREFIX = 'chat:';
 const MAX_KEYS = 500;
 
-/** 摘要字数上限：够记下很长的脉络 */
 const SUMMARY_MAX = 20000;
-/** 长期事实条数上限，超出时淘汰最旧的 */
 const FACTS_MAX = 40;
-/** 单条事实长度上限：有的项目描述很长，给足空间 */
 const FACT_MAX_LEN = 400;
-/** 每累积多少「条消息」才允许触发一次压缩（按消息数算比按轮数稳） */
 const COMPRESS_EVERY = 20;
-/**
- * 压缩的「最低水位」：消息数超过 limit 的这么多倍才压。
- *
- * 为什么需要：原来只要超过 limit 就压，等于每轮对话都要调 2 次 AI（摘要 + 事实），
- * token 消耗是对话本身的 2~3 倍。实际不需要这么勤——多留一些原文反而更准，
- * 摘要压缩本质是「省 token」，太频繁就本末倒置了。
- * 设成 3 倍：limit=10 时攒到 30 条才压，压缩频率降到原来的 1/3。
- */
 const COMPRESS_WATERMARK = 3;
-/** 压缩冷却时间：两次压缩至少间隔这么久，防止短时间狂聊时被反复触发 */
 const COMPRESS_COOLDOWN_MS = 10 * 60 * 1000;
-/** 最近消息层的字符预算：一条贴进来的长文就能顶几十轮，光看条数会撑爆上下文 */
 const HISTORY_CHAR_BUDGET = 12000;
-/** 长期事实注入时的字符预算：事实长了也不能无脑全塞进每次请求 */
 const FACTS_CHAR_BUDGET = 4000;
 
-/**
- * 长期事实的「槽位」。
- *
- * 为什么需要：事实是随时会被推翻的（"在杭州" → "搬到上海了"）。
- * 没有槽位就是两条并存，模型每次看到都要自己猜哪个有效。
- * 有槽位就能「后者替换前者」，同一个槽位永远只有一条最新值。
- */
 const FACT_SLOTS = ['name', 'city', 'job', 'stack', 'project', 'like', 'dislike', 'date', 'other'];
 
-/** AI 输出的「槽位|内容」或「槽位：内容」格式 */
 const FACT_SLOT_RE = /^([a-z_]{2,12})\s*[|｜:：]\s*(.+)$/i;
 
 const SUMMARY_PROMPT =
@@ -65,10 +29,6 @@ const FACTS_PROMPT =
   '例子：name|用户叫小王；city|用户在杭州；dislike|讨厌 Java。\n' +
   '只抽稳定信息，不要抽一次性的问题、闲聊内容、临时情绪。没有值得记的就只输出「无」。';
 
-/**
- * 解析「一次性产出摘要 + 事实」的合并回复。
- * 格式不对时尽量兜底：整段当摘要，事实留空（摘要才是主线）。
- */
 function splitSummaryAndFacts(raw) {
   const s = String(raw || '').trim();
   if (!s) return { summary: '', facts: '' };
@@ -83,11 +43,9 @@ function splitSummaryAndFacts(raw) {
     };
   }
 
-  // 模型没按格式走：整段当摘要，事实靠下面的启发式兜一下
   return { summary: s, facts: '' };
 }
 
-/** 归一化：去多余空白与常见标点差异，用于判重 */
 function normFact(s) {
   return String(s || '')
     .replace(/\s+/g, '')
@@ -95,12 +53,6 @@ function normFact(s) {
     .trim();
 }
 
-/**
- * 解析 AI 抽出来的一行事实。
- * 兼容两种：带槽位的「city|用户在杭州」、不带槽位的历史格式「用户在杭州」。
- * 只有显式带槽位才参与「同槽位替换」；裸文本按老办法判重追加，
- * 否则像「事实编号1」「事实编号2」这种会被错误地当成同一条而互相覆盖。
- */
 function parseFactLine(line) {
   const raw = String(line || '').replace(/^[-*•\d.\s]+/, '').trim();
   if (!raw || raw === '无') return null;
@@ -109,18 +61,11 @@ function parseFactLine(line) {
     const slot = m[1].toLowerCase();
     const text = m[2].trim();
     if (text && FACT_SLOTS.includes(slot)) return { slot, text };
-    // 槽位不认识就整行当内容，别把「姓名：小王」里的「姓名」切掉
   }
   if (raw.length > FACT_MAX_LEN) return null;
   return { slot: '', text: raw };
 }
 
-/**
- * 把旧摘要压到 n 字：保留开头和结尾，砍中间。
- *
- * 为什么不是只留开头：「开头」是最早的话题，最新丢失的信息反而在尾部。
- * 中间通常是过程细节，砍掉损失最小。
- */
 function compactOldSummary(s, n) {
   const str = String(s || '');
   if (str.length <= n) return str;
@@ -169,9 +114,6 @@ export class ChatDO {
 
   async save(key, session) {
     session.lastUsed = Date.now();
-    // DO 单个值上限约 128KB。摘要放宽到 2 万字后，单是摘要就可能占 60KB，
-    // 真撞上限时按「先裁 messages，再压缩摘要，最后才动 facts」的顺序腾地方 ——
-    // facts 是最贵的信息（要跨几十轮才能重新学到），宁可少留原文也不能丢。
     const byteLen = () => JSON.stringify(session).length;
     if (byteLen() > 110000) {
       while (session.messages.length > 2 && byteLen() > 110000) {
@@ -179,28 +121,16 @@ export class ChatDO {
       }
     }
     if (byteLen() > 110000 && session.summary && session.summary.length > 2000) {
-      // 摘要还在超：留头留尾砍中间，保住最早的人设和最新进展
       session.summary = compactOldSummary(session.summary, Math.max(2000, Math.floor(session.summary.length / 2)));
     }
     this.cache.set(key, session);
     await this.state.storage.put(PREFIX + key, session);
   }
 
-  /**
-   * 是否该压缩了。
-   *
-   * 三个条件同时满足才压，任何一条不满足就继续攒原文：
-   *   1. 消息数超过「limit × 水位」—— 光超 limit 一点不急着压，多留原文更准
-   *   2. 距上次压缩满 20 条 —— 压缩是调 2 次 AI 的贵操作，不能每轮都来
-   *   3. 距上次压缩过了冷却期 —— 防止短时间狂聊被反复触发
-   *
-   * 例外：消息数超过 limit 的 10 倍时无条件压，避免上下文无限膨胀。
-   */
   shouldCompress(session, limit, now = Date.now()) {
     const over = session.messages.length - limit;
     if (over <= 0) return false;
 
-    // 极端情况兜底：涨到 10 倍必须压，否则迟早撑爆上下文
     if (session.messages.length > limit * 10) return true;
 
     if (over < limit * (COMPRESS_WATERMARK - 1)) return false;
@@ -212,13 +142,6 @@ export class ChatDO {
     return true;
   }
 
-  /**
-   * 把 messages 里超出 limit 的部分滚进 summary / facts。
-   *
-   * 关键约束：**只有压缩成功才真正移除旧消息**。
-   * 原实现先 splice 再异步生成摘要，一旦摘要失败，那批消息就永久没了。
-   * 现在改成：先算要滚出的部分 → 生成摘要/事实 → 成功后才 splice + 落盘。
-   */
   async compress(key, session, limit, provider) {
     const over = session.messages.length - limit;
     if (over <= 0) return { compressed: 0 };
@@ -238,9 +161,6 @@ export class ChatDO {
     if (!provider) return { compressed: 0, reason: 'no-provider' };
 
     try {
-      // 一次调用同时拿摘要和事实：把两份指令合成一个请求。
-      // 原来并行发两次请求，同样的聊天记录要付两遍 input token；
-      // 合成一次后 input 只算一份，输出也就多几十个字，综合更省。
       const combined = await this.chatOnce(provider, [
         {
           role: 'system',
@@ -264,8 +184,6 @@ export class ChatDO {
 
       if (!newSummary) throw new Error('摘要为空');
 
-      // 摘要：旧摘要 + 新摘要。超长时旧摘要「留头留尾、砍中间」，
-      // 不能只截开头——最新发生的事在尾部，砍掉尾部等于把刚聊的丢了。
       if (newSummary) {
         const merged = [session.summary, newSummary].filter(Boolean).join('；');
         if (merged.length <= SUMMARY_MAX) {
@@ -278,7 +196,6 @@ export class ChatDO {
         }
       }
 
-      // 长期事实：解析成结构化条目，按槽位覆盖写回
       if (newFacts) {
         const parsed = newFacts
           .split('\n')
@@ -287,7 +204,6 @@ export class ChatDO {
         this.mergeFacts(session, parsed);
       }
 
-      // 到这里才算成功：真正移除旧消息
       session.messages.splice(0, over);
       session.sinceCompress = 0;
       session.lastCompressAt = Date.now();
@@ -297,22 +213,11 @@ export class ChatDO {
       );
       return { compressed: over };
     } catch (e) {
-      // 失败：消息原样保留，等下次再试
       this.logger.warn(`compress failed (kept ${over} msgs): ${e.message}`);
       return { compressed: 0, error: e.message };
     }
   }
 
-  /**
-   * 把新事实合并进 session.facts。
-   *
-   * 两条规则：
-   *   1. 带槽位的事实 → 覆盖同槽位的旧值（"在杭州" 被 "搬到上海了" 换掉），
-   *      这样模型看到的信息永远是当前有效的，不用自己判断哪条更新。
-   *   2. 不带槽位的裸文本 → 精确判重后追加（兼容老数据与手工写入）。
-   *
-   * 判重必须精确比对，不能用 includes：否则「编号1」会被「编号10」吞掉。
-   */
   mergeFacts(session, parsed) {
     if (!Array.isArray(parsed) || !parsed.length) return;
     if (!Array.isArray(session.facts)) session.facts = [];
@@ -324,14 +229,11 @@ export class ChatDO {
       const slot = String(f.slot || '');
 
       if (slot) {
-        // 同槽位：就地替换，保留这一条的位置（不排到末尾），
-        // 否则「最近更新」的顺序会被打乱，超限淘汰时容易先把别的新事实挤掉。
         const idx = session.facts.findIndex((x) => x && x.slot === slot);
         if (idx >= 0) {
           if (normFact(session.facts[idx].text) !== normFact(text)) {
             session.facts[idx] = { ...session.facts[idx], text, at: now };
           } else {
-            // 内容没变，只更新时间，不需要重复写
             session.facts[idx].at = now;
           }
         } else {
@@ -340,16 +242,12 @@ export class ChatDO {
         continue;
       }
 
-      // 无槽位：精确判重后追加
       const nf = normFact(text);
       const exists = session.facts.some((x) => x && !x.slot && normFact(x.text) === nf);
       if (!exists) session.facts.push({ text, at: now });
     }
 
     if (session.facts.length > FACTS_MAX) {
-      // 淘汰最旧的：数组本身就是写入顺序（push 追加），直接保留末尾 N 条即最新。
-      // 不能按 at 排序 —— 同一毫秒内连续写入时 at 全相同，排序结果不确定，
-      // 会把刚写进去的新事实当成旧的淘汰掉。
       session.facts = session.facts.slice(-FACTS_MAX);
     }
   }
@@ -366,7 +264,6 @@ export class ChatDO {
     return String(data.choices?.[0]?.message?.content || '').trim();
   }
 
-  /** 一轮对话：追加用户消息 → 调模型（按优先级 + 重试）→ 返回回复 */
   async chat(body) {
     const key = String(body.key || '').slice(0, 200);
     if (!key) return { error: 'missing key' };
@@ -388,14 +285,12 @@ export class ChatDO {
         }
       : { role: 'user', content };
 
-    // 落盘只存文本（data URI 可能几 MB，超过 DO 单值上限），图片只拼进本次请求
     const storedUser = hasImage
       ? { role: 'user', content: content ? `${content}\n[图片]` : '[图片]' }
       : userMessage;
     session.messages.push(storedUser);
     await this.save(key, session);
 
-    // 带图：只交给支持识图的模型
     let usable = providers;
     if (hasImage) {
       usable = providers.filter((p) => providerSupportsVision(p));
@@ -447,7 +342,6 @@ export class ChatDO {
         const text = String(data.choices?.[0]?.message?.content || '').trim();
         if (!text) throw new Error('AI 返回空内容');
 
-        // 攒够（水位数 + 条数 + 冷却期）才压，避免每轮都调 2 次 AI
         session.sinceCompress = (session.sinceCompress || 0) + 1;
         if (this.shouldCompress(session, limit)) {
           await this.compress(key, session, limit, provider);
@@ -462,19 +356,14 @@ export class ChatDO {
         this.logger.warn(`${provider.name || provider.model} 失败: ${e.message}`);
       }
     }
-    // 全部失败：把用户消息退回去，下次重试不会重复堆叠
     session.messages.pop();
     await this.save(key, session);
     return { error: `全部 AI 调用失败：${lastErr ? lastErr.message : '未知原因'}` };
   }
 
-  /** 拼出送给模型的 messages：人设 + 长期事实 + 摘要 + 最近原文 */
   buildMessages(session, systemPrompt, imageMessage) {
     const out = [{ role: 'system', content: String(systemPrompt || '') }];
 
-    // 长期事实：放在人设之后、摘要之前，让模型始终知道「这个人是谁」。
-    // 带槽位的按中文标签归类，读起来像「人物档案」，比一串平铺 bullet 更省 token 也更准。
-    // 事实可能很长（整段项目描述），注入时按字符预算截断，超出的宁可省略也不能每次请求都全塞。
     if (session.facts && session.facts.length) {
       const SLOT_LABEL = {
         name: '称呼',
@@ -495,7 +384,6 @@ export class ChatDO {
         if (label) grouped.push(`${label}：${f.text}`);
         else loose.push(f.text);
       }
-      // 逐条累加，超预算就停；截断的那条带上省略号，让模型知道还有更多
       const picked = [];
       let used = 0;
       for (const line of [...grouped, ...loose]) {
@@ -521,17 +409,14 @@ export class ChatDO {
       out.push({ role: 'system', content: `【早前对话摘要】${session.summary}` });
     }
 
-    // 历史里的旧图片只是占位文本，最后一轮换成本次带图的完整消息
     let history = imageMessage ? session.messages.slice(0, -1) : session.messages;
 
-    // 字符预算裁剪：光按「条数」限制挡不住长文（一条贴进来的日志就几十 KB）。
-    // 从最新往前累加，超预算就停，保证送进去的永远是最贴近当前话题的那部分。
     if (history.length) {
       let used = 0;
       let cut = 0;
       for (let i = history.length - 1; i >= 0; i--) {
         const c = history[i] && history[i].content;
-        used += typeof c === 'string' ? c.length : 200; // 图片/多段内容按 200 估
+        used += typeof c === 'string' ? c.length : 200;
         if (used > HISTORY_CHAR_BUDGET) {
           cut = i + 1;
           break;
@@ -545,7 +430,6 @@ export class ChatDO {
     return out;
   }
 
-  /** 记住助手这轮说了什么（工具执行结果就记一行内部记录） */
   async record(body) {
     const key = String(body.key || '').slice(0, 200);
     if (!key) return { error: 'missing key' };
@@ -555,8 +439,6 @@ export class ChatDO {
     const limit = Math.max(2, Number(body.historyLimit) || 10);
     session.sinceCompress = (session.sinceCompress || 0) + 1;
 
-    // 同样是「攒够才压」：record 是每次工具执行都会调的，原来只要超一点就压，
-    // 等于每执行一次工具就白烧一轮压缩 token。
     if (this.shouldCompress(session, limit)) {
       const provider = Array.isArray(body.providers) ? body.providers[0] : null;
       if (provider) {
@@ -569,15 +451,6 @@ export class ChatDO {
     return { ok: true, turns: session.messages.length, facts: session.facts.length };
   }
 
-  /**
-   * 直接写入一条长期事实（不经过 AI 抽取）。
-   *
-   * 用途：工具执行后，把「发过什么文件、做过什么任务、定过什么提醒」这类
-   * 一定会被再次问起的信息记下来。这类事实结构清晰，让 AI 再抽一遍纯属浪费 token。
-   *
-   * 支持传 slot（如 slot:'city'），带 slot 时走「同槽位覆盖」，
-   * 不带就是普通的精确判重追加。上限控制与 compress 共用 mergeFacts。
-   */
   async addFact(body) {
     const key = String(body.key || '').slice(0, 200);
     if (!key) return { error: 'missing key' };
@@ -603,17 +476,14 @@ export class ChatDO {
     return { ok: true, added: changed, slot: slot || undefined, facts: after };
   }
 
-  /** 只读状态：给后台排查用（不能叫 state，会和 DO 的 this.state 撞名） */
   async inspect(body) {
     const key = String(body.key || '').slice(0, 200);
     if (!key) return { error: 'missing key' };
     const s = await this.load(key);
-    // recent：最近几轮原文，供后台「记忆分层图」展示（只给文本）
     const recent = (s.messages || []).slice(-8).map((m) => ({
       role: m.role,
       content: typeof m.content === 'string' ? m.content.slice(0, 200) : '[图片]',
     }));
-    // 带上每层的体积估算，后台能直观看到「这一层占了多少上下文」
     const historyChars = (s.messages || []).reduce(
       (n, m) => n + (typeof m.content === 'string' ? m.content.length : 200),
       0
@@ -630,7 +500,6 @@ export class ChatDO {
     };
   }
 
-  /** 清掉某个会话的记忆 */
   async reset(body) {
     const key = String(body.key || '').slice(0, 200);
     if (!key) return { error: 'missing key' };

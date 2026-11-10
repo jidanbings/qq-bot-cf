@@ -64,7 +64,6 @@ try {
 const deployed = wrangler(['deploy', '--config', deployConfig]);
 if (!deployed.ok) fail('部署失败。');
 
-// 部署完成后把内置梗图导入 D1（表不存在就建；每次整表替换，幂等）
 const memes = syncMemes({ local: false });
 if (memes.ok) {
   console.log(`梗图已导入 D1：${memes.count} 张`);

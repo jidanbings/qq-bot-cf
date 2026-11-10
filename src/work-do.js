@@ -1,11 +1,3 @@
-/**
- * AI 工作区 Durable Object：一个会话一个实例（idFromName('group:<id>' / 'c2c:<id>')）。
- *
- * 同时负责「工具执行」（生图 / 梗图 / 语音 / 提醒 / 查群，由内部 ToolEngine 完成）
- * 和「工作区」（`/工作 <任务>` 的任务清单 / 笔记）。，AI 可以维护
- * 任务清单（task.add / task.done）和笔记（note），状态存在 DO 自己的存储里，
- * 同时往 D1 的 workspaces 表写一份索引，后台「AI 工作区」页据此管理。
- */
 import { withRetry } from './utils/retry.js';
 import { ToolEngine } from './tool-do.js';
 
@@ -32,7 +24,6 @@ function renderState(ws) {
   return `\n\n【当前工作区】\n任务：\n${tasks}\n笔记：\n${notes}`;
 }
 
-/** 从回复里抠出 [WS]{...} 操作行，返回纯文本与操作列表 */
 export function parseWorkspaceOps(text) {
   const ops = [];
   const lines = String(text || '').split('\n');
@@ -44,7 +35,6 @@ export function parseWorkspaceOps(text) {
         const op = JSON.parse(t.slice(4).trim());
         if (op && typeof op.op === 'string') ops.push(op);
       } catch {
-        // 解析失败就丢掉这一行，不影响正文
       }
       continue;
     }
@@ -82,11 +72,9 @@ export class WorkDO {
   constructor(state, env) {
     this.state = state;
     this.env = env;
-    // 工具执行器（发图 / 梗图 / 语音 / 提醒 / 查群）复用同一个 DO 实例
     this.tools = new ToolEngine(env);
   }
 
-  /** 工具执行：转发给 ToolEngine */
   async exec(body) {
     return this.tools.exec(body);
   }
@@ -183,7 +171,6 @@ export class WorkDO {
           tasks: ws.tasks,
           notes: ws.notes,
           runs: ws.runs,
-          // 实际跑通的模型，后台聊天记录用这个显示
           model: `${provider.name} · ${provider.model}`.slice(0, 128),
         };
       } catch (e) {

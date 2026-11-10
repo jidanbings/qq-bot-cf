@@ -20,11 +20,7 @@ export const CONFIG_FIELDS = {
   toolCalling: { type: 'flag' },
   voiceLang: { type: 'string', max: 8 },
   voiceGain: { type: 'string', max: 4 },
-  // 平台当前的事件推送方式（显式双向）：'ws' / 'webhook' / ''。
-  // 由程序根据平台实况自动维护，后台只读展示。存成显式值而不是「有过痕迹就算」，
-  // 否则从 Webhook 切回 WebSocket 时永远翻不回来。
   platformMode: { type: 'string', max: 8 },
-  // 平台已切 Webhook 的证据：op=13 校验通过的时间戳，或首次收到 /event 推送的时间
   webhookVerifiedAt: { type: 'string', max: 32 },
   doVersion: { type: 'string', max: 32 },
 };
@@ -230,7 +226,6 @@ function normalizeProvider(raw, index) {
     model: String(p.model || '').trim().slice(0, 128),
     temperature: Number.isFinite(Number(t)) ? String(Number(t)) : '0.8',
     enabled: p.enabled === 0 || p.enabled === '0' ? 0 : 1,
-    // 识图能力：auto=按模型名自动判断，1=支持，0=不支持（不要把「没识图」写死）
     vision: p.vision === '1' || p.vision === 1 ? '1' : p.vision === '0' || p.vision === 0 ? '0' : 'auto',
   };
 }
@@ -583,9 +578,7 @@ export async function purgeExpiredSessions(env) {
 }
 
 export async function addChatLog(env, entry) {
-  // 系统消息不脱敏：scope 固定为 'system'，方便后台直接辨识
   const isSystem = entry.kind === 'system';
-  // 两次 maskId（SHA-256 摘要）并行计算，省一次串行等待
   const [scopeKey, userKey] = await Promise.all([
     isSystem ? 'system' : maskId(entry.scopeId),
     isSystem ? '' : maskId(entry.userId),
@@ -606,8 +599,6 @@ export async function addChatLog(env, entry) {
     )
     .run();
 
-  // 清理只在「大约每 32 条」触发一次：表远未满时省掉一次 DELETE 查询。
-  // 触发概率 + 上限 2000 行，能保证表永远不会比上限多超过几十条。
   if ((Math.random() * 32) < 1) {
     await env.DB.prepare(
       'DELETE FROM chat_log WHERE id <= (SELECT MAX(id) FROM chat_log) - ?1'
@@ -626,7 +617,6 @@ export async function listChatLogs(env, { page = 1, pageSize = 50, kind = '' } =
     : await env.DB.prepare('SELECT COUNT(*) AS total FROM chat_log').first();
   const total = Number(totalRow?.total) || 0;
 
-  // 各分类条数（后台筛选按钮上显示）
   const cntRes = await env.DB.prepare('SELECT kind, COUNT(*) AS c FROM chat_log GROUP BY kind').all();
   const kindCounts = { all: 0, group: 0, c2c: 0, system: 0 };
   for (const row of cntRes.results || []) {
@@ -676,9 +666,7 @@ export async function clearChatLogs(env) {
   return res.meta?.changes ?? 0;
 }
 
-/* ------------------------------ 会话列表 / 完整对话（后台 QQ 风格聊天记录用） ------------------------------ */
 
-/** 每个会话（群聊/私聊）一条：最后一条消息、条数、类型，按最近活跃排序 */
 export async function listConversations(env, { limit = 100 } = {}) {
   try {
     const { results } = await env.DB.prepare(
@@ -715,7 +703,6 @@ export async function listConversations(env, { limit = 100 } = {}) {
   }
 }
 
-/** 单个会话的完整对话（分页：before 传上一页最小 id，返回按时间升序） */
 export async function getConversationMessages(env, scopeId, { before = 0, limit = 50 } = {}) {
   const size = Math.min(Math.max(Number(limit) || 50, 1), 100);
   const { results } = await env.DB.prepare(
@@ -739,7 +726,6 @@ export async function getConversationMessages(env, scopeId, { before = 0, limit 
   };
 }
 
-/** 系统消息（配置变更 / AI 切换 / 入群欢迎等）的统计 + 最后一条，用于会话列表置顶项 */
 export async function systemSummary(env) {
   try {
     const { results } = await env.DB.prepare("SELECT COUNT(*) AS n FROM chat_log WHERE kind = 'system'").all();
@@ -758,7 +744,6 @@ export async function systemSummary(env) {
   }
 }
 
-/** 系统消息分页（按时间升序返回） */
 export async function getSystemMessages(env, { before = 0, limit = 50 } = {}) {
   const size = Math.min(Math.max(Number(limit) || 50, 1), 100);
   const { results } = await env.DB.prepare(
@@ -773,7 +758,6 @@ export async function getSystemMessages(env, { before = 0, limit = 50 } = {}) {
   };
 }
 
-/** 删除整个会话的记录（群聊 / 私聊传 scope 指纹；系统消息传 'system'） */
 export async function deleteConversation(env, scopeId) {
   const scope = String(scopeId || '').trim();
   if (!scope) return 0;
@@ -781,7 +765,6 @@ export async function deleteConversation(env, scopeId) {
   return res.meta?.changes ?? 0;
 }
 
-/* ------------------------------ 群列表（后台「群管理」用） ------------------------------ */
 
 export async function upsertGroup(env, openid, source) {
   const id = String(openid || '').trim();
@@ -810,7 +793,6 @@ export async function removeGroup(env, openid) {
   await env.DB.prepare('DELETE FROM groups WHERE openid = ?1').bind(String(openid || '').trim()).run();
 }
 
-/* ------------------------------ 定时提醒（AI 自主任务） ------------------------------ */
 
 export async function addReminder(env, { scopeKey, isC2C, scopeId, dueAt, text, repeatRule }) {
   const now = new Date().toISOString();
@@ -846,7 +828,6 @@ export async function listReminders(env, { limit = 100 } = {}) {
   }
 }
 
-/** 到期待发送的任务（先到先发） */
 export async function dueReminders(env, nowIso, limit = 5) {
   try {
     const { results } = await env.DB.prepare(
@@ -861,11 +842,6 @@ export async function dueReminders(env, nowIso, limit = 5) {
   }
 }
 
-/**
- * 下一条待发提醒的时间（ISO 字符串），没有就返回 null。
- * alarm 用它决定「什么时候再醒一次」，这样提醒可以精确到点，
- * 不用靠 cron 每分钟轮询。
- */
 export async function nextReminderDue(env) {
   try {
     const row = await env.DB.prepare(
@@ -877,7 +853,6 @@ export async function nextReminderDue(env) {
   }
 }
 
-/** 抢占一条待发任务，返回 true 表示本实例拿到了（防多个 cron 同时发） */
 export async function claimReminder(env, id) {
   const res = await env.DB.prepare(
     "UPDATE reminders SET status = 'sending' WHERE id = ?1 AND status = 'pending'"
@@ -896,7 +871,6 @@ export async function finishReminder(env, id, ok, error) {
     .run();
 }
 
-/** 重复任务：到期后顺延到下一次，状态回到 pending */
 export async function rescheduleReminder(env, id, nextDue) {
   await env.DB.prepare("UPDATE reminders SET due_at = ?1, status = 'pending', fired_at = ?2 WHERE id = ?3")
     .bind(nextDue, new Date().toISOString(), id)
@@ -912,10 +886,6 @@ export async function cancelReminder(env, id) {
   return (res.meta?.changes ?? 0) > 0;
 }
 
-/**
- * 物理删除定时任务（连同已发送、已失败、已取消的一并删掉）。
- * 支持批量：一次性从列表里清掉多条，不再逐条确认。
- */
 export async function deleteReminders(env, ids) {
   const nums = (Array.isArray(ids) ? ids : [])
     .map((n) => Number(n))
@@ -932,8 +902,6 @@ export async function deleteReminders(env, ids) {
 }
 
 
-/* ------------------------------ 内置梗图（D1 存储，部署时自动导入） ------------------------------ */
-
 export async function listMemes(env) {
   try {
     const { results } = await env.DB.prepare('SELECT name, description, data FROM memes ORDER BY name').all();
@@ -942,9 +910,7 @@ export async function listMemes(env) {
     return [];
   }
 }
-/* ------------------------------ AI 工作区索引 ------------------------------ */
 
-/** 工作区状态以 DO 为准，这张表只是索引：后台据此列出「有哪些工作区」 */
 export async function upsertWorkspace(env, { scope, kind, runs, tasks, notes, lastTask, updatedAt }) {
   const now = new Date(updatedAt || Date.now()).toISOString();
   await env.DB.prepare(
@@ -978,7 +944,6 @@ export async function deleteWorkspace(env, scope) {
   }
 }
 
-/* ------------------------------ AiDO 沙箱索引 ------------------------------ */
 
 export async function getSandbox(env, scope) {
   try {
