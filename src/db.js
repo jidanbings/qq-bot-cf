@@ -17,6 +17,13 @@ export const CONFIG_FIELDS = {
   imageGenModel: { type: 'string', max: 64 },
   imageGenBaseUrl: { type: 'url', max: 512 },
   imageGenApiKey: { type: 'string', max: 256, secret: true },
+  cfChatEnabled: { type: 'flag' },
+  cfImageGenEnabled: { type: 'flag' },
+  cfVoiceEnabled: { type: 'flag' },
+  voiceBaseUrl: { type: 'url', max: 512 },
+  voiceApiKey: { type: 'string', max: 256, secret: true },
+  voiceModel: { type: 'string', max: 128 },
+  voiceSpeaker: { type: 'string', max: 64 },
   toolCalling: { type: 'flag' },
   voiceLang: { type: 'string', max: 8 },
   voiceGain: { type: 'string', max: 4 },
@@ -368,6 +375,10 @@ export async function getConfig(env, { decrypt = true } = {}) {
   cfg.aiProviders = await readAiProviders(env);
   if (!cfg.aiProviders.length) await migrateLegacyAi(env, cfg);
   await dropLegacyKeys(env, cfg);
+  // 内置 CF 能力默认开启：历史配置里没有这几个 key 时按「开」处理
+  if (cfg.cfChatEnabled == null) cfg.cfChatEnabled = '1';
+  if (cfg.cfImageGenEnabled == null) cfg.cfImageGenEnabled = '1';
+  if (cfg.cfVoiceEnabled == null) cfg.cfVoiceEnabled = '1';
   return cfg;
 }
 
@@ -439,6 +450,7 @@ export function toPublicConfig(cfg) {
   const configured = {
     secret: !!cfg.secret,
     imageGenApiKey: !!cfg.imageGenApiKey,
+    voiceApiKey: !!cfg.voiceApiKey,
   };
   return { config, configured };
 }

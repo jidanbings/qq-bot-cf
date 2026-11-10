@@ -100,6 +100,12 @@ const DEMO_CONFIG = {
   historyLimit: '20',
   groupBlacklist: '',
   sensitiveWords: '广告, 刷屏',
+  cfChatEnabled: '1',
+  cfImageGenEnabled: '1',
+  cfVoiceEnabled: '1',
+  voiceBaseUrl: '',
+  voiceModel: '',
+  voiceSpeaker: '',
 };
 
 const DEMO_PROVIDERS = [
@@ -195,7 +201,7 @@ function demoApi(pathname, search) {
   if (pathname === '/api/config') {
     const config = { ...DEMO_CONFIG };
     config.secret = '';
-    return { config, configured: { secret: true } };
+    return { config, configured: { secret: true, imageGenApiKey: false, voiceApiKey: false } };
   }
   if (pathname === '/api/ai') {
     return { providers: DEMO_PROVIDERS };

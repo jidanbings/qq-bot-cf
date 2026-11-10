@@ -3,6 +3,7 @@ import { applyMp3Gain } from './utils/mp3-gain.js';
 import { parseReminder } from './utils/reminder.js';
 import { normalizeFaceTags } from './utils/qq-face.js';
 import { withRetry } from './utils/retry.js';
+import { cfImage, cfTts, CF_MODELS } from './utils/workers-ai.js';
 
 const IMAGE_CAPTIONS = ['画好啦，看看喜不喜欢～', '喏，画好了 ✨', '画出来啦，还满意吗？', '给你画好了，慢慢看～'];
 const MEME_CAPTIONS = ['（递上梗图）', '看图你就懂了', '这张太应景了', '来，接梗～'];
@@ -129,29 +130,36 @@ export class ToolEngine {
 
 
   async toolImage(ctx, args, cfg) {
-    const model = String(cfg.imageGenModel || '').trim();
-    if (!model) throw new Error('还没配置生图模型');
-    const base = String(cfg.imageBase || '').trim();
-    const key = String(cfg.imageKey || '').trim();
-    if (!base || !key) throw new Error('生图接口没配全');
+    const extModel = String(cfg.imageGenModel || '').trim();
+    const useCf = !extModel && cfg.cfImageGenEnabled !== '0';
+    if (!extModel && !useCf) throw new Error('生图还没开（后台「AI 模型」页开启内置生图或配外部模型）');
     const prompt = String(args.prompt || '').trim().slice(0, 800);
     if (!prompt) throw new Error('缺少画面描述');
 
-    const res = await fetch(`${base}/images/generations`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
-      body: JSON.stringify({ model, prompt, n: 1 }),
-      signal: AbortSignal.timeout(150000),
-    });
-    if (!res.ok) {
-      const t = await res.text().catch(() => '');
-      throw new Error(`生图失败 HTTP ${res.status}${t ? ' ' + t.slice(0, 100) : ''}`);
+    let source;
+    if (useCf) {
+      const img = await cfImage(this.env, CF_MODELS.image, prompt);
+      source = `data:${img.mime};base64,${toBase64(img.bytes)}`;
+    } else {
+      const base = String(cfg.imageBase || '').trim();
+      const key = String(cfg.imageKey || '').trim();
+      if (!base || !key) throw new Error('生图接口没配全');
+      const res = await fetch(`${base}/images/generations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+        body: JSON.stringify({ model: extModel, prompt, n: 1 }),
+        signal: AbortSignal.timeout(150000),
+      });
+      if (!res.ok) {
+        const t = await res.text().catch(() => '');
+        throw new Error(`生图失败 HTTP ${res.status}${t ? ' ' + t.slice(0, 100) : ''}`);
+      }
+      const data = await res.json();
+      const item = data.data?.[0] || {};
+      source = item.url || (item.b64_json ? `data:image/png;base64,${item.b64_json}` : '');
+      if (!source) throw new Error('生图接口没有返回图片');
     }
-    const data = await res.json();
-    const item = data.data?.[0] || {};
-    const url = item.url || (item.b64_json ? `data:image/png;base64,${item.b64_json}` : '');
-    if (!url) throw new Error('生图接口没有返回图片');
-    await this.sendMedia(ctx, { fileType: 1, source: url, fileExt: 'png' });
+    await this.sendMedia(ctx, { fileType: 1, source, fileExt: 'png' });
     const line = String(args.caption || '').trim() || IMAGE_CAPTIONS[Math.floor(Math.random() * IMAGE_CAPTIONS.length)];
     await this.sendText(ctx, line);
     return { note: `已生成图片并发送（${prompt.slice(0, 30)}）` };
@@ -171,29 +179,36 @@ export class ToolEngine {
     return { note: `已发送梗图「${row.name}」` };
   }
 
-  async synthVoice(text, lang) {
-    const ai = this.env && this.env.AI;
-    if (!ai || typeof ai.run !== 'function') throw new Error('当前环境没有 Workers AI 绑定');
-    const out = await ai.run('@cf/myshell-ai/melotts', { prompt: String(text).slice(0, 300), lang: String(lang || 'zh') });
-    let bytes = null;
-    if (out instanceof ArrayBuffer) bytes = new Uint8Array(out);
-    else if (out instanceof Uint8Array) bytes = out;
-    else if (out && typeof out.arrayBuffer === 'function') bytes = new Uint8Array(await out.arrayBuffer());
-    else if (out && typeof out.audio === 'string') {
-      const bin = atob(out.audio);
-      bytes = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    } else if (out && out.body && typeof out.body.getReader === 'function') {
-      bytes = new Uint8Array(await new Response(out.body).arrayBuffer());
+  async synthVoice(text, lang, cfg = {}) {
+    const base = String(cfg.voiceBaseUrl || '').trim();
+    const key = String(cfg.voiceApiKey || '').trim();
+    const model = String(cfg.voiceModel || '').trim();
+    if (base && key && model) {
+      const speaker = String(cfg.voiceSpeaker || '').trim();
+      const body = { model, input: String(text).slice(0, 300), voice: speaker || undefined, response_format: 'mp3' };
+      if (!body.voice) delete body.voice;
+      const res = await fetch(`${base}/audio/speech`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(60000),
+      });
+      if (!res.ok) {
+        const t = await res.text().catch(() => '');
+        throw new Error(`语音合成 HTTP ${res.status}${t ? ' ' + t.slice(0, 100) : ''}`);
+      }
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      if (!bytes || !bytes.length) throw new Error('语音接口没有返回音频');
+      return bytes;
     }
-    if (!bytes || !bytes.length) throw new Error('TTS 没有返回音频');
-    return bytes;
+    if (cfg.cfVoiceEnabled === '0') throw new Error('内置语音已关闭，且未配置外部语音服务');
+    return cfTts(this.env, CF_MODELS.voice, text, lang);
   }
 
   async toolVoice(ctx, args, cfg) {
     const text = String(args.text || '').trim().slice(0, 300);
     if (!text) throw new Error('缺少要说的内容');
-    let bytes = await this.synthVoice(text, cfg.voiceLang || 'zh');
+    let bytes = await this.synthVoice(text, cfg.voiceLang || 'zh', cfg || {});
     const gain = Math.max(0, Math.min(12, Number(cfg.voiceGain || '6') || 0));
     if (gain > 0) {
       try {

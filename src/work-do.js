@@ -1,5 +1,6 @@
 import { withRetry } from './utils/retry.js';
 import { ToolEngine } from './tool-do.js';
+import { providerChat } from './utils/workers-ai.js';
 
 const KEY = 'ws';
 const MAX_TASKS = 50;
@@ -117,28 +118,11 @@ export class WorkDO {
 
   async callProvider(provider, messages) {
     return withRetry(
-      async () => {
-        const res = await fetch(`${provider.baseUrl}/chat/completions`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${provider.apiKey}` },
-          body: JSON.stringify({
-            model: provider.model,
-            messages,
-            temperature: provider.temperature === '' || provider.temperature == null ? 0.5 : Number(provider.temperature),
-          }),
-          signal: AbortSignal.timeout(120000),
-        });
-        if (!res.ok) {
-          const text = await res.text().catch(() => '');
-          const err = new Error(`HTTP ${res.status}${text ? ' ' + text.slice(0, 120) : ''}`);
-          err.status = res.status;
-          throw err;
-        }
-        const data = await res.json();
-        const out = String(data.choices?.[0]?.message?.content || '').trim();
-        if (!out) throw new Error('AI 返回空内容');
-        return out;
-      },
+      () =>
+        providerChat(this.env, provider, messages, {
+          temperature: provider.temperature === '' || provider.temperature == null ? 0.5 : Number(provider.temperature),
+          timeout: 120000,
+        }),
       {
         maxAttempts: 2,
         delay: 800,

@@ -151,7 +151,8 @@ var IX={
   trash:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>',
   arrow:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>',
   back:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>',
-  chevron:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>'
+  chevron:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>',
+  chevDown:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>'
 };
 
 function toast(text,kind){
@@ -824,16 +825,77 @@ function menuBlockHtml(){
     +'<div id="menu-editor"><p class="muted">读取中…</p></div>';
 }
 
+// 内置提示词（人设）库：点击填入系统提示词输入框。
+// 每个条目是一套完整的 system prompt，覆盖常见使用场景。
+var PROMPT_PRESETS = [
+  {
+    id: 'friendly',
+    label: '友好助手',
+    desc: '默认人设，热情友好、简洁自然',
+    text: '你是一个友好、靠谱、乐于助人的 QQ 机器人助手。回答保持简洁、自然、口语化，用中文交流。遇到不确定的问题如实说明，不编造。',
+  },
+  {
+    id: 'cat',
+    label: '可爱猫娘',
+    desc: '喵系萌宠，语气俏皮可爱',
+    text: '你是一只可爱的猫娘助手，说话带一点「喵」的口癖，语气软萌俏皮、活泼可爱。用中文交流，回答可以卖萌但也要靠谱，别为了可爱丢掉准确性。',
+  },
+  {
+    id: 'tech',
+    label: '技术专家',
+    desc: '严谨专业，代码和技术问题深入解答',
+    text: '你是一位资深技术专家，擅长编程、系统设计、运维等技术领域。回答严谨、专业、结构清晰，代码要给出可运行示例并解释关键点。用中文交流，技术术语可保留英文原文。',
+  },
+  {
+    id: 'teacher',
+    label: '学习导师',
+    desc: '耐心讲解，循循善诱帮助学习',
+    text: '你是一位耐心的学习导师，擅长用通俗易懂的方式讲解知识。回答时分步骤拆解，先讲清概念再举例，鼓励用户思考。根据用户水平调整深度，避免一下子倒太多。用中文交流。',
+  },
+  {
+    id: 'funny',
+    label: '幽默段子手',
+    desc: '风趣幽默，聊天气氛活跃',
+    text: '你是一个幽默风趣的聊天机器人，擅长接梗、讲段子、活跃气氛。回答轻松有趣，适当使用网络流行语和表情，但不要过度油腻。该认真的时候也能认真。用中文交流。',
+  },
+  {
+    id: 'translator',
+    label: '翻译助手',
+    desc: '中英互译，翻译准确地道',
+    text: '你是一位专业的翻译助手，擅长中英文互译。翻译要准确、地道、符合目标语言习惯，必要时给出直译与意译两种版本。用户发来非中文内容时默认翻译成中文，反之译成英文。',
+  },
+  {
+    id: 'writer',
+    label: '写作助手',
+    desc: '文案、文章、创作润色',
+    text: '你是一位写作助手，擅长撰写和润色各种文本：文案、故事、文章、邮件、报告等。行文流畅，逻辑清晰，能根据用户要求调整风格和长度。先问清需求再动笔，不确定的地方主动确认。用中文交流。',
+  },
+  {
+    id: 'concise',
+    label: '极简回复',
+    desc: '一句话说清，绝不啰嗦',
+    text: '你是一个极简风格的助手，回答尽量用一句话或几个短语说清要点，绝不啰嗦、不铺陈。用户要详细展开时再展开。用中文交流。',
+  },
+  {
+    id: 'creative',
+    label: '创意脑洞',
+    desc: '天马行空，擅长灵感发散',
+    text: '你是一个充满创意的脑洞助手，擅长头脑风暴、灵感发散、给出各种意想不到的点子。回答可以大胆、新奇、跳跃，多给几个不同方向的方案供用户挑选。用中文交流。',
+  },
+];
+
 var FIELDS=[
   {id:'qq',icon:IX.bot,title:'QQ 开放平台',desc:'QQ 机器人开放平台里的应用凭据',items:[
     {key:'appId',label:'QQ AppID',type:'text',ph:'机器人 AppID',required:true},
     {key:'secret',label:'QQ Secret',type:'password',ph:'机器人密钥',secret:true,required:true},
-    {key:'sandbox',label:'沙箱环境',type:'select',options:[['0','否（正式环境）'],['1','是（沙箱环境）']],
+    {key:'sandbox',label:'沙箱环境',type:'select',narrow:true,options:[['0','否（正式环境）'],['1','是（沙箱环境）']],
       hint:'机器人未上线或已下架时只能连沙箱，正式环境会拒绝鉴权（关闭码 4914）'}
   ]},
   {id:'transport',icon:IX.link,title:'事件接收方式',desc:'决定机器人怎么收到 QQ 的消息，直接影响计费',custom:transportCards},
   {id:'behavior',icon:IX.chat,title:'对话行为',desc:'回复方式与上下文长度',items:[
-    {key:'systemPrompt',label:'系统提示词',type:'textarea',ph:'你是一个友好、靠谱的 QQ 机器人助手……',wide:true},
+    {key:'systemPrompt',label:'系统提示词',type:'textarea',ph:'你是一个友好、靠谱的 QQ 机器人助手……',wide:true,
+      preset:true,required:true,
+      hint:'必填。可选用下方内置人设，或直接自己写。'},
     {key:'historyLimit',label:'历史消息条数',type:'select',options:[['1','1 条'],['2','2 条'],['3','3 条'],['4','4 条'],['5','5 条'],['6','6 条'],['7','7 条'],['8','8 条'],['9','9 条'],['10','10 条（推荐）'],['11','11 条'],['12','12 条'],['13','13 条'],['14','14 条'],['15','15 条'],['16','16 条'],['17','17 条'],['18','18 条'],['19','19 条'],['20','20 条'],['21','21 条'],['22','22 条'],['23','23 条'],['24','24 条'],['25','25 条'],['26','26 条'],['27','27 条'],['28','28 条'],['29','29 条'],['30','30 条'],['31','31 条'],['32','32 条'],['33','33 条'],['34','34 条'],['35','35 条'],['36','36 条'],['37','37 条'],['38','38 条'],['39','39 条'],['40','40 条'],['41','41 条'],['42','42 条'],['43','43 条'],['44','44 条'],['45','45 条'],['46','46 条'],['47','47 条'],['48','48 条'],['49','49 条'],['50','50 条']],hint:'每次对话携带的上下文条数（1~50）。越大越记得住，但也更费 token；推荐 10'},
     {key:'markdownReply',label:'Markdown 回复',type:'select',options:[['0','关（纯文本）'],['1','开（标题/列表/加粗等生效）']],
       hint:'AI 回复含标题、列表、加粗、链接时按 Markdown 发送，排版更好；纯文本回复不受影响'},
@@ -877,18 +939,24 @@ function fieldHtml(f,cfg,conf){
   var ph=f.ph||'';
   if(f.secret&&conf[f.key])ph='已设置，留空表示不修改';
   var h='<div class="field'+(f.wide?' wide':'')+'">';
-  h+='<label for="cf_'+f.key+'">'+esc(f.label)
+  var labelFor=(f.type==='select')?'selt_'+f.key:'cf_'+f.key;
+  h+='<label for="'+labelFor+'">'+esc(f.label)
     +(f.required&&!(f.secret&&conf[f.key])?'<span class="req-flag">必填</span>':'')
     +(f.secret&&conf[f.key]?'<span class="req-flag">已设置</span>':'')+'</label>';
   if(f.type==='textarea'){
     h+='<textarea id="cf_'+f.key+'" placeholder="'+esc(ph)+'" rows="3">'+esc(v)+'</textarea>';
-  }else if(f.type==='select'){
-    h+='<select id="cf_'+f.key+'">';
-    for(var o=0;o<f.options.length;o++){
-      var ov=f.options[o][0];
-      h+='<option value="'+esc(ov)+'"'+(v===ov?' selected':'')+'>'+esc(f.options[o][1])+'</option>';
+    if(f.preset&&f.key==='systemPrompt'){
+      h+='<div class="prompt-presets" id="pp-'+f.key+'">';
+      for(var pi=0;pi<PROMPT_PRESETS.length;pi++){
+        var pp=PROMPT_PRESETS[pi];
+        h+='<button class="chip" type="button" data-pp="'+esc(pp.id)+'" title="'+esc(pp.desc)+'">'+esc(pp.label)+'</button>';
+      }
+      h+='</div>';
     }
-    h+='</select>';
+  }else if(f.type==='select'){
+    // Custom select: a hidden native select keeps the value (collectConfig still
+    // reads its .value); the visible trigger/menu are built by selHtml() below.
+    h+=selHtml(f.key,v,f.options,{narrow:f.narrow});
   }else if(f.type==='password'){
     var hasSaved=!!(f.secret&&conf[f.key]);
     h+='<div class="pw-wrap"><input id="cf_'+f.key+'" type="password" value="'+esc(hasSaved?'':v)+'" placeholder="'+esc(ph)+'" autocomplete="new-password">'
@@ -898,6 +966,35 @@ function fieldHtml(f,cfg,conf){
       +(f.type==='number'?' inputmode="decimal"':'')+'>';
   }
   if(f.hint)h+='<p class="hint">'+esc(f.hint)+'</p>';
+  h+='</div>';
+  return h;
+}
+
+// Reusable custom-select markup. Kept separate so every native <select> on the
+// page (config fields, menu editor "type", AI modal "model/vision", group modal
+// "mute") can render the same safe dropdown instead of the browser default.
+// opts: {narrow:bool, nativeId:'...', nativeAttrs:' name="x" data-mf="y"'}
+function selHtml(key,value,options,opts){
+  opts=opts||{};
+  var nativeId=opts.nativeId||('cf_'+key);
+  var nativeAttrs=opts.nativeAttrs||'';
+  var h='<div class="sel'+(opts.narrow?' sel-narrow':'')+'" id="sel_'+key+'" data-key="'+esc(key)+'">';
+  h+='<button class="sel-trigger" type="button" id="selt_'+key+'" aria-haspopup="listbox" aria-expanded="false">'
+    +'<span class="sel-label" id="sell_'+key+'"></span>'
+    +'<span class="sel-arrow">'+IX.chevDown+'</span></button>';
+  h+='<div class="sel-menu" id="selm_'+key+'" role="listbox" hidden>';
+  for(var i=0;i<options.length;i++){
+    var ov=options[i][0];
+    h+='<button class="sel-opt" type="button" role="option" data-val="'+esc(ov)+'"'
+      +(String(value)===String(ov)?' aria-selected="true"':'')+'>'+esc(options[i][1])+'</button>';
+  }
+  h+='</div>';
+  h+='<select id="'+nativeId+'"'+nativeAttrs+' hidden aria-hidden="true">';
+  for(var j=0;j<options.length;j++){
+    var ov2=options[j][0];
+    h+='<option value="'+esc(ov2)+'"'+(String(value)===String(ov2)?' selected':'')+'>'+esc(options[j][1])+'</option>';
+  }
+  h+='</select>';
   h+='</div>';
   return h;
 }
@@ -913,7 +1010,7 @@ function renderConfig(d){
   var h='';
   for(var s=0;s<FIELDS.length;s++){
     var sec=FIELDS[s];
-    h+='<div class="form-section"><div class="fs-head"><span class="fs-ico">'+sec.icon+'</span>'
+    h+='<div class="form-section fs-sec-'+esc(sec.id)+'"><div class="fs-head"><span class="fs-ico">'+sec.icon+'</span>'
       +'<div><h3>'+esc(sec.title)+'</h3><p>'+esc(sec.desc)+'</p></div>'
       +'<span class="fs-state" id="fs-'+sec.id+'"></span></div><div class="fs-body">';
     if(sec.custom){
@@ -941,6 +1038,7 @@ function renderConfig(d){
   bindTransportCards();
   // 自定义菜单是独立接口（/v2/menu），不跟 config 一起提交，单独异步加载
   if($('menu-editor'))loadMenuEditor();
+  bindPromptPresets();
 
   var toggles=document.querySelectorAll('.pw-toggle');
   for(var t=0;t<toggles.length;t++){
@@ -958,12 +1056,143 @@ function renderConfig(d){
     inputs[k].addEventListener('input',markDirty);
     inputs[k].addEventListener('change',markDirty);
   }
+  bindSelects();
   updateSectionStates();
   setTopActions('');
 }
 
+// Custom select: open/close/select/keyboard/click-outside live here.
+// Safety: option text is escaped then set via textContent (never innerHTML);
+// the chosen value is stored in the hidden native select, so collectors stay unchanged.
+// bindSel(root) binds every .sel inside root (a DOM node, default document),
+// so modals and re-rendered menu rows can share the exact same component.
+var selOpenKey=null;
+var selOuterBound=false;
+
+function bindSel(root){
+  root=root||document;
+  var sels=root.querySelectorAll?root.querySelectorAll('.sel'):[];
+  for(var i=0;i<sels.length;i++){
+    // IIFE captures each select's own refs; without it every handler shares
+    // the loop's var and would open the last dropdown no matter what you click.
+    (function(){
+      var sel=sels[i];
+      var key=sel.getAttribute('data-key');
+      var trigger=$('selt_'+key);
+      var menu=$('selm_'+key);
+      var native=sel.querySelector?sel.querySelector('select'):null;
+      var label=$('sell_'+key);
+      if(!trigger||!menu||!native||!label)return;
+
+      // init: show the current value's label text
+      syncSelLabel(label,native,menu);
+
+      trigger.addEventListener('click',function(e){
+        e.stopPropagation();
+        if(selOpenKey===key){closeSel();return;}
+        closeSel();
+        selOpenKey=key;
+        menu.hidden=false;
+        trigger.setAttribute('aria-expanded','true');
+      });
+
+      var opts=menu.querySelectorAll('.sel-opt');
+      for(var o=0;o<opts.length;o++){
+        opts[o].addEventListener('click',function(){
+          var val=this.getAttribute('data-val');
+          native.value=val;
+          syncSelLabel(label,native,menu);
+          // fire a native change event so markDirty / row handlers run
+          if(native.dispatchEvent){
+            var ev;
+            try{ev=new Event('change',{bubbles:true});}catch(e2){ev=document.createEvent('Event');ev.initEvent('change',true,false);}
+            native.dispatchEvent(ev);
+          }
+          closeSel();
+        });
+      }
+    })();
+  }
+  // Click-outside close: the trigger's click calls stopPropagation, so it never
+  // reaches here; an option click selects first, then reaches here; any other
+  // click on the page just closes the open menu.
+  if(!selOuterBound){
+    selOuterBound=true;
+    document.addEventListener('click',function(){
+      closeSel();
+    });
+  }
+}
+
+function bindSelects(){
+  bindSel(document);
+}
+
+function syncSelLabel(label,native,menu){
+  if(!label||!native)return;
+  var val=native.value;
+  if(!menu)return;
+  var opts=menu.querySelectorAll('.sel-opt');
+  var text=val;
+  for(var i=0;i<opts.length;i++){
+    if(opts[i].getAttribute('data-val')===val){
+      text=opts[i].textContent;
+      break;
+    }
+  }
+  label.textContent=text;
+  // sync aria-selected
+  for(var j=0;j<opts.length;j++){
+    var isSel=opts[j].getAttribute('data-val')===val;
+    if(isSel)opts[j].setAttribute('aria-selected','true');
+    else opts[j].removeAttribute('aria-selected');
+  }
+}
+
+function closeSel(){
+  if(!selOpenKey)return;
+  var t=$('selt_'+selOpenKey);
+  var m=$('selm_'+selOpenKey);
+  if(t)t.setAttribute('aria-expanded','false');
+  if(m)m.hidden=true;
+  selOpenKey=null;
+}
+
 function markDirty(){
   updateSectionStates();
+}
+
+// 内置提示词：点按钮把对应人设写进系统提示词输入框（不覆盖用户已写的内容，先提示确认）
+function bindPromptPresets(){
+  var box=$('pp-systemPrompt');
+  if(!box)return;
+  var ta=$('cf_systemPrompt');
+  box.addEventListener('click',function(e){
+    var chip=e.target&&e.target.closest?e.target.closest('[data-pp]'):null;
+    if(!chip||!ta)return;
+    var id=chip.getAttribute('data-pp');
+    var preset=null;
+    for(var i=0;i<PROMPT_PRESETS.length;i++)if(PROMPT_PRESETS[i].id===id)preset=PROMPT_PRESETS[i];
+    if(!preset)return;
+    var cur=ta.value.trim();
+    if(cur){
+      confirmDialog({
+        title:'覆盖当前提示词？',
+        message:'会把你现在写的提示词替换成「'+preset.label+'」的人设。',
+        confirm:'覆盖',
+        danger:true
+      }).then(function(yes){
+        if(!yes)return;
+        ta.value=preset.text;
+        markDirty();
+        toast('已填入「'+preset.label+'」','ok');
+      });
+    }else{
+      ta.value=preset.text;
+      markDirty();
+      toast('已填入「'+preset.label+'」','ok');
+    }
+  });
 }
 
 function bindTransportCards(){
@@ -1103,7 +1332,35 @@ function postConfig(patch,btn,draft){
 function saveSection(secId,btn){
   var patch=collectConfig(secId);
   if(!Object.keys(patch).length){toast('这一块没有可保存的项','bad');return;}
+  // 必填校验：required 字段留空直接拒绝保存
+  var missing=missingRequired(secId);
+  if(missing){
+    toast('「'+missing+'」是必填项，不能为空','bad');
+    var el=$('cf_'+missing);
+    if(el&&el.focus)el.focus();
+    return;
+  }
   postConfig(patch,btn,snapshotOthers(Object.keys(patch)));
+}
+
+// 返回该区块第一个未填写的 required 字段 key，没有则返回空串
+function missingRequired(secId){
+  for(var s=0;s<FIELDS.length;s++){
+    var sec=FIELDS[s];
+    if(sec.custom)continue;
+    if(secId&&sec.id!==secId)continue;
+    var items=sec.items||[];
+    for(var i=0;i<items.length;i++){
+      var f=items[i];
+      if(!f.required)continue;
+      // 敏感字段（secret）有值时后端不回传明文，输入框为空也算「已填」
+      var el=$('cf_'+f.key);
+      if(!el)continue;
+      var saved=!!(f.secret&&String(el.getAttribute('placeholder')||'').indexOf('已设置')===0);
+      if(!String(el.value||'').trim()&&!saved)return f.label;
+    }
+  }
+  return '';
 }
 
 var chatState={scope:'',kind:'',items:[],hasMore:false};
@@ -1366,20 +1623,26 @@ function showLogs(){
 var aiState=[];
 var aiSeq=0;
 
-function modelOptions(p){
+function modelSelOptions(p){
   var ms=p.models||[];
   var cur=p.model||'';
   if(!ms.length){
-    return cur?'<option value="'+esc(cur)+'" selected>'+esc(cur)+'</option>'
-      :'<option value="">先点「拉取模型」</option>';
+    return cur?[[cur,cur]]:[['','先点「拉取模型」']];
   }
+  var opts=[];
   var has=false;
   for(var i=0;i<ms.length;i++)if(ms[i]===cur)has=true;
-  var h=(!cur||!has)?'<option value="">请选择模型</option>':'';
-  for(var j=0;j<ms.length;j++){
-    h+='<option value="'+esc(ms[j])+'"'+(ms[j]===cur?' selected':'')+'>'+esc(ms[j])+'</option>';
-  }
-  return h;
+  if(!cur||!has)opts.push(['','请选择模型']);
+  for(var j=0;j<ms.length;j++)opts.push([ms[j],ms[j]]);
+  return opts;
+}
+
+// Re-render the model custom select (its options depend on the fetched model list)
+function renderModelSel(cur,models){
+  var wrap=$('ai-m-model-wrap');
+  if(!wrap)return;
+  wrap.innerHTML=selHtml('ai-m-model',cur,modelSelOptions({model:cur,models:models}),{nativeId:'ai-m-model',nativeAttrs:' name="ai-m-model"'});
+  bindSel(wrap);
 }
 
 var aiModal={idx:-1,isNew:false,p:null,models:[]};
@@ -1395,12 +1658,15 @@ function aiModalHtml(){
     +'<div class="field"><label for="ai-m-url">Base URL</label><input id="ai-m-url" name="ai-m-url" placeholder="https://api.example.com/v1"></div>'
     +'<div class="field"><label for="ai-m-key">API Key</label><div class="pw-wrap"><input id="ai-m-key" name="ai-m-key" type="password" placeholder="sk-..." autocomplete="new-password">'
     +'<button class="pw-toggle" type="button" id="ai-m-key-toggle">显示</button></div></div>'
-    +'<div class="field"><label for="ai-m-model">模型</label><div class="model-row"><select id="ai-m-model" name="ai-m-model"></select>'
+    +'<div class="field"><label for="selt_ai-m-model">模型</label><div class="model-row">'
+    +'<div class="sel-wrap" id="ai-m-model-wrap">'+selHtml('ai-m-model','',[['','先点「拉取模型」']],{nativeId:'ai-m-model',nativeAttrs:' name="ai-m-model"'})+'</div>'
     +'<button class="btn" type="button" id="ai-m-pull">'+IX.refresh+'<span>拉取模型</span></button></div></div>'
     +'<div class="grid">'
     +'<div class="field"><label for="ai-m-temp">Temperature</label><input id="ai-m-temp" name="ai-m-temp" type="number" inputmode="decimal" step="0.1" placeholder="0.8"></div>'
     +'<div class="field"><label class="prov-check"><input type="checkbox" id="ai-m-on" name="ai-m-on" checked>启用参与回复</label></div>'
-    +'<div class="field"><label for="ai-m-vision">识图能力</label><select id="ai-m-vision" name="ai-m-vision"><option value="auto">自动判断（按模型名）</option><option value="1">支持识图</option><option value="0">不支持（纯文本）</option></select></div>'
+    +'<div class="field"><label for="selt_ai-m-vision">识图能力</label>'
+    +selHtml('ai-m-vision','auto',[['auto','自动判断（按模型名）'],['1','支持识图'],['0','不支持（纯文本）']],{nativeId:'ai-m-vision',nativeAttrs:' name="ai-m-vision"'})
+    +'</div>'
     +'</div>'
     +'<div class="test-result" id="ai-test-result" hidden></div>'
     +'</div>'
@@ -1454,10 +1720,11 @@ function openAiModal(idx,preset){
   $('ai-m-url').value=p.baseUrl||'';
   $('ai-m-key').value=p.apiKey||'';
   $('ai-m-key').placeholder=p.hasKey?'已设置，留空表示不修改':'sk-...';
-  $('ai-m-model').innerHTML=modelOptions({model:p.model,models:aiModal.models});
+  renderModelSel(p.model||'',aiModal.models);
   $('ai-m-temp').value=p.temperature||'0.8';
   $('ai-m-on').checked=!!p.enabled;
   $('ai-m-vision').value=p.vision||'auto';
+  syncSelLabel($('sell_ai-m-vision'),$('ai-m-vision'),$('selm_ai-m-vision'));
   setAiTestResult('','');
   $('ai-modal-mask').hidden=false;
 }
@@ -1512,7 +1779,7 @@ function pullAiModalModels(btn){
       aiModal.models=d.models||[];
       var cur=$('ai-m-model').value;
       if(aiModal.models.length&&aiModal.models.indexOf(cur)<0)cur=aiModal.models[0];
-      $('ai-m-model').innerHTML=modelOptions({model:cur,models:aiModal.models});
+      renderModelSel(cur,aiModal.models);
       toast('已拉取 '+aiModal.models.length+' 个模型','ok');
     })
     .catch(function(e){toast(e.message,'bad');})
@@ -1554,6 +1821,7 @@ function bindAiModal(){
   $('ai-m-pull').addEventListener('click',function(){pullAiModalModels(this);});
   $('ai-m-test').addEventListener('click',function(){testAiModal(this);});
   $('ai-m-save').addEventListener('click',saveAiModal);
+  bindSel($('ai-modal-mask'));
   if(!aiEscBound){
     aiEscBound=true;
     document.addEventListener('keydown',function(e){
@@ -1682,6 +1950,15 @@ function showAi(){
       imageGenState.hasKey=!!conf.imageGenApiKey;
       imageGenState.tested=false;
       imageGenState.result='';
+      cfState.chat=(cfg.cfChatEnabled=='0')?'0':'1';
+      cfState.imageGen=(cfg.cfImageGenEnabled=='0')?'0':'1';
+      cfState.voice=(cfg.cfVoiceEnabled=='0')?'0':'1';
+      voiceState.baseUrl=cfg.voiceBaseUrl||'';
+      voiceState.model=cfg.voiceModel||'';
+      voiceState.speaker=cfg.voiceSpeaker||'';
+      voiceState.apiKey='';
+      voiceState.hasKey=!!conf.voiceApiKey;
+      voiceState.tested=false;
     }
     renderAiPage();
   }).catch(function(e){
@@ -1694,9 +1971,25 @@ function showAi(){
 var imageGenState={model:'',baseUrl:'',apiKey:'',hasKey:false,testedModel:'',testedUrl:'',tested:false,result:''};
 var igenEscBound=false;
 
+// 内置 CF 能力开关 + 外部语音配置
+var cfState={chat:'1',imageGen:'1',voice:'1'};
+var voiceState={baseUrl:'',apiKey:'',model:'',speaker:'',hasKey:false,tested:false};
+var voiceEscBound=false;
+
 function renderAiPage(){
   var h='<div class="card"><div class="card-head"><h3>AI 模型</h3>'
-    +'<span class="hint">对话和生图各配各的，保存即热更新</span></div>';
+    +'<span class="hint">内置 Cloudflare 能力开箱即用，外部模型按需添加</span></div>';
+
+  // 内置 CF 能力：固定三项 + 开关
+  h+='<div class="ai-sec">'
+    +'<div class="ai-sec-head"><b>内置 Cloudflare 能力</b>'
+    +'<span class="hint">默认开启，免费额度，无需任何 Key</span></div>'
+    +cfRowHtml('chat','💬','对话','@cf/qwen/qwen3-30b-a3b-fp8','AI 回复用这个内置模型，失败会自动切到下面外部模型')
+    +cfRowHtml('imageGen','🎨','生图','@cf/black-forest-labs/flux-1-schnell','/画 用它生成图片（配了外部生图模型则优先外部）')
+    +cfRowHtml('voice','🔊','语音','@cf/myshell-ai/melotts','/语音 用它合成语音（配了外部语音则优先外部）')
+    +'<div class="fs-foot"><span class="fs-foot-note">开关即时保存，热更新生效</span>'
+    +'<button class="btn primary" id="b-cf-save" type="button">'+IX.check+'<span>保存开关</span></button></div>'
+    +'</div>';
 
   h+='<div class="ai-sec">'
     +'<div class="ai-sec-head"><b>对话模型</b>'
@@ -1709,11 +2002,21 @@ function renderAiPage(){
 
   h+='<div class="ai-sec">'
     +'<div class="ai-sec-head"><b>生图模型</b>'
-    +'<span class="hint">留空即关闭生图；不填地址和 Key 时用上面第一个对话模型兜底</span>'
+    +'<span class="hint">留空即用内置 CF 生图；填了则优先外部，需测试通过</span>'
     +'<button class="btn sm" id="b-igen-add" type="button">✎ 编辑</button></div>'
     +'<div id="igen-row-wrap">'+igenRowHtml()+'</div>'
     +'<div class="fs-foot"><span class="fs-foot-note" id="igen-state"></span>'
     +'<button class="btn primary" id="b-igen-save" type="button" disabled>'+IX.check+'<span>保存</span></button></div>'
+    +'</div>';
+
+  // 外部语音（OpenAI 兼容 /audio/speech），可选
+  h+='<div class="ai-sec">'
+    +'<div class="ai-sec-head"><b>语音合成</b>'
+    +'<span class="hint">默认用内置 CF 语音；填了外部服务则优先外部（OpenAI 兼容 /audio/speech）</span>'
+    +'<button class="btn sm" id="b-voice-add" type="button">✎ 编辑</button></div>'
+    +'<div id="voice-row-wrap">'+voiceRowHtml()+'</div>'
+    +'<div class="fs-foot"><span class="fs-foot-note" id="voice-state"></span>'
+    +'<button class="btn primary" id="b-voice-save" type="button" disabled>'+IX.check+'<span>保存</span></button></div>'
     +'</div>';
 
   h+='</div>';
@@ -1727,24 +2030,28 @@ function renderAiPage(){
     +'</div>';
 
   h+='<div class="card"><div class="card-head"><h3>怎么用</h3></div>'
-    +'<p class="tip">接口都要兼容 OpenAI。对话模型走 <b>/chat/completions</b>，生图走 <b>/images/generations</b>。<br>'
-    +'「对话模型」列表顺序就是优先级：先问第一个，超时、报错、配额用完自动换下一个，全部失败才回一句「出了点小状况」。'
+    +'<p class="tip">接口都要兼容 OpenAI。对话模型走 <b>/chat/completions</b>，生图走 <b>/images/generations</b>，语音走 <b>/audio/speech</b>。<br>'
+    +'「对话模型」列表顺序就是优先级：内置 CF 先答，失败自动换外部，全部失败才回一句「出了点小状况」。'
     +'停用的不参与。点行可编辑，编辑在弹窗里完成，可以先「测试」确认能通再保存。<br>'
-    +'生图可以指向完全不同的服务商。测试会现场画一张示例图，通过后保存按钮才亮。<br>'
+    +'生图、语音默认用内置 Cloudflare 能力，也可以指向外部服务商。<br>'
     +'讯飞星火的「API Key」填控制台里的 <b>APIPassword</b>；腾讯混元已升级为 TokenHub，地址用新接口。'
     +'国外模型（OpenAI、Gemini、Grok 等）在 Cloudflare Workers 上可直连，不需要代理。</p></div>';
 
   h+=aiModalHtml();
   h+=igenModalHtml();
+  h+=voiceModalHtml();
   $('wrap').innerHTML=h;
   renderAiProviders();
   bindAiModal();
   bindIgenModal();
+  bindVoiceModal();
 
   $('b-ai-add').addEventListener('click',function(){openAiModal(-1);});
   $('b-ai-save').addEventListener('click',function(){saveProviders(this);});
   $('prov-list').addEventListener('click',onProvClick);
   $('ai-presets').addEventListener('click',onPresetClick);
+  $('b-cf-save').addEventListener('click',function(){saveCfSwitches(this);});
+  bindCfSwitches();
 }
 
 var AI_PRESETS=[
@@ -1861,6 +2168,8 @@ function renderMenuEditor(menu,version){
   // 委托到 click 上永远收不到，这就是「类型一直选不了」的原因
   var rows=box.querySelectorAll('[data-mi]');
   for(var r=0;r<rows.length;r++)bindMenuRow(rows[r]);
+  // 类型下拉是自绘组件，也要绑一遍（含每一行的 custom select）
+  bindSel(box);
 }
 
 function bindMenuRow(row){
@@ -1904,6 +2213,7 @@ function bindMenuRow(row){
       var newRow=fresh.firstChild;
       row.parentNode.replaceChild(newRow,row);
       bindMenuRow(newRow);
+      bindSel(newRow);
     });
   }
 
@@ -1931,8 +2241,9 @@ function menuItemHtml(it,i){
   h+='<div class="field"><label for="'+idName+'">名称</label>'
     +'<input id="'+idName+'" name="'+idName+'" data-mf="name" maxlength="10"'
     +' value="'+esc(it.name||'')+'" placeholder="如：帮助"></div>';
-  h+='<div class="field"><label for="'+idType+'">类型</label>'
-    +'<select id="'+idType+'" name="'+idType+'" data-mf="type">'
+  h+='<div class="field"><label for="selt_'+idType+'">类型</label>'
+    +selHtml(idType,type,[['send_message','发送消息'],['link','跳转链接']])
+    +'<select id="'+idType+'" name="'+idType+'" data-mf="type" hidden aria-hidden="true">'
     +'<option value="send_message"'+(type==='send_message'?' selected':'')+'>发送消息</option>'
     +'<option value="link"'+(type==='link'?' selected':'')+'>跳转链接</option>'
     +'</select></div>';
@@ -2307,8 +2618,8 @@ function igenRowHtml(){
   var keyFlag=imageGenState.hasKey?'<span class="prov-keyok">Key 已设置</span>':'<span class="prov-keyno">Key 未设置</span>';
   var h='<div class="prov-row" data-igen="1" title="点击编辑">';
   h+='<span class="prov-no">🎨</span>';
-  h+='<div class="prov-info"><b>'+esc(imageGenState.model||'未配置（生图关闭）')+'</b><small>'
-    +(host?esc(host):'不填地址和 Key 时用「AI 列表」第一个 AI 兜底')+'</small></div>';
+  h+='<div class="prov-info"><b>'+esc(imageGenState.model||'未配置（用内置 CF 生图）')+'</b><small>'
+    +(host?esc(host):'留空用内置 Cloudflare flux-1-schnell')+'</small></div>';
   h+='<div class="prov-meta">'+keyFlag+flag+'</div>';
   h+='<div class="prov-tools"><button class="btn sm" type="button" data-act="edit">编辑</button></div>';
   h+='</div>';
@@ -2371,9 +2682,12 @@ function saveIgenModal(){
   var url=$('igen-url').value.trim();
   var key=$('igen-key').value.trim();
   var model=$('igen-model').value.trim();
-  if(!url){toast('请填写 Base URL','bad');return;}
-  if(!model){toast('请填写模型名','bad');return;}
-  if(!key&&!imageGenState.hasKey){toast('请填写 API Key','bad');return;}
+  // 允许清空：三项全空 = 回到内置 CF 生图
+  if(url||model){
+    if(!url){toast('请填写 Base URL','bad');return;}
+    if(!model){toast('请填写模型名','bad');return;}
+    if(!key&&!imageGenState.hasKey){toast('请填写 API Key','bad');return;}
+  }
   imageGenState.baseUrl=url;
   imageGenState.model=model;
   imageGenState.apiKey=key;
@@ -2449,6 +2763,203 @@ function igenModelChips(){
   return h;
 }
 
+function cfRowHtml(key,ico,label,model,desc){
+  return '<div class="cf-row" data-cf="'+key+'">'
+    +'<span class="prov-no">'+ico+'</span>'
+    +'<div class="prov-info"><b>'+label+'</b><small>'+esc(model)+' · '+esc(desc)+'</small></div>'
+    +'<div class="prov-meta"><label class="prov-switch" title="点一下开启/关闭">'
+    +'<input type="checkbox" class="cf-sw" data-cf="'+key+'"'+(cfState[key]!=='0'?' checked':'')+'><i></i></label></div>'
+    +'</div>';
+}
+
+function bindCfSwitches(){
+  var sws=document.querySelectorAll('.cf-sw');
+  for(var i=0;i<sws.length;i++){
+    sws[i].addEventListener('change',function(){
+      var k=this.getAttribute('data-cf');
+      cfState[k]=this.checked?'1':'0';
+    });
+  }
+}
+
+function saveCfSwitches(btn){
+  busy(btn,true);
+  api('POST','/api/config',{cfChatEnabled:cfState.chat,cfImageGenEnabled:cfState.imageGen,cfVoiceEnabled:cfState.voice})
+    .then(function(){
+      toast('内置能力开关已保存，立即生效','ok');
+    })
+    .catch(function(e){toast(e.message,'bad');})
+    .then(function(){busy(btn,false);});
+}
+
+function voiceRowHtml(){
+  var host=voiceState.baseUrl||'';
+  var k=host.indexOf('://');
+  if(k>=0)host=host.substring(k+3);
+  k=host.indexOf('/');
+  if(k>=0)host=host.substring(0,k);
+  var keyFlag=voiceState.hasKey?'<span class="prov-keyok">Key 已设置</span>':'<span class="prov-keyno">Key 未设置</span>';
+  var flag=voiceState.tested?'<span class="prov-flag on">已测试</span>':'<span class="prov-flag off">未测试</span>';
+  var h='<div class="prov-row" data-voice="1" title="点击编辑">';
+  h+='<span class="prov-no">🔊</span>';
+  h+='<div class="prov-info"><b>'+esc(voiceState.model||'未配置（用内置 CF 语音）')+'</b><small>'
+    +(host?esc(host):'OpenAI 兼容 /audio/speech，留空用内置')+'</small></div>';
+  h+='<div class="prov-meta">'+keyFlag+flag+'</div>';
+  h+='<div class="prov-tools"><button class="btn sm" type="button" data-act="edit">编辑</button></div>';
+  h+='</div>';
+  return h;
+}
+
+function voiceModalHtml(){
+  var h='<div class="modal-mask" id="voice-modal-mask" hidden>'
+    +'<div class="modal" role="dialog" aria-modal="true" aria-labelledby="voice-m-title">'
+    +'<div class="modal-head"><h3 id="voice-m-title">编辑语音配置</h3>'
+    +'<button class="modal-x" type="button" id="voice-modal-x" aria-label="关闭">×</button></div>'
+    +'<div class="modal-body">'
+    +'<div class="field"><label for="voice-url">Base URL</label>'
+    +'<input id="voice-url" name="voice-url" placeholder="https://api.openai.com/v1"></div>'
+    +'<div class="field"><label for="voice-key">API Key</label>'
+    +'<div class="pw-wrap"><input id="voice-key" name="voice-key" type="password" placeholder="sk-..." autocomplete="new-password">'
+    +'<button class="pw-toggle" type="button" id="voice-key-toggle">显示</button></div></div>'
+    +'<div class="grid">'
+    +'<div class="field"><label for="voice-model">模型</label>'
+    +'<input id="voice-model" name="voice-model" placeholder="tts-1 或 cosyvoice 等"></div>'
+    +'<div class="field"><label for="voice-speaker">音色（可选）</label>'
+    +'<input id="voice-speaker" name="voice-speaker" placeholder="alloy / 自定义音色名"></div>'
+    +'</div>'
+    +'<div class="field"><span class="hint">OpenAI 兼容 <b>/audio/speech</b>。留空地址/Key/模型任意一项时，退回内置 Cloudflare 语音。</span></div>'
+    +'<div class="test-result" id="voice-test-result" hidden></div>'
+    +'</div>'
+    +'<div class="modal-foot">'
+    +'<button class="btn" type="button" id="b-voice-test">'+IX.play+'<span>测试</span></button>'
+    +'<span class="grow"></span>'
+    +'<button class="btn" type="button" id="voice-m-cancel">取消</button>'
+    +'<button class="btn primary" type="button" id="voice-m-done">'+IX.check+'<span>完成</span></button>'
+    +'</div></div></div>';
+  return h;
+}
+
+function openVoiceModal(){
+  $('voice-url').value=voiceState.baseUrl||'';
+  $('voice-key').value=voiceState.apiKey||'';
+  $('voice-key').placeholder=voiceState.hasKey?'已设置，留空沿用旧 Key':'sk-...';
+  $('voice-model').value=voiceState.model||'';
+  $('voice-speaker').value=voiceState.speaker||'';
+  setVoiceResult('','');
+  $('voice-modal-mask').hidden=false;
+}
+
+function closeVoiceModal(){
+  var m=$('voice-modal-mask');
+  if(m)m.hidden=true;
+}
+
+function setVoiceResult(kind,msg){
+  var el=$('voice-test-result');
+  if(!el)return;
+  el.hidden=!kind;
+  el.className='test-result'+(kind?' '+kind:'');
+  el.textContent=msg||'';
+}
+
+function updateVoiceState(){
+  var st=$('voice-state');
+  var save=$('b-voice-save');
+  var configured=!!voiceState.baseUrl&&!!voiceState.model;
+  if(configured){
+    if(voiceState.tested)save.disabled=false;
+    else save.disabled=true;
+    st.textContent=voiceState.tested?'已测试通过':'已填写，先测试再保存';
+  }else{
+    save.disabled=false;
+    st.textContent='未配置（用内置 CF 语音）';
+  }
+}
+
+function testVoice(btn){
+  var url=$('voice-url').value.trim();
+  var key=$('voice-key').value.trim();
+  var model=$('voice-model').value.trim();
+  var speaker=$('voice-speaker').value.trim();
+  if(!url){toast('先填 Base URL','bad');return;}
+  if(!model){toast('先填模型名','bad');return;}
+  if(!key&&!voiceState.hasKey){toast('先填 API Key','bad');return;}
+  var orig=btn.innerHTML;
+  busy(btn,true);
+  btn.innerHTML=IX.refresh+'<span>合成中…</span>';
+  api('POST','/api/voice/test',{baseUrl:url,apiKey:key,model:model,speaker:speaker})
+    .then(function(r){
+      voiceState.baseUrl=url;
+      voiceState.model=model;
+      voiceState.speaker=speaker;
+      voiceState.tested=!!(r&&r.ok);
+      if(r&&r.ok){
+        setVoiceResult('ok','✓ 测试通过，返回音频 '+r.bytes+' 字节');
+      }else{
+        setVoiceResult('bad','测试失败：'+((r&&r.error)||'未知错误'));
+      }
+      updateVoiceState();
+      toast(r&&r.ok?'语音模型可用':'测试失败，请检查地址或模型名',r&&r.ok?'ok':'bad');
+    })
+    .catch(function(e){toast(e.message,'bad');})
+    .then(function(){busy(btn,false);btn.innerHTML=orig;});
+}
+
+function saveVoice(btn){
+  var url=voiceState.baseUrl||'';
+  var model=voiceState.model||'';
+  var speaker=voiceState.speaker||'';
+  if((url||model)&&!(url&&model)){
+    toast('Base URL 和模型要一起填','bad');
+    return;
+  }
+  if(url&&model&&!voiceState.tested){
+    toast('请先测试通过再保存','bad');
+    return;
+  }
+  busy(btn,true);
+  api('POST','/api/config',{voiceBaseUrl:url,voiceApiKey:voiceState.apiKey||'',
+    voiceModel:model,voiceSpeaker:speaker})
+    .then(function(){
+      if(voiceState.apiKey)voiceState.hasKey=true;
+      voiceState.apiKey='';
+      var row=document.querySelector('[data-voice]');
+      if(row)row.outerHTML=voiceRowHtml();
+      var nr=document.querySelector('[data-voice]');
+      if(nr)nr.addEventListener('click',openVoiceModal);
+      updateVoiceState();
+      toast('语音配置已保存，立即生效','ok');
+    })
+    .catch(function(e){toast(e.message,'bad');})
+    .then(function(){busy(btn,false);});
+}
+
+function bindVoiceModal(){
+  $('b-voice-add').addEventListener('click',openVoiceModal);
+  $('voice-modal-x').addEventListener('click',closeVoiceModal);
+  $('voice-m-cancel').addEventListener('click',closeVoiceModal);
+  $('voice-modal-mask').addEventListener('click',function(e){if(e.target===this)closeVoiceModal();});
+  $('voice-key-toggle').addEventListener('click',function(){
+    var input=$('voice-key');
+    var show=input.type==='password';
+    input.type=show?'text':'password';
+    this.textContent=show?'隐藏':'显示';
+  });
+  $('b-voice-test').addEventListener('click',function(){testVoice(this);});
+  $('voice-m-done').addEventListener('click',function(){saveVoice(this);});
+  $('b-voice-save').addEventListener('click',function(){saveVoice(this);});
+  var row=document.querySelector('[data-voice]');
+  if(row)row.addEventListener('click',openVoiceModal);
+  updateVoiceState();
+  if(!voiceEscBound){
+    voiceEscBound=true;
+    document.addEventListener('keydown',function(e){
+      var m=$('voice-modal-mask');
+      if(e.key==='Escape'&&m&&!m.hidden)closeVoiceModal();
+    });
+  }
+}
+
 function updateImageGenState(){
   var st=$('igen-state');
   var save=$('b-igen-save');
@@ -2459,7 +2970,7 @@ function updateImageGenState(){
   if(st){
     if(ok)st.textContent='已测试通过';
     else if(imageGenState.model)st.textContent='未测试，保存前先在弹窗里测试';
-    else st.textContent='未配置';
+    else st.textContent='未配置（用内置 CF 生图）';
   }
 }
 
@@ -2498,10 +3009,13 @@ function testImageGen(btn){
 }
 
 function saveImageGen(btn){
-  if(!imageGenState.tested||imageGenState.model!==imageGenState.testedModel
-    ||imageGenState.baseUrl!==imageGenState.testedUrl){
-    toast('请先测试通过再保存','bad');
-    return;
+  // 清空（model/baseUrl 都空）时允许保存，回到内置 CF 生图
+  if(imageGenState.model||imageGenState.baseUrl){
+    if(!imageGenState.tested||imageGenState.model!==imageGenState.testedModel
+      ||imageGenState.baseUrl!==imageGenState.testedUrl){
+      toast('请先测试通过再保存','bad');
+      return;
+    }
   }
   busy(btn,true);
   api('POST','/api/config',{imageGenBaseUrl:imageGenState.baseUrl,
@@ -2586,10 +3100,9 @@ function grpModalHtml(){
   h+='<div class="chip-label" id="grp-m-openid"></div>';
   h+='<div id="grp-m-info"><p class="muted">正在读取群资料…</p></div>';
   h+='<div class="chip-label">成员管理（官方接口，每页 30 条）</div>';
-  h+='<div class="form-actions"><div class="field grow"><label for="grp-mute-mins">禁言时长</label><select id="grp-mute-mins" name="grp-mute-mins">'
-    +'<option value="10">10 分钟</option><option value="60">1 小时</option><option value="720">12 小时</option>'
-    +'<option value="1440">1 天</option><option value="10080">7 天</option><option value="43200">30 天（上限）</option>'
-    +'</select></div>';
+  h+='<div class="form-actions"><div class="field grow"><label for="selt_grp-mute-mins">禁言时长</label>'
+    +selHtml('grp-mute-mins','10',[['10','10 分钟'],['60','1 小时'],['720','12 小时'],['1440','1 天'],['10080','7 天'],['43200','30 天（上限）']],{nativeId:'grp-mute-mins',nativeAttrs:' name="grp-mute-mins"'})
+    +'</div>';
   h+='<button class="btn" type="button" id="grp-members-btn">'+IX.refresh+'<span>拉取成员列表</span></button>';
   h+='<button class="btn" type="button" id="grp-members-more" hidden>下一页</button></div>';
   h+='<div class="form-actions"><div class="field grow"><label for="grp-manual-mid">手动禁言（成员列表内邀中拉不到时，直接粘贴成员 openid）</label>'
@@ -2960,6 +3473,7 @@ function bindGrpModal(){
   $('grp-manual-btn').addEventListener('click',muteGrpManual);
   $('grp-m-members').addEventListener('click',onGrpMemberClick);
   bindGrpExtras();
+  bindSel($('grp-modal-mask'));
   var infoBox=$('grp-m-info');
   if(infoBox)infoBox.addEventListener('click',onGrpMemberClick);
   var mask=$('grp-modal-mask');

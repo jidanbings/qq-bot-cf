@@ -246,6 +246,8 @@ button{font-family:inherit}
   padding:.42rem .95rem;font-size:.8rem;cursor:pointer;transition:border-color .15s,color .15s,background .15s}
 .chip:hover{border-color:var(--accent);color:var(--accent)}
 .chip:active{background:var(--accent-light)}
+.prompt-presets{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.5rem}
+.prompt-presets .chip{font-size:.72rem;padding:.3rem .7rem;border-radius:8px}
 
 .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:1rem;margin-bottom:1.5rem}
 .stat{position:relative;background:var(--surface);border:1px solid var(--border);border-radius:14px;
@@ -337,6 +339,35 @@ button{font-family:inherit}
   background-position:calc(100% - 17px) 15px,calc(100% - 12px) 15px;background-size:5px 5px;background-repeat:no-repeat}
 .field .hint{font-size:.7rem;color:var(--muted);margin-top:.25rem;line-height:1.6}
 
+/* ---------- 自绘下拉（替代原生 select） ---------- */
+.sel{position:relative;width:100%}
+.sel-trigger{width:100%;display:flex;align-items:center;gap:.5rem;padding:.65rem .85rem;
+  border:1.5px solid var(--border-strong);border-radius:12px;background:var(--surface);color:var(--text);
+  font-size:.9rem;font-family:inherit;cursor:pointer;text-align:left;outline:none;transition:all .2s}
+.sel-trigger:hover{border-color:var(--border-strong)}
+.sel-trigger:focus-visible{border-color:var(--accent);box-shadow:0 0 0 4px var(--primary-ring)}
+.sel-trigger[aria-expanded="true"]{border-color:var(--accent);box-shadow:0 0 0 4px var(--primary-ring)}
+.sel-label{flex:1 1 auto;min-width:0;white-space:normal;word-break:break-word;line-height:1.45}
+.sel-arrow{flex:0 0 auto;width:18px;height:18px;display:inline-flex;align-items:center;justify-content:center;
+  color:var(--muted);transition:transform .18s}
+.sel-arrow svg{width:14px;height:14px}
+.sel-menu{position:absolute;top:calc(100% + 6px);left:0;right:0;z-index:40;
+  background:var(--surface);border:1.5px solid var(--border-strong);border-radius:12px;
+  box-shadow:0 12px 32px -12px rgba(15,18,34,.35);padding:.35rem;max-height:260px;overflow-y:auto}
+.sel-opt{width:100%;display:block;padding:.55rem .7rem;border:none;background:transparent;color:var(--text);
+  font-size:.88rem;font-family:inherit;text-align:left;border-radius:8px;cursor:pointer;transition:background .12s}
+.sel-opt:hover{background:var(--surface-2)}
+.sel-opt[aria-selected="true"]{background:var(--accent-light);color:var(--accent);font-weight:600}
+.sel-narrow{max-width:14rem}
+.sel-wrap{flex:1;min-width:0}
+/* 弹窗里的下拉：菜单要盖在滚动容器之上，别被 modal-body 的 overflow 裁掉。
+   也把 z-index 提起来，别被后面的字段遮住。 */
+.modal .sel-menu{z-index:200}
+/* 窄版：沙箱环境这类只有两三个选项的下拉 */
+@media (max-width:600px){
+  .sel-narrow{max-width:100%}
+}
+
 .tp-banner{display:flex;flex-direction:column;gap:5px;padding:12px 14px;border-radius:12px;
   margin-bottom:1rem;border:1px solid var(--border-strong);background:var(--field)}
 .tp-banner b{font-size:13px;font-weight:650}
@@ -406,6 +437,10 @@ button{font-family:inherit}
 .prov-row:last-child{border-bottom:none}
 .prov-row:hover{background:var(--surface-2)}
 .prov-row.is-off{opacity:.55}
+.cf-row{display:flex;align-items:center;gap:.7rem;padding:.7rem .4rem;border-bottom:1px solid var(--border);cursor:default}
+.cf-row:last-child{border-bottom:none}
+.cf-row .prov-info b{font-size:13.5px}
+.cf-row .prov-info small{white-space:normal;overflow:visible;text-overflow:clip}
 .prov-info{min-width:0;flex:1}
 .prov-info b{display:block;font-size:13.5px;font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .prov-info small{display:block;font-size:11.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -497,9 +532,17 @@ button{font-family:inherit}
 .menu-no{width:24px;height:24px;flex:0 0 auto;border-radius:8px;background:var(--accent-light);color:var(--accent);
   display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;margin-bottom:.35rem}
 @media (max-width:600px){
-  .menu-row{align-items:stretch}
-  .menu-row .field{flex:1 1 100%}
-  .menu-row .prov-tools{justify-content:flex-end}
+  /* 移动端把每个菜单项压成两列紧凑布局：
+     第一行 = 序号 + 删除按钮，第二行 = 名称 + 类型，第三行 = 发送内容独占一行。
+     这样加一个菜单项不用往下滑很久。 */
+  .menu-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:.45rem .55rem;
+    align-items:end;padding:.55rem .6rem}
+  .menu-no{grid-column:1;grid-row:1;margin-bottom:0;justify-self:start}
+  .menu-row .prov-tools{grid-column:2;grid-row:1;justify-content:flex-end}
+  .menu-row .field:nth-child(2){grid-column:1;grid-row:2}
+  .menu-row .field:nth-child(3){grid-column:2;grid-row:2}
+  .menu-row .field.grow{grid-column:1/-1;grid-row:3}
+  .menu-row .field{min-width:0}
 }
 .ai-sec{padding:0 0 .25rem}
 .ai-sec+.ai-sec{margin-top:1.4rem;padding-top:1.4rem;border-top:1px solid var(--border-strong)}
@@ -701,15 +744,24 @@ button{font-family:inherit}
   .fs-head{padding:1rem}
   .fs-body{padding:.75rem .75rem .25rem}
   .grid{grid-template-columns:minmax(0,1fr)}
+  /* 对话行为区块：6 个下拉项移动端双列，系统提示词仍占满整行 */
+  .fs-sec-behavior .grid{grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:0 .8rem}
+  .fs-sec-behavior .grid .wide{grid-column:1/-1}
   .field{margin-bottom:.5rem}
   .field>label{font-size:.68rem;margin-bottom:.15rem}
   .field input,.field textarea,.field select{font-size:.78rem;padding:.4rem .55rem;border-radius:8px}
   .field textarea{min-height:120px}
+  /* 自绘下拉：移动端字体调小、内边距收紧，长文案换行不截断 */
+  .sel-trigger{font-size:.78rem;padding:.4rem .55rem;border-radius:8px}
+  .sel-label{font-size:.78rem;line-height:1.4}
+  .sel-opt{font-size:.78rem;padding:.5rem .6rem}
   .dl{grid-template-columns:minmax(84px,auto) minmax(0,1fr)}
   .form-actions .btn{flex:1 1 auto;min-width:0}
-  .fs-foot{row-gap:.5rem}
-  .fs-foot-note{flex:1 1 100%;margin-right:0}
-  .fs-foot .btn{margin-left:auto}
+  /* 保存行：往上收紧，按钮做小，提示文字不独占一行 */
+  .fs-foot{margin:0 0 .5rem;padding-top:.5rem;row-gap:.35rem}
+  .fs-foot-note{flex:1 1 auto;margin-right:auto;font-size:.62rem;line-height:1.5}
+  .fs-foot .btn{margin-left:auto;padding:.28rem .75rem;border-radius:30px;font-size:.72rem;gap:.3rem}
+  .fs-foot .btn svg{width:13px;height:13px}
   .ai-sec-head .hint{flex:1 1 100%;order:3}
   .ai-sec-head .btn{margin-left:auto}
   .confirm{width:100%;max-width:360px}

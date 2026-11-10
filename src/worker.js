@@ -190,6 +190,33 @@ async function testImageGen(baseUrl, apiKey, model) {
   }
 }
 
+async function testVoiceSpeech(baseUrl, apiKey, model, speaker) {
+  const body = {
+    model,
+    input: '你好，这是语音连通性测试。',
+    response_format: 'mp3',
+  };
+  const s = String(speaker || '').trim();
+  if (s) body.voice = s;
+  try {
+    const res = await fetch(`${baseUrl}/audio/speech`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(60000),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      return { ok: false, error: `HTTP ${res.status}${text ? ' ' + text.slice(0, 160) : ''}` };
+    }
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    if (!bytes || !bytes.length) return { ok: false, error: '语音接口没有返回音频' };
+    return { ok: true, bytes: bytes.length };
+  } catch (e) {
+    return { ok: false, error: e && e.name === 'TimeoutError' ? '测试超时（60 秒）' : (e && e.message) || '测试失败' };
+  }
+}
+
 async function testAiChat(baseUrl, apiKey, model, temperature) {
   const payload = {
     model,
@@ -504,6 +531,19 @@ async function handleApi(request, env, url) {
         if (!baseUrl) throw new HttpError(400, 'invalid_config', '请先填写生图 Base URL');
         if (!apiKey) throw new HttpError(400, 'invalid_config', '请先填写生图 API Key');
         return jsonResult(await testImageGen(baseUrl, apiKey, model));
+      }
+      break;
+
+    case '/api/voice/test':
+      if (method === 'POST') {
+        const body = await readJson(request);
+        const baseUrl = normalizeUrl(typeof body.baseUrl === 'string' ? body.baseUrl : '');
+        const model = typeof body.model === 'string' ? body.model.trim() : '';
+        const typedKey = typeof body.apiKey === 'string' ? body.apiKey.trim() : '';
+        if (!baseUrl) throw new HttpError(400, 'invalid_config', '请先填写语音 Base URL');
+        if (!model) throw new HttpError(400, 'invalid_config', '请先填写语音模型');
+        if (!typedKey) throw new HttpError(400, 'invalid_config', '请先填写语音 API Key');
+        return jsonResult(await testVoiceSpeech(baseUrl, typedKey, model, body.speaker));
       }
       break;
 

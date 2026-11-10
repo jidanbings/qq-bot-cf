@@ -28,6 +28,7 @@ import {
 import { Logger } from './utils/logger.js';
 import { withRetry, createExponentialBackoff } from './utils/retry.js';
 import { maskId } from './utils/crypto.js';
+import { cfChatProvider, cfText, cfImage, cfTts, CF_MODELS, providerChat } from './utils/workers-ai.js';
 
 const reconnectDelay = createExponentialBackoff();
 const MENTION_RE = /<@[!&]?[^>\s]{0,64}>/g;
@@ -881,6 +882,16 @@ export class QQBotDO {
     this.groupBlacklist = new Set((config.groupBlacklist || '').split(/[,，]/).map(s => s.trim()).filter(Boolean));
     this.sensitiveWords = (config.sensitiveWords || '').split(/[,，]/).map(s => s.trim()).filter(Boolean);
     this.logger.info(`Config loaded (v${APP_VERSION}), keys: ${Object.keys(config).join(',')}`);
+  }
+
+  // 对话 provider 列表：内置 CF 对话模型（开启时）排最前，后面跟外部 provider。
+  chatProviders() {
+    const list = [];
+    if (this.config.cfChatEnabled !== '0') list.push(cfChatProvider());
+    for (const p of this.config.aiProviders || []) {
+      if (p && p.enabled !== 0 && p.baseUrl && p.apiKey && p.model) list.push(p);
+    }
+    return list;
   }
 
   async refreshToken() {
@@ -1774,11 +1785,11 @@ export class QQBotDO {
           await this.sendReply({ isC2C, scopeId, content: '画什么？用法：/画 一只橘猫，水彩风格', msgId });
           return;
         }
-        if (!this.config.imageGenModel) {
+        if (!this.config.imageGenModel && this.config.cfImageGenEnabled === '0') {
           await this.sendReply({
             isC2C,
             scopeId,
-            content: '我还没接上生图能力——打开后台「生图模型」页，填好模型名，点「测试」通过后保存，我就能画了。',
+            content: '我还没接上生图能力——打开后台「AI 模型」页开启内置生图，或填一个外部生图模型，我就能画了。',
             msgId,
           });
           return;
@@ -1874,9 +1885,7 @@ export class QQBotDO {
 
     if (isC2C && msgId) this.state.waitUntil(this.sendTyping({ scopeId, msgId }));
 
-    let providers = (this.config.aiProviders || []).filter(
-      (p) => p && p.enabled !== 0 && p.baseUrl && p.apiKey && p.model
-    );
+    let providers = this.chatProviders();
     if (!providers.length) {
       this.logger.warn('No AI available (去后台「AI 模型」添加并启用一个)');
       return;
@@ -1978,37 +1987,26 @@ export class QQBotDO {
       }
       for (const provider of providers) {
         try {
-          const aiResp = await withRetry(async () => {
-            const res = await fetch(`${provider.baseUrl}/chat/completions`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${provider.apiKey}` },
-              body: JSON.stringify({
-                model: provider.model,
-                messages: msgs,
-                temperature: provider.temperature === '' || provider.temperature == null
-                  ? 0.8
-                  : Number(provider.temperature),
+          const rawText = await withRetry(
+            () =>
+              providerChat(this.env, provider, msgs, {
+                temperature:
+                  provider.temperature === '' || provider.temperature == null
+                    ? 0.8
+                    : Number(provider.temperature),
+                timeout: imageUrl ? 180000 : 90000,
               }),
-              signal: AbortSignal.timeout(imageUrl ? 180000 : 90000),
-            });
-            if (!res.ok) {
-              const text = await res.text().catch(() => '');
-              const err = new Error(`AI API error: HTTP ${res.status}${text ? ' ' + text.slice(0, 120) : ''}`);
-              err.status = res.status;
-              throw err;
+            {
+              maxAttempts: 2,
+              delay: 800,
+              shouldRetry: (e) =>
+                !(e?.name === 'TimeoutError' || e?.name === 'AbortError') &&
+                (e.status === undefined || e.status === 429 || e.status >= 500),
+              onRetry: (err, attempt) => this.logger.warn(`AI retry ${attempt}: ${err.message}`),
             }
-            return res;
-          }, {
-            maxAttempts: 2,
-            delay: 800,
-            shouldRetry: (e) =>
-              !(e?.name === 'TimeoutError' || e?.name === 'AbortError') &&
-              (e.status === undefined || e.status === 429 || e.status >= 500),
-            onRetry: (err, attempt) => this.logger.warn(`AI retry ${attempt}: ${err.message}`),
-          });
+          );
 
-          const aiData = await aiResp.json();
-          const text = stripMentions(aiData.choices?.[0]?.message?.content);
+          const text = stripMentions(rawText);
           const clean = /^@\S+\s+/.test(text) ? text.replace(/^@\S+\s+/, '') : text;
           if (!clean) throw new Error('AI 返回空内容');
           const stripped = stripToolRecords(clean);
@@ -2046,7 +2044,7 @@ export class QQBotDO {
       return;
     }
 
-    if (this.config.imageGenModel) {
+    if (this.config.imageGenModel || this.config.cfImageGenEnabled !== '0') {
       const genMatch = reply.match(/\[GEN_IMAGE\]\s*([\s\S]+)/);
       if (genMatch) {
         await this.rememberAssistant({ key, session, history, text: '（系统记录：已生成图片并发送给用户）', useAiDo, historyLimit, providers });
@@ -2169,7 +2167,8 @@ export class QQBotDO {
   buildSystemPrompt() {
     const basePrompt = this.config.systemPrompt ||
       '你是一个友好、靠谱、乐于助人的QQ机器人助手。回答保持简洁、自然、口语化，用中文交流。';
-    const genHint = this.config.imageGenModel
+    const hasImageGen = !!this.config.imageGenModel || this.config.cfImageGenEnabled !== '0';
+    const genHint = hasImageGen
       ? '\n\n【生图能力】你支持生成图片。当用户要求你画图、绘制或生成图片时，你必须只输出一行：[GEN_IMAGE] <具体的图片描述>。如果想配一句话（比如「画好啦」），写在标记**前面**，图片发完后会跟着发出去；不要写「生成好了」「马上画」这类空话。系统会自动调用生图模型把图片发给用户。用户只是聊天、没有要求画图时正常回答。'
       : '\n\n【注意】你没有生图能力，也没有图片生成工具。当用户要求画图时，如实说明「需要先在后台配置生图模型才能画」，绝对不要假装已经生成图片或说「生成好了」。';
     const toolHint =
@@ -2327,8 +2326,14 @@ export class QQBotDO {
           imageGenModel: this.config.imageGenModel || '',
           imageBase: String(this.config.imageGenBaseUrl || '').trim() || (provider ? provider.baseUrl : ''),
           imageKey: String(this.config.imageGenApiKey || '').trim() || (provider ? provider.apiKey : ''),
+          cfImageGenEnabled: this.config.cfImageGenEnabled,
           voiceLang: this.config.voiceLang || 'zh',
           voiceGain: this.config.voiceGain || '6',
+          cfVoiceEnabled: this.config.cfVoiceEnabled,
+          voiceBaseUrl: this.config.voiceBaseUrl || '',
+          voiceApiKey: this.config.voiceApiKey || '',
+          voiceModel: this.config.voiceModel || '',
+          voiceSpeaker: this.config.voiceSpeaker || '',
         },
       }),
     });
@@ -2420,9 +2425,7 @@ export class QQBotDO {
       return;
     }
 
-    const providers = (this.config.aiProviders || []).filter(
-      (p) => p && p.enabled !== 0 && p.baseUrl && p.apiKey && p.model
-    );
+    const providers = this.chatProviders();
     if (!providers.length) {
       await this.sendReply({ isC2C, scopeId, content: '还没配置 AI，去后台「AI 模型」加一个再 /沙箱。', msgId });
       return;
@@ -2609,9 +2612,7 @@ export class QQBotDO {
       return;
     }
 
-    const providers = (this.config.aiProviders || []).filter(
-      (p) => p && p.enabled !== 0 && p.baseUrl && p.apiKey && p.model
-    );
+    const providers = this.chatProviders();
     if (!providers.length) {
       await this.sendReply({ isC2C, scopeId, content: '还没配置 AI，去后台「AI 模型」加一个再 /工作。', msgId });
       return;
@@ -2708,7 +2709,7 @@ export class QQBotDO {
   }
 
   sysKey() {
-    return `${this.config.systemPrompt || ''}|${this.config.imageGenModel || ''}|${this.config.toolCalling || ''}`;
+    return `${this.config.systemPrompt || ''}|${this.config.imageGenModel || ''}|${this.config.cfImageGenEnabled || ''}|${this.config.toolCalling || ''}`;
   }
 
   nextMsgSeq(msgId) {
@@ -2851,43 +2852,34 @@ export class QQBotDO {
     const sendUrl = isC2C
       ? `${this.apiBase()}/v2/users/${scopeId}/messages`
       : `${this.apiBase()}/v2/groups/${scopeId}/messages`;
-    const button = (label, action) => ({
-      id: `b_${Math.random().toString(36).slice(2, 8)}`,
-      render_data: { label, visited_label: label, style: action.style || 0 },
-      action: {
-        type: action.url ? 0 : 2,
-        permission: { type: 2, specify_role_ids: [], specify_user_ids: [] },
-        data: action.url || action.data,
-        ...(action.url ? {} : { enter: true, reply: true }),
-      },
+    // 指令按钮：type=2 点击把指令填进输入框，enter=true 直接发送
+    const cmd = (label, data, style) => ({
+      id: `m_${Math.random().toString(36).slice(2, 9)}`,
+      render_data: { label, visited_label: label, style: style || 0 },
+      action: { type: 2, permission: { type: 2 }, data, enter: true, reply: true },
     });
+    // 链接按钮：type=0 跳转外链
+    const link = (label, url) => ({
+      id: `l_${Math.random().toString(36).slice(2, 9)}`,
+      render_data: { label, visited_label: label, style: 1 },
+      action: { type: 0, permission: { type: 2 }, data: url },
+    });
+    const row = (btns) => ({ buttons: btns });
+
     const payload = {
       msg_type: 2,
       markdown: {
         content:
-          '**🤖 机器人菜单**\n点按钮会把指令填进输入框，再点发送即可。群里只接收 @我 的消息，按钮发出后如果没反应，@我 再发一次就好。',
+          '**🤖 机器人菜单**\n点一下按钮即可，指令会自动发送。群里记得先 @我 再点按钮。',
       },
       keyboard: {
         content: {
           rows: [
-            {
-              buttons: [
-                button('🧭 使用帮助', { data: '/帮助', style: 1 }),
-                button('🎨 画一张', { data: '/画 ' }),
-              ],
-            },
-            {
-              buttons: [
-                button('🗂 我的任务', { data: '/工作 列表' }),
-                button('📂 我的文件', { data: '帮我列一下我的文件' }),
-              ],
-            },
-            {
-              buttons: [
-                button('↩️ 撤回上一条', { data: '/撤回' }),
-                button('📖 项目主页', { url: 'https://github.com/jidanbings/qq-bot-cf' }),
-              ],
-            },
+            row([cmd('🖼 画一张图', '/画 ', 1), cmd('😄 来张梗图', '/梗图')]),
+            row([cmd('🗂 我的任务', '/工作 列表'), cmd('📂 我的文件', '帮我列一下我的文件')]),
+            row([cmd('⏰ 设个提醒', '帮我设个提醒：', 1), cmd('🔊 说句话', '/语音 ')]),
+            row([cmd('🧭 使用帮助', '/帮助'), cmd('↩️ 撤回上一条', '/撤回')]),
+            row([link('📖 项目主页', 'https://github.com/jidanbings/qq-bot-cf')]),
           ],
         },
       },
@@ -2910,7 +2902,8 @@ export class QQBotDO {
         isC2C,
         scopeId,
         msgId,
-        content: '🤖 机器人菜单\n· /画 描述 —— AI 生图\n· /撤回 —— 撤回我上一条消息\n· /帮助 —— 看完整说明',
+        content:
+          '🤖 机器人菜单\n· /画 描述 —— AI 生图\n· /梗图 [名字] —— 内置梗图\n· /工作 列表 —— 我的任务\n· /语音 文字 —— 合成语音\n· /帮助 —— 完整说明\n· /撤回 —— 撤回上一条',
       });
     }
   }
@@ -2987,24 +2980,42 @@ export class QQBotDO {
   }
 
 
+  // 语音合成：优先外部 OpenAI 兼容 /audio/speech（配了 voiceBaseUrl/voiceModel 时），
+  // 否则用内置 CF MeloTTS。两者都会被 voiceGain 调整响度。
   async synthVoice(text, lang = 'zh') {
-    const ai = this.env && this.env.AI;
-    if (!ai || typeof ai.run !== 'function') {
-      throw new Error('当前环境没有 Workers AI 绑定（wrangler.toml 里需要 [ai] binding = "AI"）');
+    const base = String(this.config.voiceBaseUrl || '').trim();
+    const key = String(this.config.voiceApiKey || '').trim();
+    const model = String(this.config.voiceModel || '').trim();
+    if (base && key && model) {
+      return this.synthVoiceExternal(text, base, key, model);
     }
-    const out = await ai.run('@cf/myshell-ai/melotts', {
-      prompt: String(text).slice(0, 300),
-      lang: String(lang || 'zh').slice(0, 8),
+    if (this.config.cfVoiceEnabled === '0') {
+      throw new Error('内置语音已关闭，且未配置外部语音服务');
+    }
+    return cfTts(this.env, CF_MODELS.voice, text, lang);
+  }
+
+  async synthVoiceExternal(text, base, key, model) {
+    const speaker = String(this.config.voiceSpeaker || '').trim();
+    const body = {
+      model,
+      input: String(text).slice(0, 300),
+      voice: speaker || undefined,
+      response_format: 'mp3',
+    };
+    if (!body.voice) delete body.voice;
+    const res = await fetch(`${base}/audio/speech`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(60000),
     });
-    let bytes = null;
-    if (out instanceof ArrayBuffer) bytes = new Uint8Array(out);
-    else if (out instanceof Uint8Array) bytes = out;
-    else if (out && typeof out.arrayBuffer === 'function') bytes = new Uint8Array(await out.arrayBuffer());
-    else if (out && typeof out.audio === 'string') bytes = fromBase64(out.audio);
-    else if (out && out.body && typeof out.body.getReader === 'function') {
-      bytes = new Uint8Array(await new Response(out.body).arrayBuffer());
+    if (!res.ok) {
+      const t = await res.text().catch(() => '');
+      throw new Error(`语音合成 HTTP ${res.status}${t ? ' ' + t.slice(0, 100) : ''}`);
     }
-    if (!bytes || !bytes.length) throw new Error('TTS 没有返回音频数据');
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    if (!bytes || !bytes.length) throw new Error('语音接口没有返回音频');
     return bytes;
   }
 
@@ -3023,6 +3034,7 @@ export class QQBotDO {
       }
       const dataUri = `data:audio/mpeg;base64,${toBase64(bytes)}`;
       const sent = await this.sendMedia({ isC2C, scopeId, msgId, fileType: 3, source: dataUri, fileExt: 'mp3' });
+      const voiceModel = String(this.config.voiceModel || '').trim() || 'MeloTTS';
       if (sent) {
         this.logExchange({
           isC2C,
@@ -3030,7 +3042,7 @@ export class QQBotDO {
           userId,
           userContent: String(userContent || '').trim() || '（语音）',
           aiReply: `[语音] ${clean}`,
-          model: '语音 · MeloTTS',
+          model: `语音 · ${voiceModel}`,
         });
       }
       return sent;
@@ -3478,61 +3490,20 @@ export class QQBotDO {
   }
 
   async handleImageGen({ isC2C, scopeId, msgId, prompt, caption, userId, userContent }) {
-    const model = String(this.config.imageGenModel || '').trim();
-    const provider = (this.config.aiProviders || []).find(
-      (p) => p && p.enabled !== 0 && p.baseUrl && p.apiKey
-    );
-    const baseUrl = String(this.config.imageGenBaseUrl || '').trim() || (provider ? provider.baseUrl : '');
-    const apiKey = String(this.config.imageGenApiKey || '').trim() || (provider ? provider.apiKey : '');
-    if (!model) {
+    // 生图：优先外部生图配置（imageGenModel 有值时）；否则用内置 CF flux（开关开启时）。
+    const extModel = String(this.config.imageGenModel || '').trim();
+    const useCf = !extModel && this.config.cfImageGenEnabled !== '0';
+
+    if (!extModel && !useCf) {
       await this.sendReply({
         isC2C,
         scopeId,
-        content: '还没配置生图模型——打开左侧「生图模型」页填好并测试通过后保存，我就能画了。',
+        content: '生图还没开——打开后台「AI 模型」页，开启内置生图，或填一个外部生图模型，我就能画了。',
         msgId,
       });
       return;
-    }
-    if (!baseUrl || !apiKey) {
-      await this.sendReply({
-        isC2C,
-        scopeId,
-        content: '生图接口还没配全——打开左侧「生图模型」页填 Base URL、API Key 和模型名。',
-        msgId,
-      });
-      return;
-    }
-    const toolNs = this.env && (this.env.WORK || this.env.TOOL);
-    if (toolNs && typeof toolNs.idFromName === 'function') {
-      if (msgId) {
-        try {
-          await this.sendReply({
-            isC2C,
-            scopeId,
-            content: IMAGE_WAIT_LINES[Math.floor(Math.random() * IMAGE_WAIT_LINES.length)],
-            msgId,
-          });
-        } catch (e) {
-          this.logger.warn(`Image wait notice failed: ${e.message}`);
-        }
-      }
-      const out = await this.execToolDo('image', { prompt, caption }, { isC2C, scopeId, msgId, userId });
-      if (out) {
-        if (out.ok) {
-          this.logExchange({
-            isC2C,
-            scopeId,
-            userId,
-            userContent: String(userContent || '').trim() || '（生图）',
-            aiReply: `[图片] ${String(caption || '（已生成）').slice(0, 200)}`,
-            model: `生图 · ${model}`,
-          });
-        }
-        return out;
-      }
     }
 
-    this.logger.info(`Image gen: model=${model} prompt=${prompt.slice(0, 40)}...`);
     if (msgId) {
       try {
         await this.sendReply({
@@ -3545,35 +3516,63 @@ export class QQBotDO {
         this.logger.warn(`Image wait notice failed: ${e.message}`);
       }
     }
+
     try {
-      const res = await withRetry(
-        async () => {
-          const r = await fetch(`${baseUrl}/images/generations`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-            body: JSON.stringify({ model, prompt, n: 1 }),
-            signal: AbortSignal.timeout(150000),
+      let imageUrl = null;
+      let logModel = '';
+
+      if (useCf) {
+        // 内置 CF flux 返回 JPEG（base64），转 data URI 直传
+        const img = await cfImage(this.env, CF_MODELS.image, prompt);
+        imageUrl = `data:${img.mime};base64,${toBase64(img.bytes)}`;
+        logModel = `生图 · ${CF_MODELS.image}`;
+      } else {
+        const provider = (this.config.aiProviders || []).find(
+          (p) => p && p.enabled !== 0 && p.baseUrl && p.apiKey
+        );
+        const baseUrl = String(this.config.imageGenBaseUrl || '').trim() || (provider ? provider.baseUrl : '');
+        const apiKey = String(this.config.imageGenApiKey || '').trim() || (provider ? provider.apiKey : '');
+        if (!baseUrl || !apiKey) {
+          await this.sendReply({
+            isC2C,
+            scopeId,
+            content: '生图接口还没配全——打开左侧「生图模型」页填 Base URL、API Key 和模型名。',
+            msgId,
           });
-          if (!r.ok) {
-            const text = await r.text().catch(() => '');
-            const err = new Error(`HTTP ${r.status}${text ? ' ' + text.slice(0, 120) : ''}`);
-            err.status = r.status;
-            throw err;
-          }
-          return r;
-        },
-        {
-          maxAttempts: 2,
-          delay: 1500,
-          shouldRetry: (e) => e.status === undefined || e.status === 429 || e.status >= 500,
-          onRetry: (err, attempt) => this.logger.warn(`Image gen retry ${attempt}: ${err.message}`),
+          return;
         }
-      );
-      const data = await res.json();
-      const item = data.data?.[0] || {};
-      const url = item.url || (item.b64_json ? `data:image/png;base64,${item.b64_json}` : '');
-      if (!url) throw new Error('生图接口没有返回图片地址');
-      const sent = await this.sendImage({ isC2C, scopeId, imageUrl: url, msgId });
+        const res = await withRetry(
+          async () => {
+            const r = await fetch(`${baseUrl}/images/generations`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+              body: JSON.stringify({ model: extModel, prompt, n: 1 }),
+              signal: AbortSignal.timeout(150000),
+            });
+            if (!r.ok) {
+              const text = await r.text().catch(() => '');
+              const err = new Error(`HTTP ${r.status}${text ? ' ' + text.slice(0, 120) : ''}`);
+              err.status = r.status;
+              throw err;
+            }
+            return r;
+          },
+          {
+            maxAttempts: 2,
+            delay: 1500,
+            shouldRetry: (e) => e.status === undefined || e.status === 429 || e.status >= 500,
+            onRetry: (err, attempt) => this.logger.warn(`Image gen retry ${attempt}: ${err.message}`),
+          }
+        );
+        const data = await res.json();
+        const item = data.data?.[0] || {};
+        imageUrl = item.url || (item.b64_json ? `data:image/png;base64,${item.b64_json}` : '');
+        logModel = `生图 · ${extModel}`;
+        if (!imageUrl) throw new Error('生图接口没有返回图片地址');
+      }
+
+      this.logger.info(`Image gen: model=${logModel} prompt=${prompt.slice(0, 40)}...`);
+      const sent = await this.sendImage({ isC2C, scopeId, imageUrl, msgId });
       if (!sent) throw new Error('图片发送失败');
       this.logger.info('Image gen: sent');
       const line = String(caption || '').trim() || IMAGE_CAPTIONS[Math.floor(Math.random() * IMAGE_CAPTIONS.length)];
@@ -3584,7 +3583,7 @@ export class QQBotDO {
         userId,
         userContent: String(userContent || '').trim() || '（生图）',
         aiReply: `[图片] ${line}`,
-        model: `生图 · ${model}`,
+        model: logModel,
       });
     } catch (e) {
       this.logger.warn(`Image gen failed: ${e.message}`);
@@ -3666,18 +3665,7 @@ export class QQBotDO {
   }
 
   async chatOnce(provider, messages, { timeout = 60000 } = {}) {
-    const res = await fetch(`${provider.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${provider.apiKey}` },
-      body: JSON.stringify({ model: provider.model, messages, temperature: 0.3 }),
-      signal: AbortSignal.timeout(timeout),
-    });
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      throw new Error(`HTTP ${res.status}${text ? ' ' + text.slice(0, 120) : ''}`);
-    }
-    const data = await res.json();
-    return String(data.choices?.[0]?.message?.content || '').trim();
+    return providerChat(this.env, provider, messages, { temperature: 0.3, timeout });
   }
 
   async maybeSummarize(key, session, provider) {

@@ -1,5 +1,6 @@
 import { withRetry } from './utils/retry.js';
 import { providerSupportsVision } from './utils/vision.js';
+import { providerChat } from './utils/workers-ai.js';
 
 const PREFIX = 'chat:';
 const MAX_KEYS = 500;
@@ -253,15 +254,7 @@ export class ChatDO {
   }
 
   async chatOnce(provider, messages, { timeout = 60000 } = {}) {
-    const res = await fetch(`${provider.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${provider.apiKey}` },
-      body: JSON.stringify({ model: provider.model, messages, temperature: 0.3 }),
-      signal: AbortSignal.timeout(timeout),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    return String(data.choices?.[0]?.message?.content || '').trim();
+    return providerChat(this.env, provider, messages, { temperature: 0.3, timeout });
   }
 
   async chat(body) {
@@ -306,29 +299,15 @@ export class ChatDO {
     let lastErr = null;
     for (const provider of usable) {
       try {
-        const res = await withRetry(
-          async () => {
-            const r = await fetch(`${provider.baseUrl}/chat/completions`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${provider.apiKey}` },
-              body: JSON.stringify({
-                model: provider.model,
-                messages: msgs,
-                temperature:
-                  provider.temperature === '' || provider.temperature == null
-                    ? 0.8
-                    : Number(provider.temperature),
-              }),
-              signal: AbortSignal.timeout(hasImage ? 180000 : 90000),
-            });
-            if (!r.ok) {
-              const text = await r.text().catch(() => '');
-              const err = new Error(`HTTP ${r.status}${text ? ' ' + text.slice(0, 120) : ''}`);
-              err.status = r.status;
-              throw err;
-            }
-            return r;
-          },
+        const text = await withRetry(
+          async () =>
+            providerChat(this.env, provider, msgs, {
+              temperature:
+                provider.temperature === '' || provider.temperature == null
+                  ? 0.8
+                  : Number(provider.temperature),
+              timeout: hasImage ? 180000 : 90000,
+            }),
           {
             maxAttempts: 2,
             delay: 800,
@@ -338,8 +317,6 @@ export class ChatDO {
             onRetry: (err, attempt) => this.logger.warn(`retry ${attempt}: ${err.message}`),
           }
         );
-        const data = await res.json();
-        const text = String(data.choices?.[0]?.message?.content || '').trim();
         if (!text) throw new Error('AI 返回空内容');
 
         session.sinceCompress = (session.sinceCompress || 0) + 1;
