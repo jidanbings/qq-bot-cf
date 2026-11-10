@@ -231,6 +231,9 @@ function demoApi(pathname, search) {
   if (pathname === '/api/reminders') {
     return { items: demoReminders() };
   }
+  if (pathname === '/api/menu') {
+    return demoMenu();
+  }
   return { ok: true };
 }
 
@@ -410,6 +413,19 @@ function demoGroups() {
       replyEnabled: false,
     },
   ];
+}
+
+function demoMenu() {
+  return {
+    version: 3,
+    menu: {
+      items: [
+        { type: 'send_message', name: '帮助', send_message: '/帮助' },
+        { type: 'send_message', name: '画图', send_message: '/画 一只橘猫' },
+        { type: 'link', name: '官网', link: 'https://www.qq.com' },
+      ],
+    },
+  };
 }
 
 function demoReminders() {

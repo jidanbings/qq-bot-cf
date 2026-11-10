@@ -82,6 +82,18 @@ function fromBase64(b64) {
   return bytes;
 }
 
+/**
+ * 算摘要的十六进制串。素材管理的 prepare 接口要求 md5(32位) + sha1(40位)：
+ * 平台拿 md5 跟 COS 返回的 ETag 比对，用来确认「传上去的确实是这份文件」。
+ */
+async function hexDigest(algo, bytes) {
+  const buf = await crypto.subtle.digest(algo, bytes);
+  const arr = new Uint8Array(buf);
+  let out = '';
+  for (let i = 0; i < arr.length; i++) out += arr[i].toString(16).padStart(2, '0');
+  return out;
+}
+
 function sniffImageMime(bytes, contentType) {
   const h = (len, offset = 0) => {
     let s = '';
@@ -528,6 +540,179 @@ export class QQBotDO {
           return Response.json({ ok: false, error: e.message });
         }
       }
+      /* ---------- 素材管理（图片转 qqbot-media 引用） ---------- */
+      case '/media-upload': {
+        let body = null;
+        try {
+          body = await request.json();
+        } catch {}
+        const source = body && body.source;
+        if (!source) return Response.json({ ok: false, error: '缺少图片 source' });
+        try {
+          const r = await this.uploadMediaImage(source, body.name);
+          if (!r) return Response.json({ ok: false, error: '图片不符合平台要求（png/jpeg/gif/webp，≤10MB）' });
+          return Response.json({ ok: true, ...r });
+        } catch (e) {
+          return Response.json({ ok: false, error: e.message, qqCode: e.qqCode || 0 });
+        }
+      }
+      case '/media-list': {
+        try {
+          const r = await this.mediaImageList(url.searchParams.get('cursor') || '');
+          return Response.json({
+            ok: true,
+            images: Array.isArray(r.images) ? r.images : [],
+            nextCursor: String(r.next_cursor || ''),
+            total: Number(r.total) || 0,
+          });
+        } catch (e) {
+          return Response.json({ ok: false, error: e.message, qqCode: e.qqCode || 0 });
+        }
+      }
+      case '/media-delete': {
+        let body = null;
+        try {
+          body = await request.json();
+        } catch {}
+        const imageId = body && body.imageId;
+        if (!imageId) return Response.json({ ok: false, error: '缺少 imageId' });
+        try {
+          await this.mediaImageDelete(imageId);
+          return Response.json({ ok: true });
+        } catch (e) {
+          return Response.json({ ok: false, error: e.message, qqCode: e.qqCode || 0 });
+        }
+      }
+
+      /* ---------- 自定义菜单 ---------- */
+      // 注意：worker 的 callBot 一律用 POST 转发，所以这里不能按 request.method 区分读写，
+      // 要按「body 里有没有 menu」区分：带 menu = 保存，不带 = 读取。
+      // 之前按 method 判断导致 GET /api/menu 落进保存分支，返回「缺少 menu」。
+      case '/menu': {
+        let body = null;
+        try {
+          body = await request.json();
+        } catch {}
+        if (body && body.menu) {
+          try {
+            await this.menuPut(body.menu);
+            return Response.json({ ok: true });
+          } catch (e) {
+            return Response.json({ ok: false, error: e.message, qqCode: e.qqCode || 0 });
+          }
+        }
+        try {
+          const r = await this.menuGet();
+          return Response.json({ ok: true, menu: r.menu || null, version: r.version || 0 });
+        } catch (e) {
+          return Response.json({ ok: false, error: e.message, qqCode: e.qqCode || 0 });
+        }
+      }
+
+      /* ---------- 入群申请审批 ---------- */
+      case '/join-requests': {
+        const openid = url.searchParams.get('openid') || '';
+        if (!openid) return Response.json({ ok: false, error: '缺少群 openid' });
+        try {
+          const r = await this.joinRequestList(
+            openid,
+            url.searchParams.get('cursor') || '',
+            Number(url.searchParams.get('limit')) || 20
+          );
+          return Response.json({
+            ok: true,
+            list: Array.isArray(r.list) ? r.list : [],
+            nextCursor: String(r.next_cursor || ''),
+          });
+        } catch (e) {
+          return Response.json({ ok: false, error: e.message, qqCode: e.qqCode || 0 });
+        }
+      }
+      case '/join-approve': {
+        let body = null;
+        try {
+          body = await request.json();
+        } catch {}
+        const openid = body && body.openid;
+        const memberOpenid = body && body.memberOpenid;
+        const op = body && body.op;
+        if (!openid || !memberOpenid || (op !== 'approve' && op !== 'decline')) {
+          return Response.json({ ok: false, error: '参数不完整（需要 openid / memberOpenid / op）' });
+        }
+        try {
+          await this.approvalJoinRequest(openid, memberOpenid, {
+            op,
+            join_request_id: body.joinRequestId || undefined,
+            reject_reason: op === 'decline' ? body.rejectReason || undefined : undefined,
+            add_to_member_blacklist: op === 'decline' ? !!body.addToBlacklist : undefined,
+          });
+          return Response.json({ ok: true });
+        } catch (e) {
+          return Response.json({ ok: false, error: e.message, qqCode: e.qqCode || 0 });
+        }
+      }
+
+      /* ---------- 群成员管理（平台侧为内邀能力） ---------- */
+      case '/members-remove': {
+        let body = null;
+        try {
+          body = await request.json();
+        } catch {}
+        const openid = body && body.openid;
+        const ids = body && Array.isArray(body.memberOpenids) ? body.memberOpenids : [];
+        if (!openid || !ids.length) return Response.json({ ok: false, error: '缺少群 openid 或成员列表' });
+        try {
+          const r = await this.batchRemoveMembers(openid, ids, !!body.addToBlacklist);
+          return Response.json({
+            ok: true,
+            result: r.remove_members_result || '',
+            blacklistFail: Array.isArray(r.add_to_member_blacklist_fail_openids)
+              ? r.add_to_member_blacklist_fail_openids
+              : [],
+          });
+        } catch (e) {
+          return Response.json({ ok: false, error: e.message, qqCode: e.qqCode || 0 });
+        }
+      }
+      case '/members-blacklist': {
+        // 同 /menu：callBot 一律 POST，按 body 里有没有 memberOpenids 区分读写
+        let body = null;
+        try {
+          body = await request.json();
+        } catch {}
+        const openid = body && body.openid;
+        if (openid && Array.isArray(body.memberOpenids) && body.memberOpenids.length) {
+          const op = body.op;
+          const ids = body.memberOpenids;
+          if (op !== 'add' && op !== 'del') {
+            return Response.json({ ok: false, error: 'op 必须是 add 或 del' });
+          }
+          try {
+            const r = await this.memberBlacklistOp(openid, op, ids);
+            return Response.json({
+              ok: true,
+              failOpenids: Array.isArray(r.fail_openids) ? r.fail_openids : [],
+            });
+          } catch (e) {
+            return Response.json({ ok: false, error: e.message, qqCode: e.qqCode || 0 });
+          }
+        }
+        if (!openid) return Response.json({ ok: false, error: '缺少群 openid' });
+        try {
+          const r = await this.memberBlacklist(
+            openid,
+            (url && url.searchParams && url.searchParams.get('cursor')) || ''
+          );
+          return Response.json({
+            ok: true,
+            users: Array.isArray(r.users) ? r.users : [],
+            nextCursor: String(r.next_cursor || ''),
+          });
+        } catch (e) {
+          return Response.json({ ok: false, error: e.message, qqCode: e.qqCode || 0 });
+        }
+      }
+
       case '/reload': {
         const prevWelcome = this.config.welcomeEnabled;
         const prevTransport = this.transportName();
@@ -1448,6 +1633,51 @@ export class QQBotDO {
 
     if (/^\/?(菜单|menu|按钮)(\s|$)/i.test(content)) {
       await this.sendMenu({ isC2C, scopeId, msgId });
+      return;
+    }
+
+    // /全体 内容 —— @全体成员。平台限制：机器人为群管理员、每群每天 1 次。
+    if (/^\/?(全体|atall|at_all|everyone)(\s|$)/i.test(content)) {
+      if (isC2C) {
+        await this.sendReply({ isC2C, scopeId, content: '单聊里没有「全体成员」这个概念～', msgId });
+        return;
+      }
+      const text = content.replace(/^\/?(全体|atall|at_all|everyone)\s*/i, '').trim();
+      if (!text) {
+        await this.sendReply({ isC2C, scopeId, content: '用法：/全体 今晚 8 点开会', msgId });
+        return;
+      }
+      await this.sendReply({ isC2C, scopeId, content: text, msgId, atEveryone: true });
+      return;
+    }
+
+    // /审批 —— 拉当前群的入群申请（需要机器人是群管理员）
+    if (/^\/?(审批|入群审批|joinrequest)(\s|$)/i.test(content)) {
+      if (isC2C) {
+        await this.sendReply({ isC2C, scopeId, content: '入群审批只在群聊里用～', msgId });
+        return;
+      }
+      try {
+        const r = await this.joinRequestList(scopeId, '', 10);
+        const list = Array.isArray(r.list) ? r.list : [];
+        if (!list.length) {
+          await this.sendReply({ isC2C, scopeId, content: '当前没有待审批的入群申请。', msgId });
+          return;
+        }
+        const lines = ['**待审批的入群申请（最多 10 条）**', ''];
+        for (const j of list) {
+          const when = String(j.apply_at || '').slice(5, 16).replace('T', ' ');
+          lines.push(`· ${j.username || '(无昵称)'}${when ? ' · ' + when : ''}`);
+          const vm = j.verify_info && j.verify_info.verify_message;
+          if (vm) lines.push(`  验证消息：${vm}`);
+          if (j.risk_tips) lines.push(`  ⚠ ${j.risk_tips}`);
+        }
+        lines.push('', '到后台「工作区 → 群卡片 → 成员」里可以通过或拒绝。');
+        await this.sendReply({ isC2C, scopeId, content: lines.join('\n'), msgId });
+      } catch (e) {
+        const hint = e.qqCode === 11253 ? '（这是平台的入邀能力，需要申请白名单）' : '';
+        await this.sendReply({ isC2C, scopeId, content: `读取入群申请失败：${e.message}${hint}`, msgId });
+      }
       return;
     }
 
@@ -2517,7 +2747,7 @@ export class QQBotDO {
     } catch {}
   }
 
-  async sendReply({ isC2C, scopeId, content, msgId }) {
+  async sendReply({ isC2C, scopeId, content, msgId, atEveryone }) {
     const token = await this.getToken();
     const sendUrl = isC2C
       ? `${this.apiBase()}/v2/users/${scopeId}/messages`
@@ -2525,6 +2755,16 @@ export class QQBotDO {
 
     let finalContent = normalizeFaceTags(stripMentions(content));
     if (/^@\S+\s+/.test(finalContent)) finalContent = finalContent.replace(/^@\S+\s+/, '');
+    // @全体成员：只有群聊能用，且平台要求机器人为群管理员、每群每天仅 1 次。
+    // 本地先记一次用量再发，避免超发被平台拒绝后消息整条丢掉。
+    if (atEveryone && !isC2C) {
+      const allowed = await this.consumeAtEveryone(scopeId);
+      if (allowed) {
+        finalContent = `<qqbot-at-everyone /> ${finalContent}`;
+      } else {
+        this.logger.warn(`@全体跳过：${scopeId.slice(0, 8)}... 今日已用过`);
+      }
+    }
     finalContent = finalContent.slice(0, 1500);
     if (!finalContent) finalContent = '……';
 
@@ -2911,6 +3151,279 @@ export class QQBotDO {
     });
   }
 
+  /* ============================ 素材管理（qqbot-media） ============================ */
+
+  // 图片先传到平台，拿到 qqbot-media:// 引用后写进 Markdown / 卡片。
+  // 整条链路：prepare（要 md5/sha1）→ PUT presigned_url → complete（校验 ETag）→ 得到引用。
+  // 平台侧限制：单张 ≤10MB、仅 png/jpeg/gif/webp、每机器人上限 100 张、任务 4 小时过期。
+
+  mediaImagePrepare(meta) {
+    return this.qqApi('/v2/media-images/prepare', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(meta),
+    });
+  }
+
+  mediaImageComplete(uploadId, md5) {
+    return this.qqApi('/v2/media-images/complete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ upload_id: uploadId, md5 }),
+    });
+  }
+
+  mediaImageList(cursor) {
+    const q = cursor ? `?cursor=${encodeURIComponent(String(cursor))}` : '';
+    return this.qqApi(`/v2/media-images${q}`, { method: 'GET' });
+  }
+
+  mediaImageDelete(imageId) {
+    return this.qqApi(`/v2/media-images/${encodeURIComponent(String(imageId))}/delete`, { method: 'DELETE' });
+  }
+
+  /**
+   * 把一张图片（data URI 或公网 URL）上传成平台素材，返回 { imageId, url, ttl } 或 null。
+   * 只在「需要 qqbot-media:// 引用」的场景用；普通富媒体发图走 uploadRichMedia 就行。
+   */
+  async uploadMediaImage(source, fileName) {
+    let bytes;
+    let contentType = 'image/png';
+    let name = fileName || 'image.png';
+
+    const dataUri = String(source || '').match(/^data:([^;]+);base64,(.+)$/i);
+    if (dataUri) {
+      contentType = dataUri[1].toLowerCase();
+      if (!/^image\/(png|jpeg|gif|webp)$/.test(contentType)) {
+        this.logger.warn(`Media prepare skipped: ${contentType} 不在平台支持范围（png/jpeg/gif/webp）`);
+        return null;
+      }
+      const b64 = dataUri[2];
+      if (b64.length * 0.75 > 10 * 1024 * 1024) {
+        this.logger.warn(`Media prepare skipped: 超过 10MB 上限`);
+        return null;
+      }
+      const bin = atob(b64);
+      bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const ext = contentType === 'image/jpeg' ? 'jpg' : contentType.split('/')[1];
+      name = name.replace(/\.[^.]+$/, '') + '.' + ext;
+    } else {
+      // 公网 URL：先抓回来，因为 prepare 必须要 md5/sha1
+      let res;
+      try {
+        res = await fetch(source, { signal: AbortSignal.timeout(20000) });
+      } catch (e) {
+        this.logger.warn(`Media prepare fetch failed: ${e.message}`);
+        return null;
+      }
+      if (!res.ok) {
+        this.logger.warn(`Media prepare fetch HTTP ${res.status}`);
+        return null;
+      }
+      const buf = await res.arrayBuffer();
+      if (buf.byteLength > 10 * 1024 * 1024) {
+        this.logger.warn('Media prepare skipped: 超过 10MB 上限');
+        return null;
+      }
+      bytes = new Uint8Array(buf);
+      const ct = String(res.headers.get('content-type') || '').toLowerCase();
+      contentType = ct.startsWith('image/') ? ct.split(';')[0] : 'image/png';
+      if (!/^image\/(png|jpeg|gif|webp)$/.test(contentType)) {
+        this.logger.warn(`Media prepare skipped: 抓回来的类型是 ${contentType}`);
+        return null;
+      }
+    }
+
+    const md5 = await hexDigest('MD5', bytes);
+    const sha1 = await hexDigest('SHA-1', bytes);
+
+    const prep = await this.mediaImagePrepare({
+      file_name: name,
+      file_size: bytes.length,
+      content_type: contentType,
+      md5,
+      sha1,
+    });
+
+    // PUT 直传：Content-Type 必须与 prepare 声明完全一致，否则 COS 403
+    const putRes = await fetch(prep.presigned_url, {
+      method: 'PUT',
+      headers: { 'Content-Type': contentType },
+      body: bytes,
+      signal: AbortSignal.timeout(60000),
+    });
+    if (!putRes.ok) {
+      this.logger.warn(`Media PUT failed: HTTP ${putRes.status}`);
+      return null;
+    }
+
+    const done = await this.mediaImageComplete(prep.upload_id, md5);
+    this.logger.info(`Media image ready: ${done.image_id} ttl=${done.ttl}s`);
+    return { imageId: done.image_id, url: done.url, ttl: done.ttl, previewUrl: done.preview_url };
+  }
+
+  /* ============================ 自定义菜单 / 指令面板 ============================ */
+
+  menuGet() {
+    return this.qqApi('/v2/menu', { method: 'GET' });
+  }
+
+  menuPut(menu) {
+    return this.qqApi('/v2/menu', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ menu }),
+    });
+  }
+
+  /* ============================ 入群申请审批 ============================ */
+
+  joinRequestList(openid, cursor, limit) {
+    const qs = new URLSearchParams();
+    if (cursor) qs.set('cursor', String(cursor));
+    if (limit) qs.set('limit', String(limit));
+    const q = qs.toString() ? `?${qs.toString()}` : '';
+    return this.qqApi(`/v2/groups/${openid}/join_request_list${q}`, { method: 'GET' });
+  }
+
+  approvalJoinRequest(openid, memberOpenid, body) {
+    return this.qqApi(
+      `/v2/groups/${openid}/approval_join_request/${encodeURIComponent(String(memberOpenid))}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }
+    );
+  }
+
+  /* ============================ 群成员管理（内邀） ============================ */
+
+  batchRemoveMembers(openid, memberOpenids, addToBlacklist) {
+    return this.qqApi(`/v2/groups/${openid}/batch_remove_members`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        member_openids: memberOpenids.slice(0, 20),
+        add_to_member_blacklist: !!addToBlacklist,
+      }),
+    });
+  }
+
+  memberBlacklist(openid, cursor, limit) {
+    const qs = new URLSearchParams();
+    if (cursor) qs.set('cursor', String(cursor));
+    if (limit) qs.set('limit', String(limit));
+    const q = qs.toString() ? `?${qs.toString()}` : '';
+    return this.qqApi(`/v2/groups/${openid}/member_blacklist${q}`, { method: 'GET' });
+  }
+
+  memberBlacklistOp(openid, op, memberOpenids) {
+    return this.qqApi(`/v2/groups/${openid}/member_blacklist`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ op, member_openids: memberOpenids.slice(0, 20) }),
+    });
+  }
+
+  
+  /**
+   * @全体成员 每日配额（平台规定每个群每天只能发 1 次）。
+   * 用 DO 存储按「群 + 北京时间日期」计数，跨实例有效。
+   * 返回 true 表示这次可以用，同时已经把用量 +1；false 表示今天已经用过了。
+   */
+  async consumeAtEveryone(groupOpenid) {
+    // 北京时间（UTC+8）的日期串，跟平台侧口径对齐
+    const d = new Date(Date.now() + 8 * 3600 * 1000);
+    const day = d.toISOString().slice(0, 10);
+    const key = `atall:${groupOpenid}:${day}`;
+    const used = (await this.state.storage.get(key)) || 0;
+    if (used >= 1) return false;
+    await this.state.storage.put(key, used + 1);
+    return true;
+  }
+
+  /** 清理过期的 @全体 计数（只留今天和昨天，避免存储无限增长） */
+  async pruneAtEveryone() {
+    const today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
+    const map = await this.state.storage.list({ prefix: 'atall:' });
+    const dead = [];
+    for (const [k] of map) {
+      const day = k.split(':').pop();
+      if (day < today) dead.push(k);
+    }
+    if (dead.length) await this.state.storage.delete(dead);
+  }
+
+  /**
+   * 发图文卡片（msg_type=8）。
+   * 平台限制：title 1~50 字符、description 1~200 字符、url 与 pic_url 必须是 https 且 ≤1024。
+   * 任一字段不合规平台会直接拒，所以这里先夹一遍。
+   */
+  async sendCard({ isC2C, scopeId, msgId, title, description, url, picUrl }) {
+    const token = await this.getToken();
+    const sendUrl = isC2C
+      ? `${this.apiBase()}/v2/users/${scopeId}/messages`
+      : `${this.apiBase()}/v2/groups/${scopeId}/messages`;
+    const clip = (s, n) => String(s == null ? '' : s).slice(0, n);
+    const isHttps = (u) => /^https:\/\//i.test(String(u || ''));
+    if (!isHttps(url) || !isHttps(picUrl)) {
+      this.logger.warn('sendCard: url / pic_url 必须是 https，已放弃');
+      return null;
+    }
+    const payload = {
+      msg_type: 8,
+      card: {
+        type: 'tuwen',
+        content: {
+          title: clip(title, 50),
+          description: clip(description, 200),
+          url: clip(url, 1024),
+          pic_url: clip(picUrl, 1024),
+        },
+      },
+      ...(msgId ? { msg_id: msgId, msg_seq: this.nextMsgSeq(msgId) } : {}),
+    };
+    const res = await fetch(sendUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `QQBot ${token}` },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      this.logger.warn(`Send card failed: HTTP ${res.status}${text ? ' ' + text.slice(0, 150) : ''}`);
+      return null;
+    }
+    const data = await res.json().catch(() => ({}));
+    return data.id || null;
+  }
+
+  /** 发 Markdown（msg_type=2），可带 qqbot-media:// 图片引用 */
+  async sendMarkdown({ isC2C, scopeId, msgId, markdown }) {
+    const token = await this.getToken();
+    const sendUrl = isC2C
+      ? `${this.apiBase()}/v2/users/${scopeId}/messages`
+      : `${this.apiBase()}/v2/groups/${scopeId}/messages`;
+    const res = await fetch(sendUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `QQBot ${token}` },
+      body: JSON.stringify({
+        msg_type: 2,
+        markdown: { content: String(markdown || '').slice(0, 4000) },
+        ...(msgId ? { msg_id: msgId, msg_seq: this.nextMsgSeq(msgId) } : {}),
+      }),
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      this.logger.warn(`Send markdown failed: HTTP ${res.status}${text ? ' ' + text.slice(0, 150) : ''}`);
+      return null;
+    }
+    const data = await res.json().catch(() => ({}));
+    return data.id || null;
+  }
 
   async ensureMemes() {
     if (this.memesCache) return this.memesCache;
@@ -3254,6 +3767,7 @@ export class QQBotDO {
       await this.loadConfig().catch(() => {});
       await this.fireDueReminders().catch((e) => this.logger.warn(`alarm reminders: ${e.message}`));
       await this.wsWatchdog().catch((e) => this.logger.warn(`alarm watchdog: ${e.message}`));
+      await this.pruneAtEveryone().catch((e) => this.logger.warn(`alarm atall cleanup: ${e.message}`));
     } finally {
       await this.scheduleNextAlarm().catch(() => {});
     }

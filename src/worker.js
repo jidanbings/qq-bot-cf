@@ -677,6 +677,154 @@ async function handleApi(request, env, url) {
     }
 
 
+    case '/api/media/upload': {
+      if (method !== 'POST') throw new HttpError(405, 'method_not_allowed', '请使用 POST');
+      const body = await readJson(request);
+      const source = String(body?.source || '').trim();
+      if (!source) throw new HttpError(400, 'invalid_source', '缺少图片 source');
+      if (!/^data:image\//i.test(source) && !/^https?:\/\//i.test(source)) {
+        throw new HttpError(400, 'invalid_source', 'source 必须是 data:image/* 或 http(s) 地址');
+      }
+      const data = await callBot(env, 'media-upload', { source, name: String(body?.name || '') });
+      if (!data || data.ok !== true) {
+        throw new HttpError(502, 'qq_api', (data && data.error) || '素材上传失败');
+      }
+      return jsonResult(data);
+    }
+
+    case '/api/media/list': {
+      if (method !== 'GET') throw new HttpError(405, 'method_not_allowed', '请使用 GET');
+      const cursor = url.searchParams.get('cursor') || '';
+      const data = await callBot(env, `media-list?cursor=${encodeURIComponent(cursor)}`);
+      if (!data || data.ok !== true) {
+        throw new HttpError(502, 'qq_api', (data && data.error) || '素材列表读取失败');
+      }
+      return jsonResult(data);
+    }
+
+    case '/api/media/delete': {
+      if (method !== 'POST') throw new HttpError(405, 'method_not_allowed', '请使用 POST');
+      const body = await readJson(request);
+      const imageId = String(body?.imageId || '').trim();
+      if (!imageId) throw new HttpError(400, 'invalid_image_id', '缺少 imageId');
+      const data = await callBot(env, 'media-delete', { imageId });
+      if (!data || data.ok !== true) {
+        throw new HttpError(502, 'qq_api', (data && data.error) || '删除失败');
+      }
+      return jsonResult({ deleted: imageId });
+    }
+
+    case '/api/menu': {
+      if (method === 'GET') {
+        const data = await callBot(env, 'menu');
+        if (!data || data.ok !== true) {
+          throw new HttpError(502, 'qq_api', (data && data.error) || '菜单读取失败');
+        }
+        return jsonResult({ menu: data.menu || null, version: data.version || 0 });
+      }
+      const body = await readJson(request);
+      const menu = body?.menu;
+      if (!menu || typeof menu !== 'object' || !Array.isArray(menu.items)) {
+        throw new HttpError(400, 'invalid_menu', 'menu.items 必须是数组');
+      }
+      if (menu.items.length > 10) {
+        throw new HttpError(400, 'invalid_menu', '菜单项最多 10 个');
+      }
+      const data = await callBot(env, 'menu', { menu });
+      if (!data || data.ok !== true) {
+        throw new HttpError(502, 'qq_api', (data && data.error) || '菜单保存失败');
+      }
+      return jsonResult({ saved: true });
+    }
+
+    case '/api/groups/join-requests': {
+      if (method !== 'GET') throw new HttpError(405, 'method_not_allowed', '请使用 GET');
+      const openid = url.searchParams.get('openid') || '';
+      const cursor = url.searchParams.get('cursor') || '';
+      if (!openid) throw new HttpError(400, 'invalid_openid', '缺少群 openid');
+      const data = await callBot(
+        env,
+        `join-requests?openid=${encodeURIComponent(openid)}&cursor=${encodeURIComponent(cursor)}`
+      );
+      if (!data || data.ok !== true) {
+        throw new HttpError(502, 'qq_api', (data && data.error) || '入群申请读取失败');
+      }
+      return jsonResult(data);
+    }
+
+    case '/api/groups/join-approve': {
+      if (method !== 'POST') throw new HttpError(405, 'method_not_allowed', '请使用 POST');
+      const body = await readJson(request);
+      const openid = String(body?.openid || '').trim();
+      const memberOpenid = String(body?.memberOpenid || '').trim();
+      const op = body?.op === 'decline' ? 'decline' : 'approve';
+      if (!openid || !memberOpenid) {
+        throw new HttpError(400, 'invalid_openid', '缺少群 openid 或成员 openid');
+      }
+      const payload = {
+        openid,
+        memberOpenid,
+        op,
+        joinRequestId: String(body?.joinRequestId || ''),
+        rejectReason: String(body?.rejectReason || '').slice(0, 100),
+        addToBlacklist: !!body?.addToBlacklist,
+      };
+      const data = await callBot(env, 'join-approve', payload);
+      if (!data || data.ok !== true) {
+        throw new HttpError(502, 'qq_api', (data && data.error) || '审批失败');
+      }
+      return jsonResult({ openid, memberOpenid, op });
+    }
+
+    case '/api/groups/members-remove': {
+      if (method !== 'POST') throw new HttpError(405, 'method_not_allowed', '请使用 POST');
+      const body = await readJson(request);
+      const openid = String(body?.openid || '').trim();
+      const ids = Array.isArray(body?.memberOpenids) ? body.memberOpenids.map(String).filter(Boolean) : [];
+      if (!openid || !ids.length) {
+        throw new HttpError(400, 'invalid_params', '缺少群 openid 或成员列表');
+      }
+      if (ids.length > 20) throw new HttpError(400, 'too_many', '单次最多移除 20 人');
+      const data = await callBot(env, 'members-remove', {
+        openid,
+        memberOpenids: ids,
+        addToBlacklist: !!body?.addToBlacklist,
+      });
+      if (!data || data.ok !== true) {
+        throw new HttpError(502, 'qq_api', (data && data.error) || '移除失败');
+      }
+      return jsonResult(data);
+    }
+
+    case '/api/groups/blacklist': {
+      if (method === 'GET') {
+        const openid = url.searchParams.get('openid') || '';
+        const cursor = url.searchParams.get('cursor') || '';
+        if (!openid) throw new HttpError(400, 'invalid_openid', '缺少群 openid');
+        const data = await callBot(
+          env,
+          `members-blacklist?openid=${encodeURIComponent(openid)}&cursor=${encodeURIComponent(cursor)}`
+        );
+        if (!data || data.ok !== true) {
+          throw new HttpError(502, 'qq_api', (data && data.error) || '黑名单读取失败');
+        }
+        return jsonResult(data);
+      }
+      const body = await readJson(request);
+      const openid = String(body?.openid || '').trim();
+      const op = body?.op === 'del' ? 'del' : 'add';
+      const ids = Array.isArray(body?.memberOpenids) ? body.memberOpenids.map(String).filter(Boolean) : [];
+      if (!openid || !ids.length) {
+        throw new HttpError(400, 'invalid_params', '缺少群 openid 或成员列表');
+      }
+      if (ids.length > 20) throw new HttpError(400, 'too_many', '单次最多 20 人');
+      const data = await callBot(env, 'members-blacklist', { openid, op, memberOpenids: ids });
+      if (!data || data.ok !== true) {
+        throw new HttpError(502, 'qq_api', (data && data.error) || '黑名单操作失败');
+      }
+      return jsonResult(data);
+    }
+
     case '/api/sandboxes': {
       if (method !== 'GET') throw new HttpError(405, 'method_not_allowed', '请使用 GET');
       const rows = await listSandboxes(env);

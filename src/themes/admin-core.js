@@ -817,6 +817,13 @@ function transportCards(){
   return h;
 }
 
+function menuBlockHtml(){
+  return '<p class="tip">菜单最多 10 项，名称不超过 10 个字符（一个汉字算 2 个）。'
+    +'类型：<b>发送消息</b> 点击把文字填进输入框，<b>跳转链接</b> 打开网页（必须 https）。'
+    +'改完用户重进会话才能看到。</p>'
+    +'<div id="menu-editor"><p class="muted">读取中…</p></div>';
+}
+
 var FIELDS=[
   {id:'qq',icon:IX.bot,title:'QQ 开放平台',desc:'QQ 机器人开放平台里的应用凭据',items:[
     {key:'appId',label:'QQ AppID',type:'text',ph:'机器人 AppID',required:true},
@@ -845,6 +852,8 @@ var FIELDS=[
     {key:'welcomeMsg',label:'欢迎语',type:'textarea',ph:'欢迎新成员～ {member}',wide:true,
       hint:'占位符 {member} 会替换为 @新成员，{group} 会替换为群标识。留空则不发言'}
   ]},
+  {id:'menu',icon:IX.spark,title:'自定义菜单',
+    desc:'QQ 聊天窗口左下角那个菜单，用户点开就能看到',custom:menuBlockHtml},
   {id:'filter',icon:IX.filter,title:'过滤',desc:'命中即丢弃，机器人不会回复',items:[
     {key:'groupBlacklist',label:'群黑名单',type:'textarea',ph:'group_openid1, group_openid2',wide:true,hint:'多个用逗号分隔，只对群聊生效'},
     {key:'sensitiveWords',label:'敏感词',type:'textarea',ph:'词1, 词2',wide:true,hint:'多个用逗号分隔，消息里出现任意一个就不会回复'}
@@ -930,6 +939,8 @@ function renderConfig(d){
   }
 
   bindTransportCards();
+  // 自定义菜单是独立接口（/v2/menu），不跟 config 一起提交，单独异步加载
+  if($('menu-editor'))loadMenuEditor();
 
   var toggles=document.querySelectorAll('.pw-toggle');
   for(var t=0;t<toggles.length;t++){
@@ -1380,16 +1391,16 @@ function aiModalHtml(){
     +'<div class="modal-head"><h3 id="ai-m-title">添加 AI</h3>'
     +'<button class="modal-x" type="button" id="ai-modal-x" aria-label="关闭">×</button></div>'
     +'<div class="modal-body">'
-    +'<div class="field"><label>名称</label><input id="ai-m-name" maxlength="40" placeholder="例如 主账号"></div>'
-    +'<div class="field"><label>Base URL</label><input id="ai-m-url" placeholder="https://api.example.com/v1"></div>'
-    +'<div class="field"><label>API Key</label><div class="pw-wrap"><input id="ai-m-key" type="password" placeholder="sk-..." autocomplete="new-password">'
+    +'<div class="field"><label for="ai-m-name">名称</label><input id="ai-m-name" name="ai-m-name" maxlength="40" placeholder="例如 主账号"></div>'
+    +'<div class="field"><label for="ai-m-url">Base URL</label><input id="ai-m-url" name="ai-m-url" placeholder="https://api.example.com/v1"></div>'
+    +'<div class="field"><label for="ai-m-key">API Key</label><div class="pw-wrap"><input id="ai-m-key" name="ai-m-key" type="password" placeholder="sk-..." autocomplete="new-password">'
     +'<button class="pw-toggle" type="button" id="ai-m-key-toggle">显示</button></div></div>'
-    +'<div class="field"><label>模型</label><div class="model-row"><select id="ai-m-model"></select>'
+    +'<div class="field"><label for="ai-m-model">模型</label><div class="model-row"><select id="ai-m-model" name="ai-m-model"></select>'
     +'<button class="btn" type="button" id="ai-m-pull">'+IX.refresh+'<span>拉取模型</span></button></div></div>'
     +'<div class="grid">'
-    +'<div class="field"><label>Temperature</label><input id="ai-m-temp" type="number" inputmode="decimal" step="0.1" placeholder="0.8"></div>'
-    +'<div class="field"><label>启用</label><label class="prov-check"><input type="checkbox" id="ai-m-on" checked>参与回复</label></div>'
-    +'<div class="field"><label>识图能力</label><select id="ai-m-vision"><option value="auto">自动判断（按模型名）</option><option value="1">支持识图</option><option value="0">不支持（纯文本）</option></select></div>'
+    +'<div class="field"><label for="ai-m-temp">Temperature</label><input id="ai-m-temp" name="ai-m-temp" type="number" inputmode="decimal" step="0.1" placeholder="0.8"></div>'
+    +'<div class="field"><label class="prov-check"><input type="checkbox" id="ai-m-on" name="ai-m-on" checked>启用参与回复</label></div>'
+    +'<div class="field"><label for="ai-m-vision">识图能力</label><select id="ai-m-vision" name="ai-m-vision"><option value="auto">自动判断（按模型名）</option><option value="1">支持识图</option><option value="0">不支持（纯文本）</option></select></div>'
     +'</div>'
     +'<div class="test-result" id="ai-test-result" hidden></div>'
     +'</div>'
@@ -1416,7 +1427,7 @@ function provRowHtml(p,i){
   var vv=p.vision||'auto';
   var vBadge=vv==='1'?'<span class="prov-vision ok">识图</span>':vv==='0'?'<span class="prov-vision off">仅文本</span>':'<span class="prov-vision">识图·自动</span>';
   h+='<div class="prov-meta">'+vBadge+keyFlag
-    +'<label class="prov-switch" title="点一下启用/停用"><input type="checkbox" class="prov-sw"'+(p.enabled?' checked':'')+'><i></i></label>'
+    +'<label class="prov-switch" title="点一下启用/停用"><input type="checkbox" class="prov-sw" id="prov-sw-'+esc(p.id)+'" name="prov-en-'+esc(p.id)+'"'+(p.enabled?' checked':'')+'><i></i></label>'
     +'</div>';
   h+='<div class="prov-tools">'
     +'<button class="icon-btn" type="button" data-act="up" title="上移">↑</button>'
@@ -1792,7 +1803,7 @@ function showWorkspace(){
     +'<p class="tip">群里说「明天 8 点提醒我开会」「10 分钟后提醒我喝水」就会出现在这里；到点主动发消息，重复任务自动顺延。'
     +'QQ 对主动消息有频率和配额限制，发送失败的任务会标红。</p>'
     +'<div class="rem-toolbar"><button class="btn sm" type="button" id="rem-refresh">'+IX.refresh+'<span>刷新</span></button>'
-    +'<label class="rem-selall"><input type="checkbox" id="rem-sel-all"><span>全选</span></label>'
+    +'<label class="rem-selall"><input type="checkbox" id="rem-sel-all" name="rem-sel-all"><span>全选</span></label>'
     +'<button class="btn sm danger hidden" type="button" id="rem-del-sel">'+IX.trash+'<span>删除选中</span></button></div>'
     +'<div class="ws-rem-scroll" id="rem-list">'+skListSkeleton(3)+'</div>'
     +'</div>';
@@ -1801,6 +1812,186 @@ function showWorkspace(){
   $('rem-del-sel').addEventListener('click',function(){deleteSelectedReminders();});
   loadWorkspaces();
   loadReminders();
+}
+
+function loadMenuEditor(){
+  var box=$('menu-editor');
+  if(!box)return;
+  api('GET','/api/menu').then(function(d){
+    var menu=(d&&d.menu)||null;
+    renderMenuEditor(menu, d&&d.version);
+  }).catch(function(e){
+    if(box)box.innerHTML='<p class="error-text">'+esc(e.message)+'</p>';
+  });
+}
+
+var menuState={items:[],version:0};
+
+function renderMenuEditor(menu,version){
+  var box=$('menu-editor');
+  if(!box)return;
+  // 只在「从服务端拉回来的场景」整体替换；内部重绘时传的是当前 items，不能覆盖掉正在编辑的内容
+  if(menu&&Array.isArray(menu.items))menuState.items=menu.items;
+  if(version)menuState.version=version;
+  var h='';
+  h+='<div class="form-actions"><span class="hint">'
+    +(menuState.version?('当前版本 v'+menuState.version):'还没设置过菜单')+'</span><span class="grow"></span>'
+    +'<button class="btn sm" type="button" id="b-menu-add">＋ 添加菜单项</button></div>';
+  if(!menuState.items.length){
+    h+='<p class="muted">还没有菜单项。可以加几个常用的，比如「帮助 /help」「画图 /画 」。'
+      +'<br>想恢复成没有菜单，把下面所有项删掉再保存即可。</p>';
+  }else{
+    h+='<div class="menu-list">';
+    for(var i=0;i<menuState.items.length;i++)h+=menuItemHtml(menuState.items[i],i);
+    h+='</div>';
+  }
+  h+='<div class="fs-foot"><span class="fs-foot-note">保存后立即生效，用户重进会话可见</span>'
+    +'<button class="btn primary" type="button" id="b-menu-save">'+IX.check+'<span>保存</span></button></div>';
+  box.innerHTML=h;
+
+  // 每次重绘都要重新绑定：innerHTML 会把旧节点连同监听一起丢掉
+  $('b-menu-add').addEventListener('click',function(){
+    if(menuState.items.length>=10){toast('最多 10 个菜单项','bad');return;}
+    syncMenuFromDom();
+    menuState.items.push({type:'send_message',name:'',send_message:''});
+    renderMenuEditor(null,0);
+  });
+  $('b-menu-save').addEventListener('click',saveMenu);
+  // 用直接绑定而不是事件委托：下拉框改的是 value，
+  // 委托到 click 上永远收不到，这就是「类型一直选不了」的原因
+  var rows=box.querySelectorAll('[data-mi]');
+  for(var r=0;r<rows.length;r++)bindMenuRow(rows[r]);
+}
+
+function bindMenuRow(row){
+  var idx=Number(row.getAttribute('data-mi'));
+  var typeEl=row.querySelector('[data-mf="type"]');
+  var nameEl=row.querySelector('[data-mf="name"]');
+  var valEl=row.querySelector('[data-mf="value"]');
+
+  if(nameEl){
+    nameEl.addEventListener('input',function(){
+      if(menuState.items[idx])menuState.items[idx].name=nameEl.value.trim();
+    });
+  }
+  if(valEl){
+    valEl.addEventListener('input',function(){
+      var it=menuState.items[idx];
+      if(!it)return;
+      if(it.type==='link'){it.link=valEl.value.trim();it.send_message='';}
+      else {it.send_message=valEl.value.trim();it.link='';}
+    });
+  }
+  if(typeEl){
+    typeEl.addEventListener('change',function(){
+      var it=menuState.items[idx];
+      if(!it)return;
+      // 换类型时先把当前输入存下来，再切，别把用户写的内容丢了
+      if(nameEl)it.name=nameEl.value.trim();
+      var keep=valEl?valEl.value.trim():'';
+      var prevType=it.type;
+      it.type=typeEl.value;
+      if(it.type==='link'){
+        it.link=prevType==='link'?keep:'';
+        it.send_message='';
+      }else{
+        it.send_message=prevType==='link'?keep:'';
+        it.link='';
+      }
+      // 只重绘这一行，避免整块重绘导致焦点丢失
+      var fresh=document.createElement('div');
+      fresh.innerHTML=menuItemHtml(it,idx);
+      var newRow=fresh.firstChild;
+      row.parentNode.replaceChild(newRow,row);
+      bindMenuRow(newRow);
+    });
+  }
+
+  var rm=row.querySelector('[data-mact="remove"]');
+  if(rm){
+    rm.addEventListener('click',function(){
+      syncMenuFromDom();
+      menuState.items.splice(idx,1);
+      renderMenuEditor(null,0);
+    });
+  }
+}
+
+function menuItemHtml(it,i){
+  var type=it.type||'send_message';
+  // 每个字段都要有唯一 id 并让 label 用 for 指过去，否则无障碍检查会报
+  // 「form field should have id or name」「No label associated with a form field」，
+  // 读屏软件也无法把标签念给用户听。
+  var idName='menu-'+i+'-name';
+  var idType='menu-'+i+'-type';
+  var idValue='menu-'+i+'-value';
+  var valueLabel=(type==='link')?'链接（https://）':'发送的内容';
+  var h='<div class="menu-row" data-mi="'+i+'">';
+  h+='<span class="menu-no">'+(i+1)+'</span>';
+  h+='<div class="field"><label for="'+idName+'">名称</label>'
+    +'<input id="'+idName+'" name="'+idName+'" data-mf="name" maxlength="10"'
+    +' value="'+esc(it.name||'')+'" placeholder="如：帮助"></div>';
+  h+='<div class="field"><label for="'+idType+'">类型</label>'
+    +'<select id="'+idType+'" name="'+idType+'" data-mf="type">'
+    +'<option value="send_message"'+(type==='send_message'?' selected':'')+'>发送消息</option>'
+    +'<option value="link"'+(type==='link'?' selected':'')+'>跳转链接</option>'
+    +'</select></div>';
+  h+='<div class="field grow"><label for="'+idValue+'">'+valueLabel+'</label>'
+    +'<input id="'+idValue+'" name="'+idValue+'" data-mf="value" maxlength="2048"'
+    +' value="'+esc(type==='link'?(it.link||''):(it.send_message||''))+'"'
+    +' placeholder="'+(type==='link'?'https://example.com':'/help')+'"></div>';
+  h+='<div class="prov-tools"><button class="btn sm danger" type="button" data-mact="remove">删除</button></div>';
+  h+='</div>';
+  return h;
+}
+
+function syncMenuFromDom(){
+  var box=$('menu-editor');
+  if(!box)return;
+  var rows=box.querySelectorAll('[data-mi]');
+  for(var i=0;i<rows.length;i++){
+    var idx=Number(rows[i].getAttribute('data-mi'));
+    var it=menuState.items[idx];
+    if(!it)continue;
+    var nameEl=rows[i].querySelector('[data-mf="name"]');
+    var typeEl=rows[i].querySelector('[data-mf="type"]');
+    var valEl=rows[i].querySelector('[data-mf="value"]');
+    if(nameEl)it.name=nameEl.value.trim();
+    if(typeEl)it.type=typeEl.value;
+    if(valEl){
+      if(it.type==='link'){it.link=valEl.value.trim();it.send_message='';}
+      else {it.send_message=valEl.value.trim();it.link='';}
+    }
+  }
+}
+
+function saveMenu(){
+  var btn=$('b-menu-save');
+  syncMenuFromDom();
+  var items=[];
+  var err='';
+  for(var i=0;i<menuState.items.length;i++){
+    var it=menuState.items[i];
+    if(!it.name){err='第 '+(i+1)+' 项还没填名称';break;}
+    if(it.type==='link'){
+      if(String(it.link||'').slice(0,8).toLowerCase()!=='https://'){err='第 '+(i+1)+' 项链接必须以 https:// 开头';break;}
+      items.push({type:'link',name:it.name,link:it.link});
+    }else{
+      if(!it.send_message){err='第 '+(i+1)+' 项还没填发送内容';break;}
+      items.push({type:'send_message',name:it.name,send_message:it.send_message});
+    }
+  }
+  if(err){toast(err,'bad');return;}
+  busy(btn,true);
+  var payload={};
+  payload.menu={items:items};
+  api('POST','/api/menu',payload).then(function(){
+    toast('菜单已保存','ok');
+    loadMenuEditor();
+  }).catch(function(e){
+    toast(e.message,'bad');
+    busy(btn,false);
+  });
 }
 
 function loadWorkspaces(){
@@ -1901,7 +2092,7 @@ function wsGroupCardHtml(grp,urows){
     +'<div class="ws-main"><b>群聊 · '+esc(masked)+'</b>'
     +'<small>'+(seen?seen+' · ':'')+src+' · '+grp.users.length+' 人</small></div>'
     +'<div class="ws-group-tools">'
-    +'<label class="prov-switch" title="开关本机器人在这个群的回复"><input type="checkbox" data-gact="toggle"'+(replyEnabled?' checked':'')+'><i></i></label>'
+    +'<label class="prov-switch" title="开关本机器人在这个群的回复"><input type="checkbox" id="grp-reply-'+esc(masked)+'" name="grp-reply-'+esc(masked)+'" data-gact="toggle"'+(replyEnabled?' checked':'')+'><i></i></label>'
     +'<button class="btn sm" type="button" data-gact="members" title="查看群资料 / 成员 / 禁言">成员</button>'
     +'<button class="icon-btn xs" type="button" data-gact="copy" title="复制完整 openid">'+IX.key+'</button>'
     +'<button class="icon-btn xs" type="button" data-gact="del" title="从群列表移除">'+IX.trash+'</button>'
@@ -2131,13 +2322,13 @@ function igenModalHtml(){
     +'<button class="modal-x" type="button" id="igen-modal-x" aria-label="关闭">×</button></div>'
     +'<div class="modal-body">'
     +'<div class="field"><label for="igen-url">Base URL</label>'
-    +'<input id="igen-url" placeholder="https://api.example.com/v1" value="'+esc(imageGenState.baseUrl)+'"></div>'
+    +'<input id="igen-url" name="igen-url" placeholder="https://api.example.com/v1" value="'+esc(imageGenState.baseUrl)+'"></div>'
     +'<div class="field"><label for="igen-key">API Key</label>'
-    +'<div class="pw-wrap"><input id="igen-key" type="password" value="'+esc(imageGenState.apiKey||'')+'" placeholder="'
+    +'<div class="pw-wrap"><input id="igen-key" name="igen-key" type="password" value="'+esc(imageGenState.apiKey||'')+'" placeholder="'
     +(imageGenState.hasKey?'已设置，留空沿用旧 Key':'sk-...')+'" autocomplete="new-password">'
     +'<button class="pw-toggle" type="button" id="igen-key-toggle">显示</button></div></div>'
     +'<div class="field"><label for="igen-model">模型</label>'
-    +'<input id="igen-model" placeholder="qwen-image-3.0-pro" maxlength="64" value="'+esc(imageGenState.model)+'"></div>'
+    +'<input id="igen-model" name="igen-model" placeholder="qwen-image-3.0-pro" maxlength="64" value="'+esc(imageGenState.model)+'"></div>'
     +'<div class="field"><span class="hint">qwen-image-3.0-pro 单张通常 1~2 分钟（2048×2048，约 9MB）；机器人会先回一句「在画了」再发图。</span></div>'
     +'<div class="chip-label">主流生图模型，点一下直接填入：</div>'
     +'<div class="chip-row" id="igen-modal-chips">'+igenModelChips()+'</div>'
@@ -2395,21 +2586,278 @@ function grpModalHtml(){
   h+='<div class="chip-label" id="grp-m-openid"></div>';
   h+='<div id="grp-m-info"><p class="muted">正在读取群资料…</p></div>';
   h+='<div class="chip-label">成员管理（官方接口，每页 30 条）</div>';
-  h+='<div class="form-actions"><div class="field grow"><label for="grp-mute-mins">禁言时长</label><select id="grp-mute-mins">'
+  h+='<div class="form-actions"><div class="field grow"><label for="grp-mute-mins">禁言时长</label><select id="grp-mute-mins" name="grp-mute-mins">'
     +'<option value="10">10 分钟</option><option value="60">1 小时</option><option value="720">12 小时</option>'
     +'<option value="1440">1 天</option><option value="10080">7 天</option><option value="43200">30 天（上限）</option>'
     +'</select></div>';
   h+='<button class="btn" type="button" id="grp-members-btn">'+IX.refresh+'<span>拉取成员列表</span></button>';
   h+='<button class="btn" type="button" id="grp-members-more" hidden>下一页</button></div>';
   h+='<div class="form-actions"><div class="field grow"><label for="grp-manual-mid">手动禁言（成员列表内邀中拉不到时，直接粘贴成员 openid）</label>'
-    +'<input id="grp-manual-mid" placeholder="成员 openid" maxlength="128"></div>';
+    +'<input id="grp-manual-mid" name="grp-manual-mid" placeholder="成员 openid" maxlength="128"></div>';
   h+='<button class="btn" type="button" id="grp-manual-btn">禁言</button></div>';
   h+='<div id="grp-m-members"><p class="muted">还没拉取成员。</p></div>';
+  h+=grpJoinBlockHtml();
+  h+=grpBlacklistBlockHtml();
   h+='</div>';
   h+='<div class="modal-foot"><span class="hint" id="grp-m-note"></span><span class="grow"></span>';
   h+='<button class="btn" type="button" id="grp-m-close">关闭</button></div>';
   h+='</div></div>';
   return h;
+}
+
+function grpJoinBlockHtml(){
+  var h='<div class="grp-sec">';
+  h+='<div class="chip-label">入群申请（需机器人是群管理员）</div>';
+  h+='<div class="form-actions">'
+    +'<button class="btn" type="button" id="grp-jr-load">'+IX.refresh+'<span>拉取申请列表</span></button>'
+    +'<span class="hint" id="grp-jr-state"></span></div>';
+  h+='<div id="grp-jr-list"><p class="muted">还没拉取。</p></div>';
+  h+='</div>';
+  return h;
+}
+
+function grpBlacklistBlockHtml(){
+  var h='<div class="grp-sec grp-sec-fold">';
+  h+='<div class="ws-fold-head" role="button" tabindex="0" aria-expanded="false" data-gfold="blacklist">'
+    +'<b>群黑名单 / 批量移除</b>'
+    +'<span class="badge-warn">平台内邀能力，未开通会报 11253</span>'
+    +'<span class="ws-chevron">'+IX.chevron+'</span></div>';
+  h+='<div class="ws-fold-body" data-gfold-body="blacklist" hidden>';
+  h+='<div class="form-actions">'
+    +'<button class="btn" type="button" id="grp-bl-load">'+IX.refresh+'<span>查询黑名单</span></button>'
+    +'<span class="hint" id="grp-bl-state"></span></div>';
+  h+='<div class="form-actions"><div class="field grow">'
+    +'<label for="grp-bl-mid">成员 openid（多个用逗号分隔，每次最多 20 个）</label>'
+    +'<input id="grp-bl-mid" name="grp-bl-mid" placeholder="member_openid, member_openid" maxlength="3000"></div></div>';
+  h+='<div class="form-actions">'
+    +'<button class="btn danger" type="button" id="grp-rm-btn">移出群聊</button>'
+    +'<button class="btn" type="button" id="grp-bl-add">加入黑名单</button>'
+    +'<button class="btn" type="button" id="grp-bl-del">移出黑名单</button></div>';
+  h+='<div id="grp-bl-list"><p class="muted">还没查询。</p></div>';
+  h+='</div></div>';
+  return h;
+}
+
+function grpJoinRow(j){
+  var h='<div class="prov-row" data-jmid="'+esc(j.member_openid||'')+'" data-jrid="'+esc(j.join_request_id||'')+'">';
+  h+='<span class="prov-no">'+(j.bot?'🤖':'👤')+'</span>';
+  h+='<div class="prov-info"><b>'+esc(j.username||'(无昵称)')+'</b><small>'
+    +esc(j.member_openid||'')
+    +(j.apply_at?' · '+esc(absTime(j.apply_at)):'')
+    +(j.apply_source==='invited'?' · 被邀请':'')
+    +'</small>';
+  if(j.verify_info&&j.verify_info.verify_message){
+    h+='<small class="jr-msg">验证消息：'+esc(j.verify_info.verify_message)+'</small>';
+  }
+  if(j.risk_tips){
+    h+='<small class="jr-risk">⚠ '+esc(j.risk_tips)+'</small>';
+  }
+  h+='</div>';
+  h+='<div class="prov-tools">'
+    +'<button class="btn sm primary" type="button" data-jact="approve">通过</button>'
+    +'<button class="btn sm danger" type="button" data-jact="decline">拒绝</button>'
+    +'</div></div>';
+  return h;
+}
+
+function loadJoinRequests(){
+  var st=$('grp-jr-state');
+  var box=$('grp-jr-list');
+  if(st)st.textContent='正在拉取…';
+  api('GET','/api/groups/join-requests?openid='+encodeURIComponent(grpModal.openid))
+    .then(function(d){
+      if(st)st.textContent='';
+      if(!box)return;
+      var list=(d&&d.list)||[];
+      if(!list.length){
+        box.innerHTML='<p class="muted">当前没有待审批的入群申请。</p>';
+        return;
+      }
+      var h='<div class="prov-list">';
+      for(var i=0;i<list.length;i++)h+=grpJoinRow(list[i]);
+      h+='</div>';
+      box.innerHTML=h;
+    })
+    .catch(function(e){
+      if(st)st.textContent='';
+      if(box)box.innerHTML='<p class="error-text">'+esc(qqErrHint(e.message))+'</p>';
+    });
+}
+
+function approveJoinRequest(rowEl,op,btn){
+  var mid=rowEl.getAttribute('data-jmid');
+  var jrid=rowEl.getAttribute('data-jrid');
+  var name=(rowEl.querySelector('.prov-info b')||{}).textContent||mid;
+  var doIt=function(addBlack){
+    busy(btn,true);
+    api('POST','/api/groups/join-approve',{
+      openid:grpModal.openid,memberOpenid:mid,op:op,
+      joinRequestId:jrid,addToBlacklist:!!addBlack
+    }).then(function(){
+      toast(op==='approve'?('已通过 '+name):('已拒绝 '+name),'ok');
+      rowEl.parentNode.removeChild(rowEl);
+    }).catch(function(e){
+      toast(qqErrHint(e.message),'bad');
+      busy(btn,false);
+    });
+  };
+  if(op==='approve'){doIt(false);return;}
+  confirmDialog({
+    title:'拒绝 '+name+' 的入群申请？',
+    message:'拒绝后对方会收到通知，需要重新申请才能进群。',
+    confirm:'拒绝',
+    danger:true
+  }).then(function(yes){ if(yes)doIt(false); });
+}
+
+function grpBlacklistRow(u){
+  var h='<div class="prov-row" data-blid="'+esc(u.member_openid||'')+'">';
+  h+='<span class="prov-no">'+(u.bot?'🤖':'🚫')+'</span>';
+  h+='<div class="prov-info"><b>'+esc(u.username||'(无昵称)')+'</b><small>'+esc(u.member_openid||'')
+    +(u.banned_at?' · 拉黑于 '+esc(absTime(u.banned_at)):'')+'</small></div>';
+  h+='<div class="prov-tools"><button class="btn sm" type="button" data-blact="del">移出黑名单</button></div>';
+  h+='</div>';
+  return h;
+}
+
+function loadBlacklist(){
+  var st=$('grp-bl-state');
+  var box=$('grp-bl-list');
+  if(st)st.textContent='正在查询…';
+  api('GET','/api/groups/blacklist?openid='+encodeURIComponent(grpModal.openid))
+    .then(function(d){
+      if(st)st.textContent='';
+      if(!box)return;
+      var users=(d&&d.users)||[];
+      if(!users.length){
+        box.innerHTML='<p class="muted">黑名单为空。</p>';
+        return;
+      }
+      var h='<div class="prov-list">';
+      for(var i=0;i<users.length;i++)h+=grpBlacklistRow(users[i]);
+      h+='</div>';
+      box.innerHTML=h;
+    })
+    .catch(function(e){
+      if(st)st.textContent='';
+      if(box)box.innerHTML='<p class="error-text">'+esc(qqErrHint(e.message))+'</p>';
+    });
+}
+
+function parseOpenidList(v){
+  var raw=String(v||'');
+  var out=[];
+  var cur='';
+  for(var i=0;i<raw.length;i++){
+    var ch=raw.charAt(i);
+    var code=raw.charCodeAt(i);
+    var isSep=(code===32||code===12288||ch===','||ch==='，');
+    if(isSep){ if(cur){out.push(cur);cur='';} }
+    else cur+=ch;
+  }
+  if(cur)out.push(cur);
+  return out;
+}
+
+function grpMembersRemove(){
+  var ids=parseOpenidList(($('grp-bl-mid')||{}).value);
+  if(!ids.length){toast('先填成员 openid','bad');return;}
+  if(ids.length>20){toast('单次最多 20 个','bad');return;}
+  confirmDialog({
+    title:'移除 '+ids.length+' 个群成员？',
+    message:'被移除的成员需要重新申请才能进群加入。',
+    detail:ids.join('、'),
+    confirm:'移除',
+    danger:true
+  }).then(function(yes){
+    if(!yes)return;
+    api('POST','/api/groups/members-remove',{openid:grpModal.openid,memberOpenids:ids})
+      .then(function(d){
+        toast('已移除 '+(d&&d.result==='success'?ids.length:0)+' 个成员','ok');
+      })
+      .catch(function(e){toast(qqErrHint(e.message),'bad');});
+  });
+}
+
+function grpBlacklistOp(op){
+  var ids=parseOpenidList(($('grp-bl-mid')||{}).value);
+  if(!ids.length){toast('先填成员 openid','bad');return;}
+  if(ids.length>20){toast('单次最多 20 个','bad');return;}
+  api('POST','/api/groups/blacklist',{openid:grpModal.openid,op:op,memberOpenids:ids})
+    .then(function(d){
+      var fail=(d&&d.failOpenids)||[];
+      if(fail.length)toast('部分失败：'+fail.length+' 个','bad');
+      else toast(op==='add'?'已加入黑名单':'已移出黑名单','ok');
+      loadBlacklist();
+    })
+    .catch(function(e){toast(qqErrHint(e.message),'bad');});
+}
+
+function qqErrHint(msg){
+  var m=String(msg||'');
+  if(m.indexOf('11253')>=0){
+    return m+'（这是平台的「内邀能力」：群成员管理相关接口需要联系 QQ 平台运营申请白名单后才能用）';
+  }
+  if(m.indexOf('40034')>=0||m.indexOf('无权限')>=0){
+    return m+'（确认机器人已经是这个群的管理员）';
+  }
+  return m;
+}
+
+function bindGrpExtras(){
+  var jr=$('grp-jr-load');
+  if(jr)jr.addEventListener('click',loadJoinRequests);
+  var bl=$('grp-bl-load');
+  if(bl)bl.addEventListener('click',loadBlacklist);
+  var rm=$('grp-rm-btn');
+  if(rm)rm.addEventListener('click',grpMembersRemove);
+  var ba=$('grp-bl-add');
+  if(ba)ba.addEventListener('click',function(){grpBlacklistOp('add');});
+  var bd=$('grp-bl-del');
+  if(bd)bd.addEventListener('click',function(){grpBlacklistOp('del');});
+
+  var jl=$('grp-jr-list');
+  if(jl)jl.addEventListener('click',function(e){
+    var btn=e.target&&e.target.closest?e.target.closest('[data-jact]'):null;
+    if(!btn)return;
+    var row=e.target.closest('[data-jmid]');
+    if(!row)return;
+    approveJoinRequest(row,btn.getAttribute('data-jact'),btn);
+  });
+  var bll=$('grp-bl-list');
+  if(bll)bll.addEventListener('click',function(e){
+    var btn=e.target&&e.target.closest?e.target.closest('[data-blact]'):null;
+    if(!btn)return;
+    var row=e.target.closest('[data-blid]');
+    if(!row)return;
+    var mid=row.getAttribute('data-blid');
+    api('POST','/api/groups/blacklist',{openid:grpModal.openid,op:'del',memberOpenids:[mid]})
+      .then(function(){toast('已移出黑名单','ok');loadBlacklist();})
+      .catch(function(err){toast(qqErrHint(err.message),'bad');});
+  });
+
+  // 折叠头：点标题或回车切换内邀功能区的展开/收起
+  var foldHead=document.querySelector('[data-gfold="blacklist"]');
+  if(foldHead){
+    foldHead.addEventListener('click',function(){
+      toggleGrpFold(foldHead);
+    });
+    foldHead.addEventListener('keydown',function(e){
+      if(e.key==='Enter'||e.key===' '){
+        e.preventDefault();
+        toggleGrpFold(foldHead);
+      }
+    });
+  }
+}
+
+function toggleGrpFold(head){
+  var body=head.parentNode.querySelector('[data-gfold-body]');
+  if(!body)return;
+  var hidden=body.hidden;
+  body.hidden=!hidden;
+  head.classList.toggle('is-open',!hidden);
+  head.setAttribute('aria-expanded',hidden?'true':'false');
 }
 
 function grpMemberRow(m){
@@ -2511,6 +2959,7 @@ function bindGrpModal(){
   $('grp-members-more').addEventListener('click',function(){loadGrpMembers(grpModal.nextCursor);});
   $('grp-manual-btn').addEventListener('click',muteGrpManual);
   $('grp-m-members').addEventListener('click',onGrpMemberClick);
+  bindGrpExtras();
   var infoBox=$('grp-m-info');
   if(infoBox)infoBox.addEventListener('click',onGrpMemberClick);
   var mask=$('grp-modal-mask');
@@ -2649,7 +3098,7 @@ function renderReminders(){
     var it=items[k];
     var canCancel=it.status==='pending'||it.status==='sending';
     h+='<tr class="rem-tr" data-rem="'+it.id+'">';
-    h+='<td class="rem-td-check"><input type="checkbox" data-remsel="'+it.id+'"></td>';
+    h+='<td class="rem-td-check"><input type="checkbox" id="rem-sel-'+it.id+'" name="rem-sel-'+it.id+'" data-remsel="'+it.id+'"></td>';
     h+='<td class="rem-td-text"><b>'+esc(it.text)+'</b>'
       +(it.repeatRule?'<span class="rem-repeat">'+esc(remRepeatText(it.repeatRule))+'</span>':'')
       +(it.lastError?'<small class="error-text">'+esc(it.lastError)+'</small>':'')
