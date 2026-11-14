@@ -49,6 +49,45 @@ function stripMentions(text) {
   return String(text ?? '').replace(MENTION_RE, '').trim();
 }
 
+//
+const ASK_TAIL_RE = /(什么|啥|怎么|怎么样|如何|为什么|为啥|哪|哪儿|哪里|谁|多少|几点|能不能|可不可以|是不是|有没有|对不对|行不行|好不好|咋办|咋整|吗|么)[啊呀吧了呢哦嘛\s,.，。!！~～]{0,3}$/;
+const ASK_TAIL_LOOSE_RE = /(多少|几点|怎么样|怎么弄|怎么用|为什么|为啥)[\u4e00-\u9fa5]{0,3}[啊呀吧了呢哦嘛\s,.，。!！~～?？]*$/;
+const ASK_HEAD_RE = /^(请问|问下|问一下|请教|为什么|为啥|如何|怎么|什么是|什么是|谁|哪儿|哪里)/;
+const ASK_HEAD_DENY_RE = /^(什么都|什么都|啥都|哪儿都|哪里都|谁都|怎么都)/;
+const QUESTION_MARK_RE = /[?？]/;
+
+const SUMMON_RE = /(机器人|bot|小助手|助手|管理器)/i;
+const TASK_RE = /(帮我|帮忙|给我|请帮|麻烦帮|画一|画个|画张|生成一|生成个|写一|写个|翻译一下|翻译成|总结一下|总结下|查一下|查查|搜索一下|计算一下|提醒我)/;
+
+function shouldReplyToGroup(text, opts = {}) {
+  const s = String(text || '').trim();
+  if (!s) return false;
+  if (/^\/[^\s]/.test(s)) return true;
+  if (SUMMON_RE.test(s)) return true;
+  if (/^(哈+|嗯+|哦+|噢+|好+|收到|了解|明白|可以|行|对|是|在吗|在不在|在|666+|顶|支持|赞|谢谢|感谢|早安|晚安|拜拜|再见|告辞|\+1|同问)[!！。.~～]*$/.test(s)) {
+    return false;
+  }
+  if (TASK_RE.test(s)) return true;
+  if (QUESTION_MARK_RE.test(s)) return true;
+  if (ASK_HEAD_RE.test(s) && !ASK_HEAD_DENY_RE.test(s)) return true;
+  if (ASK_TAIL_RE.test(s)) return true;
+  if (ASK_TAIL_LOOSE_RE.test(s)) return true;
+  if (s.length <= 3) return false;
+  return !!opts.replyToBot;
+}
+
+const GROUP_CTX_PREFIX = 'gctx:';
+const MEMBER_NAME_PREFIX = 'gnick:';
+const GROUP_CTX_MAX_HARD = 50;
+
+function groupCtxKey(scopeId) {
+  return `${GROUP_CTX_PREFIX}${scopeId}`;
+}
+
+function memberNameKey(scopeId) {
+  return `${MEMBER_NAME_PREFIX}${scopeId}`;
+}
+
 function stripToolRecords(text) {
   return String(text ?? '')
     .split('\n')
@@ -83,10 +122,6 @@ function fromBase64(b64) {
   return bytes;
 }
 
-/**
- * 算摘要的十六进制串。素材管理的 prepare 接口要求 md5(32位) + sha1(40位)：
- * 平台拿 md5 跟 COS 返回的 ETag 比对，用来确认「传上去的确实是这份文件」。
- */
 async function hexDigest(algo, bytes) {
   const buf = await crypto.subtle.digest(algo, bytes);
   const arr = new Uint8Array(buf);
@@ -541,7 +576,6 @@ export class QQBotDO {
           return Response.json({ ok: false, error: e.message });
         }
       }
-      /* ---------- 素材管理（图片转 qqbot-media 引用） ---------- */
       case '/media-upload': {
         let body = null;
         try {
@@ -585,10 +619,6 @@ export class QQBotDO {
         }
       }
 
-      /* ---------- 自定义菜单 ---------- */
-      // 注意：worker 的 callBot 一律用 POST 转发，所以这里不能按 request.method 区分读写，
-      // 要按「body 里有没有 menu」区分：带 menu = 保存，不带 = 读取。
-      // 之前按 method 判断导致 GET /api/menu 落进保存分支，返回「缺少 menu」。
       case '/menu': {
         let body = null;
         try {
@@ -610,7 +640,6 @@ export class QQBotDO {
         }
       }
 
-      /* ---------- 入群申请审批 ---------- */
       case '/join-requests': {
         const openid = url.searchParams.get('openid') || '';
         if (!openid) return Response.json({ ok: false, error: '缺少群 openid' });
@@ -653,7 +682,6 @@ export class QQBotDO {
         }
       }
 
-      /* ---------- 群成员管理（平台侧为内邀能力） ---------- */
       case '/members-remove': {
         let body = null;
         try {
@@ -676,7 +704,6 @@ export class QQBotDO {
         }
       }
       case '/members-blacklist': {
-        // 同 /menu：callBot 一律 POST，按 body 里有没有 memberOpenids 区分读写
         let body = null;
         try {
           body = await request.json();
@@ -884,7 +911,6 @@ export class QQBotDO {
     this.logger.info(`Config loaded (v${APP_VERSION}), keys: ${Object.keys(config).join(',')}`);
   }
 
-  // 对话 provider 列表：内置 CF 对话模型（开启时）排最前，后面跟外部 provider。
   chatProviders() {
     const list = [];
     if (this.config.cfChatEnabled !== '0') list.push(cfChatProvider());
@@ -1334,7 +1360,7 @@ export class QQBotDO {
   }
 
   async downloadAttachment(url, contentType, filenameHint) {
-    const MAX_BYTES = 4 * 1024 * 1024; // 4MB 原始文件上限
+    const MAX_BYTES = 4 * 1024 * 1024;
     const MAX_TEXT = 200000;
     const ct = String(contentType || '').toLowerCase();
     const name = String(filenameHint || url.split('?')[0].split('/').pop() || '').slice(0, 80);
@@ -1617,6 +1643,28 @@ export class QQBotDO {
     if (!isC2C && this.groupBlacklist.has(scopeId)) return;
     if (this.sensitiveWords.some((w) => content.includes(w))) return;
 
+    if (!isC2C) {
+      const mentioned = type === 'GROUP_AT_MESSAGE_CREATE';
+      const names = await this.loadMemberNames(scopeId);
+      await this.recordGroupCtx(scopeId, {
+        userId,
+        nick: names[userId] || '',
+        content,
+        imageUrl,
+        mentioned,
+        bot: false,
+      });
+      if (!mentioned && this.config.groupReplyMode !== 'all') {
+        const mode = this.config.groupReplyMode || 'smart';
+        if (mode === 'at') return;
+        const replyToBot = await this.wasReplyingToBot(scopeId, userId);
+        if (!shouldReplyToGroup(content, { replyToBot })) {
+          this.logger.info(`Group message skipped (not addressed): ${content.slice(0, 30)}`);
+          return;
+        }
+      }
+    }
+
     const key = this.ownerKey({ isC2C, scopeId, userId });
     if (!isC2C) this.touchGroup(scopeId);
     const job = { isC2C, userId, scopeId, content, imageUrl, msgId: data.id, userText, fileName, fileText };
@@ -1647,7 +1695,6 @@ export class QQBotDO {
       return;
     }
 
-    // /全体 内容 —— @全体成员。平台限制：机器人为群管理员、每群每天 1 次。
     if (/^\/?(全体|atall|at_all|everyone)(\s|$)/i.test(content)) {
       if (isC2C) {
         await this.sendReply({ isC2C, scopeId, content: '单聊里没有「全体成员」这个概念～', msgId });
@@ -1662,7 +1709,6 @@ export class QQBotDO {
       return;
     }
 
-    // /审批 —— 拉当前群的入群申请（需要机器人是群管理员）
     if (/^\/?(审批|入群审批|joinrequest)(\s|$)/i.test(content)) {
       if (isC2C) {
         await this.sendReply({ isC2C, scopeId, content: '入群审批只在群聊里用～', msgId });
@@ -1671,6 +1717,10 @@ export class QQBotDO {
       try {
         const r = await this.joinRequestList(scopeId, '', 10);
         const list = Array.isArray(r.list) ? r.list : [];
+        await this.rememberMemberNames(
+          scopeId,
+          list.map((j) => ({ openid: j.member_openid || j.user_openid, nick: j.username }))
+        );
         if (!list.length) {
           await this.sendReply({ isC2C, scopeId, content: '当前没有待审批的入群申请。', msgId });
           return;
@@ -1940,12 +1990,30 @@ export class QQBotDO {
     let aiErr = null;
     let used = null;
 
+    let groupCtxBlock = '';
+    if (!isC2C) {
+      const ctxList = await this.loadGroupCtx(scopeId);
+      const names = await this.loadMemberNames(scopeId);
+      const rendered = this.renderGroupCtx(ctxList, userId, names);
+      if (rendered) {
+        const selfLabel = this.stableMemberLabel(userId, names);
+        const selfNick = names[userId];
+        const selfDesc = selfNick ? `「${selfNick}」` : selfLabel;
+        groupCtxBlock =
+          `\n\n【群聊上下文】下面是这个群最近的发言（按时间先后，最后一条就是现在这条）。` +
+          `现在是 ${selfDesc} 在跟你说话（标记为「当前用户」），其他人是群里别的成员（昵称或成员+尾号）。` +
+          '你不是只在跟一个人私聊，而是在一个群里。需要时可以自然接住群里的话题、' +
+          '也可以提到别人刚才说了什么，但不要在回复里提「上下文」「记录」这类词，也不要逐条回应，只回当前这条就好。\n' +
+          rendered;
+      }
+    }
+
     if (useAiDo) {
       try {
         const out = await this.askAiDo({
           key,
           providers,
-          systemPrompt: this.buildSystemPrompt(),
+          systemPrompt: this.buildSystemPrompt() + groupCtxBlock,
           historyLimit,
           content,
           image: aiImage,
@@ -1976,6 +2044,7 @@ export class QQBotDO {
       while (history.length > historyLimit + 1) history.splice(1, 1);
       const msgs = history.slice();
       if (session.summary) msgs.splice(1, 0, { role: 'system', content: `【早前对话摘要】${session.summary}` });
+      if (groupCtxBlock) msgs.splice(1, 0, { role: 'system', content: groupCtxBlock.trim() });
       if (aiImage) {
         msgs[msgs.length - 1] = {
           role: 'user',
@@ -2290,13 +2359,134 @@ export class QQBotDO {
       const what = String(args.text || '').trim().slice(0, 40);
       return when && what ? `设过提醒：${when} 提醒「${what}」` : null;
     }
-    return null; // image / meme / voice / 查询类都不记
+    return null;
   }
 
 
   ownerKey({ isC2C, scopeId, userId }) {
     return isC2C ? `c2c:${userId || scopeId}` : `group:${scopeId}:u:${userId || 'unknown'}`;
   }
+
+  async recordGroupCtx(scopeId, entry) {
+    try {
+      const k = groupCtxKey(scopeId);
+      const limit = Math.min(
+        GROUP_CTX_MAX_HARD,
+        Math.max(1, Number(this.config.groupContextLen) || 20)
+      );
+      const buf = (await this.state.storage.get(k)) || [];
+      const list = Array.isArray(buf) ? buf : [];
+      list.push({
+        u: String(entry.userId || '').slice(0, 64),
+        n: String(entry.nick || '').slice(0, 32),
+        c: String(entry.content || '').slice(0, 500),
+        img: entry.imageUrl ? 1 : 0,
+        at: entry.mentioned ? 1 : 0,
+        bot: entry.bot ? 1 : 0,
+        t: Date.now(),
+      });
+      const trimmed = list.slice(-limit);
+      await this.state.storage.put(k, trimmed);
+    } catch (e) {
+      this.logger.warn(`Group ctx record failed: ${e.message}`);
+    }
+  }
+
+  async loadMemberNames(scopeId) {
+    try {
+      const v = await this.state.storage.get(memberNameKey(scopeId));
+      return v && typeof v === 'object' ? v : {};
+    } catch {
+      return {};
+    }
+  }
+
+  async rememberMemberNames(scopeId, pairs) {
+    if (!scopeId || !pairs || !pairs.length) return;
+    try {
+      const cur = await this.loadMemberNames(scopeId);
+      let changed = false;
+      for (const p of pairs) {
+        const id = String((p && p.openid) || '').trim();
+        const nick = String((p && p.nick) || '').trim().slice(0, 32);
+        if (!id || !nick) continue;
+        if (cur[id] !== nick) {
+          cur[id] = nick;
+          changed = true;
+        }
+      }
+      const keys = Object.keys(cur);
+      if (keys.length > 500) {
+        for (const k of keys.slice(0, keys.length - 500)) delete cur[k];
+        changed = true;
+      }
+      if (changed) await this.state.storage.put(memberNameKey(scopeId), cur);
+    } catch (e) {
+      this.logger.warn(`Member name cache failed: ${e.message}`);
+    }
+  }
+
+  stableMemberLabel(openid, names) {
+    const id = String(openid || '');
+    if (!id) return '未知成员';
+    const nick = names && names[id];
+    if (nick) return `「${nick}」`;
+    const tail = id.length > 4 ? id.slice(-4) : id;
+    return `成员${tail}`;
+  }
+
+  async loadGroupCtx(scopeId) {
+    try {
+      const buf = await this.state.storage.get(groupCtxKey(scopeId));
+      return Array.isArray(buf) ? buf : [];
+    } catch {
+      return [];
+    }
+  }
+
+  async wasReplyingToBot(scopeId, userId) {
+    try {
+      const list = await this.loadGroupCtx(scopeId);
+      for (let i = list.length - 1; i >= 0; i--) {
+        const e = list[i];
+        if (!e) continue;
+        if (e.bot) {
+          for (let j = i - 1; j >= 0; j--) {
+            const p = list[j];
+            if (!p || p.bot) continue;
+            return String(p.u || '') === String(userId || '') && !!p.at;
+          }
+          return false;
+        }
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
+  renderGroupCtx(list, selfUserId, names) {
+    if (!Array.isArray(list) || !list.length) return '';
+    const lines = [];
+    for (const e of list) {
+      if (!e) continue;
+      let who;
+      if (e.bot) {
+        who = '我（机器人）';
+      } else if (String(e.u || '') === String(selfUserId || '')) {
+        who = `当前用户${e.n ? '「' + e.n + '」' : ''}`;
+      } else {
+        who = this.stableMemberLabel(e.u, names) || '群成员';
+      }
+      let text = String(e.c || '').replace(/\s+/g, ' ').trim();
+      if (!text && e.img) text = '[图片]';
+      if (!text) continue;
+      if (text.length > 120) text = text.slice(0, 120) + '…';
+      lines.push(`${who}${e.at ? '（@我）' : ''}：${text}`);
+    }
+    return lines.join('\n');
+  }
+
 
 
   async execToolDo(tool, args, { isC2C, scopeId, msgId, caption, userId }) {
@@ -2756,8 +2946,6 @@ export class QQBotDO {
 
     let finalContent = normalizeFaceTags(stripMentions(content));
     if (/^@\S+\s+/.test(finalContent)) finalContent = finalContent.replace(/^@\S+\s+/, '');
-    // @全体成员：只有群聊能用，且平台要求机器人为群管理员、每群每天仅 1 次。
-    // 本地先记一次用量再发，避免超发被平台拒绝后消息整条丢掉。
     if (atEveryone && !isC2C) {
       const allowed = await this.consumeAtEveryone(scopeId);
       if (allowed) {
@@ -2795,36 +2983,43 @@ export class QQBotDO {
     };
 
     let payload = buildPayload(useMarkdown);
-    try {
-      return await withRetry(() => sendOnce(token, payload), {
-        maxAttempts: 2,
-        delay: 800,
-        shouldRetry: retryable,
-        onRetry: (err, attempt) => this.logger.warn(`Send retry ${attempt}: ${err.message}`),
-      });
-    } catch (e) {
-      if (useMarkdown && e.status && e.status < 500 && e.status !== 429) {
-        this.logger.warn(`Markdown send rejected (HTTP ${e.status}), falling back to plain text`);
-        try {
-          return await sendOnce(await this.getToken(), buildPayload(false));
-        } catch (e2) {
-          this.logger.warn(`Plain-text fallback failed: ${e2.message}`);
-          return null;
+    const sentId = await (async () => {
+      try {
+        return await withRetry(() => sendOnce(token, payload), {
+          maxAttempts: 2,
+          delay: 800,
+          shouldRetry: retryable,
+          onRetry: (err, attempt) => this.logger.warn(`Send retry ${attempt}: ${err.message}`),
+        });
+      } catch (e) {
+        if (useMarkdown && e.status && e.status < 500 && e.status !== 429) {
+          this.logger.warn(`Markdown send rejected (HTTP ${e.status}), falling back to plain text`);
+          try {
+            return await sendOnce(await this.getToken(), buildPayload(false));
+          } catch (e2) {
+            this.logger.warn(`Plain-text fallback failed: ${e2.message}`);
+            return null;
+          }
         }
-      }
-      if (e.status === 401) {
-        this.token = null;
-        this.tokenExpiry = 0;
-        try {
-          return await sendOnce(await this.getToken(), payload);
-        } catch (e2) {
-          this.logger.warn(`Send failed after re-auth: ${e2.message}`);
-          return null;
+        if (e.status === 401) {
+          this.token = null;
+          this.tokenExpiry = 0;
+          try {
+            return await sendOnce(await this.getToken(), payload);
+          } catch (e2) {
+            this.logger.warn(`Send failed after re-auth: ${e2.message}`);
+            return null;
+          }
         }
+        this.logger.warn(e.message);
+        return null;
       }
-      this.logger.warn(e.message);
-      return null;
+    })();
+
+    if (sentId && !isC2C) {
+      await this.recordGroupCtx(scopeId, { userId: '', content: finalContent, bot: true, mentioned: false });
     }
+    return sentId;
   }
 
   async sendTyping({ scopeId, msgId }) {
@@ -2852,13 +3047,11 @@ export class QQBotDO {
     const sendUrl = isC2C
       ? `${this.apiBase()}/v2/users/${scopeId}/messages`
       : `${this.apiBase()}/v2/groups/${scopeId}/messages`;
-    // 指令按钮：type=2 点击把指令填进输入框，enter=true 直接发送
     const cmd = (label, data, style) => ({
       id: `m_${Math.random().toString(36).slice(2, 9)}`,
       render_data: { label, visited_label: label, style: style || 0 },
       action: { type: 2, permission: { type: 2 }, data, enter: true, reply: true },
     });
-    // 链接按钮：type=0 跳转外链
     const link = (label, url) => ({
       id: `l_${Math.random().toString(36).slice(2, 9)}`,
       render_data: { label, visited_label: label, style: 1 },
@@ -2980,19 +3173,19 @@ export class QQBotDO {
   }
 
 
-  // 语音合成：优先外部 OpenAI 兼容 /audio/speech（配了 voiceBaseUrl/voiceModel 时），
-  // 否则用内置 CF MeloTTS。两者都会被 voiceGain 调整响度。
   async synthVoice(text, lang = 'zh') {
     const base = String(this.config.voiceBaseUrl || '').trim();
     const key = String(this.config.voiceApiKey || '').trim();
     const model = String(this.config.voiceModel || '').trim();
     if (base && key && model) {
-      return this.synthVoiceExternal(text, base, key, model);
+      const bytes = await this.synthVoiceExternal(text, base, key, model);
+      return { bytes, mime: 'audio/mpeg', ext: 'mp3' };
     }
     if (this.config.cfVoiceEnabled === '0') {
       throw new Error('内置语音已关闭，且未配置外部语音服务');
     }
-    return cfTts(this.env, CF_MODELS.voice, text, lang);
+    const bytes = await cfTts(this.env, CF_MODELS.voice, text, lang);
+    return { bytes, mime: 'audio/wav', ext: 'wav' };
   }
 
   async synthVoiceExternal(text, base, key, model) {
@@ -3023,17 +3216,18 @@ export class QQBotDO {
     const clean = String(text || '').trim().slice(0, 300);
     if (!clean) return null;
     try {
-      let bytes = await this.synthVoice(clean, this.config.voiceLang || 'zh');
+      const synth = await this.synthVoice(clean, this.config.voiceLang || 'zh');
+      let bytes = synth.bytes;
       const gainDb = Math.max(0, Math.min(12, Number(this.config.voiceGain || '6') || 0));
-      if (gainDb > 0) {
+      if (gainDb > 0 && synth.ext === 'mp3') {
         try {
           bytes = applyMp3Gain(bytes, gainDb);
         } catch (e) {
           this.logger.warn(`MP3 gain skipped: ${e.message}`);
         }
       }
-      const dataUri = `data:audio/mpeg;base64,${toBase64(bytes)}`;
-      const sent = await this.sendMedia({ isC2C, scopeId, msgId, fileType: 3, source: dataUri, fileExt: 'mp3' });
+      const dataUri = `data:${synth.mime};base64,${toBase64(bytes)}`;
+      const sent = await this.sendMedia({ isC2C, scopeId, msgId, fileType: 3, source: dataUri, fileExt: synth.ext });
       const voiceModel = String(this.config.voiceModel || '').trim() || 'MeloTTS';
       if (sent) {
         this.logExchange({
@@ -3163,11 +3357,7 @@ export class QQBotDO {
     });
   }
 
-  /* ============================ 素材管理（qqbot-media） ============================ */
 
-  // 图片先传到平台，拿到 qqbot-media:// 引用后写进 Markdown / 卡片。
-  // 整条链路：prepare（要 md5/sha1）→ PUT presigned_url → complete（校验 ETag）→ 得到引用。
-  // 平台侧限制：单张 ≤10MB、仅 png/jpeg/gif/webp、每机器人上限 100 张、任务 4 小时过期。
 
   mediaImagePrepare(meta) {
     return this.qqApi('/v2/media-images/prepare', {
@@ -3194,10 +3384,6 @@ export class QQBotDO {
     return this.qqApi(`/v2/media-images/${encodeURIComponent(String(imageId))}/delete`, { method: 'DELETE' });
   }
 
-  /**
-   * 把一张图片（data URI 或公网 URL）上传成平台素材，返回 { imageId, url, ttl } 或 null。
-   * 只在「需要 qqbot-media:// 引用」的场景用；普通富媒体发图走 uploadRichMedia 就行。
-   */
   async uploadMediaImage(source, fileName) {
     let bytes;
     let contentType = 'image/png';
@@ -3221,7 +3407,6 @@ export class QQBotDO {
       const ext = contentType === 'image/jpeg' ? 'jpg' : contentType.split('/')[1];
       name = name.replace(/\.[^.]+$/, '') + '.' + ext;
     } else {
-      // 公网 URL：先抓回来，因为 prepare 必须要 md5/sha1
       let res;
       try {
         res = await fetch(source, { signal: AbortSignal.timeout(20000) });
@@ -3258,7 +3443,6 @@ export class QQBotDO {
       sha1,
     });
 
-    // PUT 直传：Content-Type 必须与 prepare 声明完全一致，否则 COS 403
     const putRes = await fetch(prep.presigned_url, {
       method: 'PUT',
       headers: { 'Content-Type': contentType },
@@ -3275,7 +3459,6 @@ export class QQBotDO {
     return { imageId: done.image_id, url: done.url, ttl: done.ttl, previewUrl: done.preview_url };
   }
 
-  /* ============================ 自定义菜单 / 指令面板 ============================ */
 
   menuGet() {
     return this.qqApi('/v2/menu', { method: 'GET' });
@@ -3289,7 +3472,6 @@ export class QQBotDO {
     });
   }
 
-  /* ============================ 入群申请审批 ============================ */
 
   joinRequestList(openid, cursor, limit) {
     const qs = new URLSearchParams();
@@ -3310,7 +3492,6 @@ export class QQBotDO {
     );
   }
 
-  /* ============================ 群成员管理（内邀） ============================ */
 
   batchRemoveMembers(openid, memberOpenids, addToBlacklist) {
     return this.qqApi(`/v2/groups/${openid}/batch_remove_members`, {
@@ -3340,13 +3521,7 @@ export class QQBotDO {
   }
 
   
-  /**
-   * @全体成员 每日配额（平台规定每个群每天只能发 1 次）。
-   * 用 DO 存储按「群 + 北京时间日期」计数，跨实例有效。
-   * 返回 true 表示这次可以用，同时已经把用量 +1；false 表示今天已经用过了。
-   */
   async consumeAtEveryone(groupOpenid) {
-    // 北京时间（UTC+8）的日期串，跟平台侧口径对齐
     const d = new Date(Date.now() + 8 * 3600 * 1000);
     const day = d.toISOString().slice(0, 10);
     const key = `atall:${groupOpenid}:${day}`;
@@ -3356,7 +3531,6 @@ export class QQBotDO {
     return true;
   }
 
-  /** 清理过期的 @全体 计数（只留今天和昨天，避免存储无限增长） */
   async pruneAtEveryone() {
     const today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
     const map = await this.state.storage.list({ prefix: 'atall:' });
@@ -3368,11 +3542,6 @@ export class QQBotDO {
     if (dead.length) await this.state.storage.delete(dead);
   }
 
-  /**
-   * 发图文卡片（msg_type=8）。
-   * 平台限制：title 1~50 字符、description 1~200 字符、url 与 pic_url 必须是 https 且 ≤1024。
-   * 任一字段不合规平台会直接拒，所以这里先夹一遍。
-   */
   async sendCard({ isC2C, scopeId, msgId, title, description, url, picUrl }) {
     const token = await this.getToken();
     const sendUrl = isC2C
@@ -3412,7 +3581,6 @@ export class QQBotDO {
     return data.id || null;
   }
 
-  /** 发 Markdown（msg_type=2），可带 qqbot-media:// 图片引用 */
   async sendMarkdown({ isC2C, scopeId, msgId, markdown }) {
     const token = await this.getToken();
     const sendUrl = isC2C
@@ -3490,7 +3658,6 @@ export class QQBotDO {
   }
 
   async handleImageGen({ isC2C, scopeId, msgId, prompt, caption, userId, userContent }) {
-    // 生图：优先外部生图配置（imageGenModel 有值时）；否则用内置 CF flux（开关开启时）。
     const extModel = String(this.config.imageGenModel || '').trim();
     const useCf = !extModel && this.config.cfImageGenEnabled !== '0';
 
@@ -3522,10 +3689,12 @@ export class QQBotDO {
       let logModel = '';
 
       if (useCf) {
-        // 内置 CF flux 返回 JPEG（base64），转 data URI 直传
         const img = await cfImage(this.env, CF_MODELS.image, prompt);
         imageUrl = `data:${img.mime};base64,${toBase64(img.bytes)}`;
         logModel = `生图 · ${CF_MODELS.image}`;
+        if (img.promptUsed && img.promptUsed !== prompt) {
+          this.logger.info(`Image prompt translated: ${prompt.slice(0, 40)} -> ${img.promptUsed.slice(0, 60)}`);
+        }
       } else {
         const provider = (this.config.aiProviders || []).find(
           (p) => p && p.enabled !== 0 && p.baseUrl && p.apiKey
@@ -4037,7 +4206,15 @@ export class QQBotDO {
       if (name === 'mute_state') {
         if (isC2C) return this.sendReply({ isC2C, scopeId, content: '这个只能在群里查～', msgId });
         const ms = await this.qqMuteState(scopeId);
-        return this.sendReply({ isC2C, scopeId, content: this.formatMuteState(ms), msgId });
+        await this.rememberMemberNames(
+          scopeId,
+          (Array.isArray(ms && ms.members) ? ms.members : []).map((m) => ({
+            openid: m.member_openid,
+            nick: m.username,
+          }))
+        );
+        const names = await this.loadMemberNames(scopeId);
+        return this.sendReply({ isC2C, scopeId, content: this.formatMuteState(ms, names), msgId });
       }
       return this.sendReply({ isC2C, scopeId, content: `我不认识工具「${name}」`, msgId });
     } catch (e) {
@@ -4075,7 +4252,7 @@ export class QQBotDO {
     return lines.join('\n');
   }
 
-  formatMuteState(ms) {
+  formatMuteState(ms, names) {
     const mode = ms && ms.global_rule ? ms.global_rule.mode : 'none';
     const modeTxt = mode === 'always' ? '全员禁言中' : mode === 'schedule' ? '定时/周期禁言' : '未开启全员禁言';
     const members = Array.isArray(ms && ms.members) ? ms.members : [];
@@ -4086,7 +4263,8 @@ export class QQBotDO {
         const until = m.mute_expire_at
           ? new Date(m.mute_expire_at).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
           : '—';
-        lines.push(`· ${m.username || '(无昵称)'} 到 ${until}`);
+        const nick = m.username || (names && names[m.member_openid]) || '(无昵称)';
+        lines.push(`· ${nick} 到 ${until}`);
       }
     } else {
       lines.push('当前没有成员被禁言');

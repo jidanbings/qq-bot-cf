@@ -103,6 +103,8 @@ const DEMO_CONFIG = {
   cfChatEnabled: '1',
   cfImageGenEnabled: '1',
   cfVoiceEnabled: '1',
+  groupReplyMode: 'smart',
+  groupContextLen: '20',
   voiceBaseUrl: '',
   voiceModel: '',
   voiceSpeaker: '',

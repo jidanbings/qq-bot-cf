@@ -179,6 +179,7 @@ export class ToolEngine {
     return { note: `已发送梗图「${row.name}」` };
   }
 
+  // Returns { bytes, mime, ext }. Built-in MeloTTS yields WAV(PCM), external yields mp3.
   async synthVoice(text, lang, cfg = {}) {
     const base = String(cfg.voiceBaseUrl || '').trim();
     const key = String(cfg.voiceApiKey || '').trim();
@@ -199,24 +200,31 @@ export class ToolEngine {
       }
       const bytes = new Uint8Array(await res.arrayBuffer());
       if (!bytes || !bytes.length) throw new Error('语音接口没有返回音频');
-      return bytes;
+      return { bytes, mime: 'audio/mpeg', ext: 'mp3' };
     }
     if (cfg.cfVoiceEnabled === '0') throw new Error('内置语音已关闭，且未配置外部语音服务');
-    return cfTts(this.env, CF_MODELS.voice, text, lang);
+    const bytes = await cfTts(this.env, CF_MODELS.voice, text, lang);
+    return { bytes, mime: 'audio/wav', ext: 'wav' };
   }
 
   async toolVoice(ctx, args, cfg) {
     const text = String(args.text || '').trim().slice(0, 300);
     if (!text) throw new Error('缺少要说的内容');
-    let bytes = await this.synthVoice(text, cfg.voiceLang || 'zh', cfg || {});
+    const synth = await this.synthVoice(text, cfg.voiceLang || 'zh', cfg || {});
+    let bytes = synth.bytes;
+    // Gain is MP3-only; skip for WAV so the file stays valid.
     const gain = Math.max(0, Math.min(12, Number(cfg.voiceGain || '6') || 0));
-    if (gain > 0) {
+    if (gain > 0 && synth.ext === 'mp3') {
       try {
         bytes = applyMp3Gain(bytes, gain);
       } catch {
       }
     }
-    await this.sendMedia(ctx, { fileType: 3, source: `data:audio/mpeg;base64,${toBase64(bytes)}`, fileExt: 'mp3' });
+    await this.sendMedia(ctx, {
+      fileType: 3,
+      source: `data:${synth.mime};base64,${toBase64(bytes)}`,
+      fileExt: synth.ext,
+    });
     if (args.caption) await this.sendText(ctx, args.caption);
     return { note: `已发送语音（${text.slice(0, 30)}）` };
   }

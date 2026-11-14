@@ -300,7 +300,7 @@ try{ autoRefresh=localStorage.getItem('botAutoRefresh')!=='0'; }catch(e){}
 
 var S={};
 var rendered=false;
-var TRANSPORT_MODE='';// 配置页里显式保存的事件接收方式（webhook / ws，空=自动）
+var TRANSPORT_MODE='';
 var CUR_APPID='';
 var CUR_WEBHOOK_VERIFIED=false;
 var CUR_LAST_EVENT_AT=0;
@@ -825,8 +825,6 @@ function menuBlockHtml(){
     +'<div id="menu-editor"><p class="muted">读取中…</p></div>';
 }
 
-// 内置提示词（人设）库：点击填入系统提示词输入框。
-// 每个条目是一套完整的 system prompt，覆盖常见使用场景。
 var PROMPT_PRESETS = [
   {
     id: 'friendly',
@@ -903,10 +901,17 @@ var FIELDS=[
       hint:'AI 全部不可用时，自动撤回上一条机器人回复，避免留下「没答上来」的消息'},
     {key:'toolCalling',label:'AI 工具调用',type:'select',options:[['1','开（画图 / 定时提醒 / 查群信息）'],['0','关（纯聊天）']],
       hint:'开启后 AI 可以调用内置工具：生成图片、定时提醒、查本群资料 / 机器人状态 / 禁言状态'},
-    {key:'voiceLang',label:'语音语言',type:'select',options:[['zh','中文'],['en','English'],['ja','日本語'],['ko','한국어']],
-      hint:'内置 TTS（Cloudflare Workers AI MeloTTS）合成语音时用的语种，不需要额外 Key'},
+    {key:'groupReplyMode',label:'群聊回复策略',type:'select',
+      options:[['smart','智能参与（推荐）'],['at','仅 @ 时回复'],['all','全部消息都回复']],
+      hint:'智能参与：@ 必回，普通消息只在像在跟机器人说话时才回（提问、点名、请求帮忙）；「仅 @」最不扰民；「全部」会回复群里每一句话'},
+    {key:'groupContextLen',label:'群上下文条数',type:'select',
+      options:[['10','10 条'],['20','20 条（推荐）'],['30','30 条'],['50','50 条']],
+      hint:'AI 回复时能看到本群最近多少条发言，从而接住整个群的话题；越大越费 token'},
+    {key:'voiceLang',label:'语音语言',type:'select',
+      options:[['zh','中文'],['en','English'],['es','Español'],['fr','Français'],['jp','日本語']],
+      hint:'内置 MeloTTS 只支持这 5 种语言；选其它语言会直接报错。外部语音服务不受此限制'},
     {key:'voiceGain',label:'语音音量增益',type:'select',options:[['6','+6dB（推荐）'],['9','+9dB'],['0','关（原始音量）']],
-      hint:'只调整 MP3 响度参数（mp3gain 同款做法），不重新编码；调太大可能有削波失真'}
+      hint:'只对 MP3（外部语音）生效；内置 MeloTTS 输出 WAV，会自动跳过增益'}
   ]},
   {id:'welcome',icon:IX.bot,title:'入群欢迎',desc:'新成员进群 / 机器人被拉进新群时自动发言',items:[
     {key:'welcomeEnabled',label:'开启欢迎',type:'select',options:[['0','关'],['1','开']],
@@ -1036,7 +1041,6 @@ function renderConfig(d){
   }
 
   bindTransportCards();
-  // 自定义菜单是独立接口（/v2/menu），不跟 config 一起提交，单独异步加载
   if($('menu-editor'))loadMenuEditor();
   bindPromptPresets();
 
@@ -1162,7 +1166,6 @@ function markDirty(){
   updateSectionStates();
 }
 
-// 内置提示词：点按钮把对应人设写进系统提示词输入框（不覆盖用户已写的内容，先提示确认）
 function bindPromptPresets(){
   var box=$('pp-systemPrompt');
   if(!box)return;
@@ -1332,7 +1335,6 @@ function postConfig(patch,btn,draft){
 function saveSection(secId,btn){
   var patch=collectConfig(secId);
   if(!Object.keys(patch).length){toast('这一块没有可保存的项','bad');return;}
-  // 必填校验：required 字段留空直接拒绝保存
   var missing=missingRequired(secId);
   if(missing){
     toast('「'+missing+'」是必填项，不能为空','bad');
@@ -1343,7 +1345,6 @@ function saveSection(secId,btn){
   postConfig(patch,btn,snapshotOthers(Object.keys(patch)));
 }
 
-// 返回该区块第一个未填写的 required 字段 key，没有则返回空串
 function missingRequired(secId){
   for(var s=0;s<FIELDS.length;s++){
     var sec=FIELDS[s];
@@ -1353,7 +1354,6 @@ function missingRequired(secId){
     for(var i=0;i<items.length;i++){
       var f=items[i];
       if(!f.required)continue;
-      // 敏感字段（secret）有值时后端不回传明文，输入框为空也算「已填」
       var el=$('cf_'+f.key);
       if(!el)continue;
       var saved=!!(f.secret&&String(el.getAttribute('placeholder')||'').indexOf('已设置')===0);
@@ -1971,7 +1971,6 @@ function showAi(){
 var imageGenState={model:'',baseUrl:'',apiKey:'',hasKey:false,testedModel:'',testedUrl:'',tested:false,result:''};
 var igenEscBound=false;
 
-// 内置 CF 能力开关 + 外部语音配置
 var cfState={chat:'1',imageGen:'1',voice:'1'};
 var voiceState={baseUrl:'',apiKey:'',model:'',speaker:'',hasKey:false,tested:false};
 var voiceEscBound=false;
@@ -1980,7 +1979,6 @@ function renderAiPage(){
   var h='<div class="card"><div class="card-head"><h3>AI 模型</h3>'
     +'<span class="hint">内置 Cloudflare 能力开箱即用，外部模型按需添加</span></div>';
 
-  // 内置 CF 能力：固定三项 + 开关
   h+='<div class="ai-sec">'
     +'<div class="ai-sec-head"><b>内置 Cloudflare 能力</b>'
     +'<span class="hint">默认开启，免费额度，无需任何 Key</span></div>'
@@ -2009,7 +2007,6 @@ function renderAiPage(){
     +'<button class="btn primary" id="b-igen-save" type="button" disabled>'+IX.check+'<span>保存</span></button></div>'
     +'</div>';
 
-  // 外部语音（OpenAI 兼容 /audio/speech），可选
   h+='<div class="ai-sec">'
     +'<div class="ai-sec-head"><b>语音合成</b>'
     +'<span class="hint">默认用内置 CF 语音；填了外部服务则优先外部（OpenAI 兼容 /audio/speech）</span>'
@@ -2137,7 +2134,6 @@ var menuState={items:[],version:0};
 function renderMenuEditor(menu,version){
   var box=$('menu-editor');
   if(!box)return;
-  // 只在「从服务端拉回来的场景」整体替换；内部重绘时传的是当前 items，不能覆盖掉正在编辑的内容
   if(menu&&Array.isArray(menu.items))menuState.items=menu.items;
   if(version)menuState.version=version;
   var h='';
@@ -2156,7 +2152,6 @@ function renderMenuEditor(menu,version){
     +'<button class="btn primary" type="button" id="b-menu-save">'+IX.check+'<span>保存</span></button></div>';
   box.innerHTML=h;
 
-  // 每次重绘都要重新绑定：innerHTML 会把旧节点连同监听一起丢掉
   $('b-menu-add').addEventListener('click',function(){
     if(menuState.items.length>=10){toast('最多 10 个菜单项','bad');return;}
     syncMenuFromDom();
@@ -2164,11 +2159,8 @@ function renderMenuEditor(menu,version){
     renderMenuEditor(null,0);
   });
   $('b-menu-save').addEventListener('click',saveMenu);
-  // 用直接绑定而不是事件委托：下拉框改的是 value，
-  // 委托到 click 上永远收不到，这就是「类型一直选不了」的原因
   var rows=box.querySelectorAll('[data-mi]');
   for(var r=0;r<rows.length;r++)bindMenuRow(rows[r]);
-  // 类型下拉是自绘组件，也要绑一遍（含每一行的 custom select）
   bindSel(box);
 }
 
@@ -2195,7 +2187,6 @@ function bindMenuRow(row){
     typeEl.addEventListener('change',function(){
       var it=menuState.items[idx];
       if(!it)return;
-      // 换类型时先把当前输入存下来，再切，别把用户写的内容丢了
       if(nameEl)it.name=nameEl.value.trim();
       var keep=valEl?valEl.value.trim():'';
       var prevType=it.type;
@@ -2207,7 +2198,6 @@ function bindMenuRow(row){
         it.send_message=prevType==='link'?keep:'';
         it.link='';
       }
-      // 只重绘这一行，避免整块重绘导致焦点丢失
       var fresh=document.createElement('div');
       fresh.innerHTML=menuItemHtml(it,idx);
       var newRow=fresh.firstChild;
@@ -2229,9 +2219,7 @@ function bindMenuRow(row){
 
 function menuItemHtml(it,i){
   var type=it.type||'send_message';
-  // 每个字段都要有唯一 id 并让 label 用 for 指过去，否则无障碍检查会报
   // 「form field should have id or name」「No label associated with a form field」，
-  // 读屏软件也无法把标签念给用户听。
   var idName='menu-'+i+'-name';
   var idType='menu-'+i+'-type';
   var idValue='menu-'+i+'-value';
@@ -2682,7 +2670,6 @@ function saveIgenModal(){
   var url=$('igen-url').value.trim();
   var key=$('igen-key').value.trim();
   var model=$('igen-model').value.trim();
-  // 允许清空：三项全空 = 回到内置 CF 生图
   if(url||model){
     if(!url){toast('请填写 Base URL','bad');return;}
     if(!model){toast('请填写模型名','bad');return;}
@@ -3009,7 +2996,6 @@ function testImageGen(btn){
 }
 
 function saveImageGen(btn){
-  // 清空（model/baseUrl 都空）时允许保存，回到内置 CF 生图
   if(imageGenState.model||imageGenState.baseUrl){
     if(!imageGenState.tested||imageGenState.model!==imageGenState.testedModel
       ||imageGenState.baseUrl!==imageGenState.testedUrl){
@@ -3349,7 +3335,6 @@ function bindGrpExtras(){
       .catch(function(err){toast(qqErrHint(err.message),'bad');});
   });
 
-  // 折叠头：点标题或回车切换内邀功能区的展开/收起
   var foldHead=document.querySelector('[data-gfold="blacklist"]');
   if(foldHead){
     foldHead.addEventListener('click',function(){

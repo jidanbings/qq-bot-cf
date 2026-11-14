@@ -339,7 +339,6 @@ button{font-family:inherit}
   background-position:calc(100% - 17px) 15px,calc(100% - 12px) 15px;background-size:5px 5px;background-repeat:no-repeat}
 .field .hint{font-size:.7rem;color:var(--muted);margin-top:.25rem;line-height:1.6}
 
-/* ---------- 自绘下拉（替代原生 select） ---------- */
 .sel{position:relative;width:100%}
 .sel-trigger{width:100%;display:flex;align-items:center;gap:.5rem;padding:.65rem .85rem;
   border:1.5px solid var(--border-strong);border-radius:12px;background:var(--surface);color:var(--text);
@@ -360,10 +359,7 @@ button{font-family:inherit}
 .sel-opt[aria-selected="true"]{background:var(--accent-light);color:var(--accent);font-weight:600}
 .sel-narrow{max-width:14rem}
 .sel-wrap{flex:1;min-width:0}
-/* 弹窗里的下拉：菜单要盖在滚动容器之上，别被 modal-body 的 overflow 裁掉。
-   也把 z-index 提起来，别被后面的字段遮住。 */
 .modal .sel-menu{z-index:200}
-/* 窄版：沙箱环境这类只有两三个选项的下拉 */
 @media (max-width:600px){
   .sel-narrow{max-width:100%}
 }
@@ -532,9 +528,6 @@ button{font-family:inherit}
 .menu-no{width:24px;height:24px;flex:0 0 auto;border-radius:8px;background:var(--accent-light);color:var(--accent);
   display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;margin-bottom:.35rem}
 @media (max-width:600px){
-  /* 移动端把每个菜单项压成两列紧凑布局：
-     第一行 = 序号 + 删除按钮，第二行 = 名称 + 类型，第三行 = 发送内容独占一行。
-     这样加一个菜单项不用往下滑很久。 */
   .menu-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:.45rem .55rem;
     align-items:end;padding:.55rem .6rem}
   .menu-no{grid-column:1;grid-row:1;margin-bottom:0;justify-self:start}
@@ -744,20 +737,17 @@ button{font-family:inherit}
   .fs-head{padding:1rem}
   .fs-body{padding:.75rem .75rem .25rem}
   .grid{grid-template-columns:minmax(0,1fr)}
-  /* 对话行为区块：6 个下拉项移动端双列，系统提示词仍占满整行 */
   .fs-sec-behavior .grid{grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:0 .8rem}
   .fs-sec-behavior .grid .wide{grid-column:1/-1}
   .field{margin-bottom:.5rem}
   .field>label{font-size:.68rem;margin-bottom:.15rem}
   .field input,.field textarea,.field select{font-size:.78rem;padding:.4rem .55rem;border-radius:8px}
   .field textarea{min-height:120px}
-  /* 自绘下拉：移动端字体调小、内边距收紧，长文案换行不截断 */
   .sel-trigger{font-size:.78rem;padding:.4rem .55rem;border-radius:8px}
   .sel-label{font-size:.78rem;line-height:1.4}
   .sel-opt{font-size:.78rem;padding:.5rem .6rem}
   .dl{grid-template-columns:minmax(84px,auto) minmax(0,1fr)}
   .form-actions .btn{flex:1 1 auto;min-width:0}
-  /* 保存行：往上收紧，按钮做小，提示文字不独占一行 */
   .fs-foot{margin:0 0 .5rem;padding-top:.5rem;row-gap:.35rem}
   .fs-foot-note{flex:1 1 auto;margin-right:auto;font-size:.62rem;line-height:1.5}
   .fs-foot .btn{margin-left:auto;padding:.28rem .75rem;border-radius:30px;font-size:.72rem;gap:.3rem}
