@@ -268,6 +268,17 @@ button{font-family:inherit}
 .stat-value span{font-size:13px;font-weight:600;color:var(--muted)}
 .outage #stat-bot{border-color:var(--red)}
 
+.bot-line{display:flex;align-items:center;gap:.5rem;padding:.55rem .85rem;margin-bottom:.9rem;
+  background:var(--surface-2);border:1px solid var(--border);border-radius:10px;font-size:12.5px}
+.bot-line-ico{display:flex;align-items:center;color:var(--muted)}
+.bot-line-ico svg{width:15px;height:15px}
+.bot-line b{font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bot-line small{color:var(--muted);font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bot-line-off{font-size:10.5px;font-weight:600;color:var(--amber,#b45309);
+  background:#fef3c7;border-radius:999px;padding:1px 7px;flex:0 0 auto}
+.bot-line .grow{flex:1 1 auto}
+.bot-line .btn{flex:0 0 auto}
+
 .banner{display:flex;gap:11px;align-items:flex-start;border-radius:12px;padding:12px 15px;font-size:12.5px;
   margin-bottom:10px;border:1px solid;line-height:1.65}
 .banner .b-ico{flex:0 0 auto;width:18px;height:18px;margin-top:1px}
@@ -339,7 +350,6 @@ button{font-family:inherit}
   background-position:calc(100% - 17px) 15px,calc(100% - 12px) 15px;background-size:5px 5px;background-repeat:no-repeat}
 .field .hint{font-size:.7rem;color:var(--muted);margin-top:.25rem;line-height:1.6}
 
-/* ---------- 自绘下拉（替代原生 select） ---------- */
 .sel{position:relative;width:100%}
 .sel-trigger{width:100%;display:flex;align-items:center;gap:.5rem;padding:.65rem .85rem;
   border:1.5px solid var(--border-strong);border-radius:12px;background:var(--surface);color:var(--text);
@@ -360,10 +370,7 @@ button{font-family:inherit}
 .sel-opt[aria-selected="true"]{background:var(--accent-light);color:var(--accent);font-weight:600}
 .sel-narrow{max-width:14rem}
 .sel-wrap{flex:1;min-width:0}
-/* 弹窗里的下拉：菜单要盖在滚动容器之上，别被 modal-body 的 overflow 裁掉。
-   也把 z-index 提起来，别被后面的字段遮住。 */
 .modal .sel-menu{z-index:200}
-/* 窄版：沙箱环境这类只有两三个选项的下拉 */
 @media (max-width:600px){
   .sel-narrow{max-width:100%}
 }
@@ -532,9 +539,6 @@ button{font-family:inherit}
 .menu-no{width:24px;height:24px;flex:0 0 auto;border-radius:8px;background:var(--accent-light);color:var(--accent);
   display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;margin-bottom:.35rem}
 @media (max-width:600px){
-  /* 移动端把每个菜单项压成两列紧凑布局：
-     第一行 = 序号 + 删除按钮，第二行 = 名称 + 类型，第三行 = 发送内容独占一行。
-     这样加一个菜单项不用往下滑很久。 */
   .menu-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:.45rem .55rem;
     align-items:end;padding:.55rem .6rem}
   .menu-no{grid-column:1;grid-row:1;margin-bottom:0;justify-self:start}
@@ -744,20 +748,19 @@ button{font-family:inherit}
   .fs-head{padding:1rem}
   .fs-body{padding:.75rem .75rem .25rem}
   .grid{grid-template-columns:minmax(0,1fr)}
-  /* 对话行为区块：6 个下拉项移动端双列，系统提示词仍占满整行 */
   .fs-sec-behavior .grid{grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:0 .8rem}
   .fs-sec-behavior .grid .wide{grid-column:1/-1}
   .field{margin-bottom:.5rem}
   .field>label{font-size:.68rem;margin-bottom:.15rem}
   .field input,.field textarea,.field select{font-size:.78rem;padding:.4rem .55rem;border-radius:8px}
   .field textarea{min-height:120px}
-  /* 自绘下拉：移动端字体调小、内边距收紧，长文案换行不截断 */
+  .bot-line{padding:.5rem .6rem;font-size:12px;gap:.35rem}
+  .bot-line small{display:none}
   .sel-trigger{font-size:.78rem;padding:.4rem .55rem;border-radius:8px}
   .sel-label{font-size:.78rem;line-height:1.4}
   .sel-opt{font-size:.78rem;padding:.5rem .6rem}
   .dl{grid-template-columns:minmax(84px,auto) minmax(0,1fr)}
   .form-actions .btn{flex:1 1 auto;min-width:0}
-  /* 保存行：往上收紧，按钮做小，提示文字不独占一行 */
   .fs-foot{margin:0 0 .5rem;padding-top:.5rem;row-gap:.35rem}
   .fs-foot-note{flex:1 1 auto;margin-right:auto;font-size:.62rem;line-height:1.5}
   .fs-foot .btn{margin-left:auto;padding:.28rem .75rem;border-radius:30px;font-size:.72rem;gap:.3rem}
@@ -854,7 +857,9 @@ export const ICONS_A = {
   logout: SVG('<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>'),
 };
 
-export function shellA(nonce) {
+export function shellA(nonce, botKey) {
+  // Every nav link is scoped to one bot: /<appId>/<page>.
+  const base = '/' + encodeURIComponent(String(botKey || 'default'));
   return `<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="icon" href="/favicon-32.png" type="image/png" sizes="32x32"><link rel="shortcut icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><meta name="robots" content="noindex"><title>QQ Bot 管理后台</title><style nonce="${nonce}">
 ${CSS_A}
 </style></head><body>
@@ -867,20 +872,20 @@ ${CSS_A}
   <nav class="side-nav">
     <div class="nav-label">概览</div>
     <div class="tabs">
-      <a href="/status" data-tab="status">${ICONS_A.status}<span>运行状态</span><span class="nav-tag" id="nav-state">—</span></a>
+      <a href="${base}/status" data-tab="status">${ICONS_A.status}<span>运行状态</span><span class="nav-tag" id="nav-state">—</span></a>
     </div>
     <div class="nav-label">设置</div>
     <div class="tabs">
-      <a href="/config" data-tab="config">${ICONS_A.config}<span>机器人配置</span></a>
-      <a href="/ai" data-tab="ai">${ICONS_A.ai}<span>AI 模型</span></a>
+      <a href="${base}/config" data-tab="config">${ICONS_A.config}<span>机器人配置</span></a>
+      <a href="${base}/ai" data-tab="ai">${ICONS_A.ai}<span>AI 模型</span></a>
     </div>
     <div class="nav-label">管理</div>
     <div class="tabs">
-      <a href="/workspace" data-tab="workspace">${ICONS_A.workspace}<span>工作区</span></a>
+      <a href="${base}/workspace" data-tab="workspace">${ICONS_A.workspace}<span>工作区</span></a>
     </div>
     <div class="nav-label">数据</div>
     <div class="tabs">
-      <a href="/logs" data-tab="logs">${ICONS_A.logs}<span>聊天记录</span><span class="nav-tag" id="nav-count">—</span></a>
+      <a href="${base}/logs" data-tab="logs">${ICONS_A.logs}<span>聊天记录</span><span class="nav-tag" id="nav-count">—</span></a>
     </div>
   </nav>
 
@@ -891,6 +896,7 @@ ${CSS_A}
     </div>
     <div class="side-links">
       <a href="/" target="_blank" rel="noopener">${ICONS_A.home}<span>首页</span></a>
+      <a href="/pick" id="to-pick">${ICONS_A.status}<span>返回机器人列表</span></a>
       <button type="button" id="theme-toggle" title="切换深色 / 浅色" aria-label="切换深色 / 浅色"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg><span>外观</span></button>
       <button type="button" id="logout" title="退出登录">${ICONS_A.logout}<span>退出</span></button>
     </div>

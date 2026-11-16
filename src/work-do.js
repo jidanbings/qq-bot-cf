@@ -102,6 +102,9 @@ export class WorkDO {
     try {
       if (!this.env || !this.env.DB) return;
       const { upsertWorkspace } = await import('./db.js');
+      // ownerKey() prefixes non-default bots as "bot:<id>:<scope>", so the bot
+      // id can be recovered here without threading it through every call.
+      const m = /^bot:([^:]+):/.exec(String(scope || ''));
       await upsertWorkspace(this.env, {
         scope,
         kind,
@@ -110,6 +113,7 @@ export class WorkDO {
         notes: ws.notes.length,
         lastTask,
         updatedAt: ws.updatedAt,
+        botId: m ? m[1] : 'default',
       });
     } catch (e) {
       console.warn('[WS] index sync failed:', e && e.message);

@@ -300,7 +300,7 @@ try{ autoRefresh=localStorage.getItem('botAutoRefresh')!=='0'; }catch(e){}
 
 var S={};
 var rendered=false;
-var TRANSPORT_MODE='';// 配置页里显式保存的事件接收方式（webhook / ws，空=自动）
+var TRANSPORT_MODE='';
 var CUR_APPID='';
 var CUR_WEBHOOK_VERIFIED=false;
 var CUR_LAST_EVENT_AT=0;
@@ -322,8 +322,13 @@ function banners(s){
     out.push(['warn','会话配额已用尽',
       '预计 '+fmtClock(s.quotaWaitUntil)+' 恢复（还有 '+fmtDur(s.quotaWaitUntil-now)+'）。已经停止无效重连，到点会自动起来，不需要手动操作。']);
   }
-  if(!s.qqReady)out.push(['bad','QQ 凭据不完整','缺少 AppID 或 Secret。到「机器人配置」填好并保存，机器人才能连上网关。']);
-  else if(!s.aiReady)out.push(['bad','AI 未配置完整','Base URL / API Key / 模型三者缺一，机器人收到了消息也回不出来。到「AI 模型」补全后保存即可，不用重启。']);
+  if(s.configError){
+    out.push(['bad','配置读取失败：密钥不匹配',
+      s.configError+'　━━ 请立刻到「恢复密钥」页面用管理员密钥验证，然后重新填写 QQ AppID / Secret 并保存。'
+      +'注意：此时页面上显示的传输方式（WebSocket / Webhook）不可信。']);
+  }
+  if(!s.qqReady&&!s.configError)out.push(['bad','QQ 凭据不完整','缺少 AppID 或 Secret。到「机器人配置」填好并保存，机器人才能连上网关。']);
+  else if(!s.aiReady&&!s.configError)out.push(['bad','AI 未配置完整','Base URL / API Key / 模型三者缺一，机器人收到了消息也回不出来。到「AI 模型」补全后保存即可，不用重启。']);
   if(isWs&&s.running&&!s.tokenExpiry)out.push(['bad','Access Token 未获取','到「机器人配置」确认 AppID / Secret 与开放平台一致。']);
   else if(isWs&&(s.identifyFailures||0)>=5&&!(s.quotaWaitUntil&&s.quotaWaitUntil>now)){
     out.push(['warn','连续鉴权失败 '+s.identifyFailures+' 次',
@@ -353,8 +358,7 @@ function statCard(id,icon,label,value,cls,sub){
     +'<span class="stat-sub">'+(sub||'')+'</span></div>';
 }
 
-function logsHtml(logs){
-  if(!logs||!logs.length)return '<p class="muted">暂时没有日志。</p>';
+function logsHtml(logs){  if(!logs||!logs.length)return '<p class="muted">暂时没有日志。</p>';
   var h='';
   for(var i=0;i<logs.length;i++){
     var it=logs[i];
@@ -503,40 +507,71 @@ function paintStatus(s){
 
   var el=$('stat-bot');
   if(el){
-    el.querySelector('.stat-value').innerHTML=(s.running
-      ?'<i class="dot ok"></i>'+(isWs?'运行中':'已启用')
-      :'<i class="dot bad"></i>'+(isWs?'已停止':'已停用'));
-    el.querySelector('.stat-value').className='stat-value '+(s.running?'ok':'bad');
-    el.querySelector('.stat-sub').textContent=(isWs?'自动保活':'接收开关')+(s.desiredRunning?'已开启':'已关闭')
-      +(s.lastStartAt?' · 启动于 '+fmtClock(s.lastStartAt):'');
+    var curB=(typeof currentBot==='function')?currentBot():null;
+    var botName=curB?(curB.name||'未命名'):'机器人';
+    var lab=el.querySelector('.stat-label');
+    if(lab)lab.textContent=botName;
+    // Guard every child: if the card is missing its inner nodes (stale markup),
+    // a thrown error here would abort the rest of paintStatus and leave the
+    // whole page blank.
+    var bv=el.querySelector('.stat-value');
+    if(bv){
+      bv.innerHTML=(s.running
+        ?'<i class="dot ok"></i>'+(isWs?'运行中':'已启用')
+        :'<i class="dot bad"></i>'+(isWs?'已停止':'已停用'));
+      bv.className='stat-value '+(s.running?'ok':'bad');
+    }
+    var bs=el.querySelector('.stat-sub');
+    if(bs){
+      bs.textContent=(isWs?'自动保活':'接收开关')+(s.desiredRunning?'已开启':'已关闭')
+        +(s.lastStartAt?' · 启动于 '+fmtClock(s.lastStartAt):'');
+    }
   }
   el=$('stat-ws');
   if(el){
-    el.querySelector('.stat-value').innerHTML=esc(ws);
-    el.querySelector('.stat-value').className='stat-value '+((isWs?(s.wsState===1):s.desiredRunning)?'ok':'');
-    el.querySelector('.stat-sub').textContent=(isWs
+    var wv=el.querySelector('.stat-value');
+    if(wv){
+      wv.innerHTML=esc(ws);
+      wv.className='stat-value '+((isWs?(s.wsState===1):s.desiredRunning)?'ok':'');
+    }
+    var wsb=el.querySelector('.stat-sub');
+    if(wsb){
+      wsb.textContent=(isWs
         ?((s.sessionId?'会话已建立':'会话未建立')+' · 内存会话 '+esc(s.sessionCount==null?0:s.sessionCount)+' 个')
         :('Webhook 接收 · 内存会话 '+esc(s.sessionCount==null?0:s.sessionCount)+' 个'));
+    }
   }
   el=$('stat-token');
   if(el){
     var tokCls=s.tokenValid?'ok':(s.tokenExpiry?'bad':'');
     var tokTxt=s.tokenValid?'有效':(s.tokenExpiry?'已过期':'未获取');
-    el.querySelector('.stat-value').innerHTML=esc(tokTxt);
-    el.querySelector('.stat-value').className='stat-value '+tokCls;
-    el.querySelector('.stat-sub').textContent=s.tokenExpiry
-      ?(s.tokenValid?('过期时间 '+fmtClock(s.tokenExpiry)+'（'+fmtDur(s.tokenExpiry-now)+'）· 到期自动换新')
-                   :'已到期 · 下次收发消息或重连时自动换新')
-      :'还没取到凭证';
+    var tv=el.querySelector('.stat-value');
+    if(tv){
+      tv.innerHTML=esc(tokTxt);
+      tv.className='stat-value '+tokCls;
+    }
+    var ts=el.querySelector('.stat-sub');
+    if(ts){
+      ts.textContent=s.tokenExpiry
+        ?(s.tokenValid?('过期时间 '+fmtClock(s.tokenExpiry)+'（'+fmtDur(s.tokenExpiry-now)+'）· 到期自动换新')
+                     :'已到期 · 下次收发消息或重连时自动换新')
+        :'还没取到凭证';
+    }
   }
   el=$('stat-quota');
   if(el){
     var qCls=left==null?'':(left<=0?'bad':(left<100?'warn':'ok'));
-    el.querySelector('.stat-value').innerHTML=left==null?'未知':(esc(left)+(total?' <span>/ '+esc(total)+'</span>':''));
-    el.querySelector('.stat-value').className='stat-value '+qCls;
-    el.querySelector('.stat-sub').textContent=waiting
-      ?('等待恢复至 '+fmtClock(s.quotaWaitUntil)+'（'+fmtDur(s.quotaWaitUntil-now)+'）')
-      :(lim?('重置还有 '+fmtDur(Number(lim.reset_after))):'尚未取得配额信息');
+    var qv=el.querySelector('.stat-value');
+    if(qv){
+      qv.innerHTML=left==null?'未知':(esc(left)+(total?' <span>/ '+esc(total)+'</span>':''));
+      qv.className='stat-value '+qCls;
+    }
+    var qs=el.querySelector('.stat-sub');
+    if(qs){
+      qs.textContent=waiting
+        ?('等待恢复至 '+fmtClock(s.quotaWaitUntil)+'（'+fmtDur(s.quotaWaitUntil-now)+'）')
+        :(lim?('重置还有 '+fmtDur(Number(lim.reset_after))):'尚未取得配额信息');
+    }
   }
 
   var hint=$('start-hint');
@@ -669,7 +704,7 @@ function bindStatusEvents(){
 
 function refreshStatus(silent){
   if(!silent&&!rendered)return showStatus();
-  return api('GET','/api/status').then(function(s){
+  return api('GET','/api/status'+botQuery()).then(function(s){
     if(!s)return;
     if(!rendered)return showStatus();
     S=s;
@@ -688,7 +723,7 @@ function showStatus(){
   rendered=true;
   bindStatusEvents();
   setPill('正在读取状态…','');
-  return api('GET','/api/status').then(function(s){
+  return api('GET','/api/status'+botQuery()).then(function(s){
     if(!s)return;
     S=s;
     paintStatus(s);
@@ -713,7 +748,7 @@ function busy(btn,on){
 function botAction(action,doneText){
   var btn=$(action==='start'?'b-start':(action==='stop'?'b-stop':'b-restart'));
   busy(btn,true);
-  return api('POST','/api/bot/'+action,{}).then(function(){
+  return api('POST','/api/bot/'+action+botQuery(),{}).then(function(){
     toast(doneText,'ok');
     return refreshStatus(false);
   }).catch(function(e){
@@ -757,7 +792,10 @@ function qqDevSettingsUrl(appId){
 function transportCards(){
   var isWebhook=(CUR_PLATFORM_MODE==='webhook')||(CUR_PLATFORM_MODE!=='ws'&&!!(CUR_WEBHOOK_VERIFIED||CUR_LAST_EVENT_AT));
   var appId=CUR_APPID||'';
+  // Shared URL works for every bot; the per-bot URL removes all guesswork when
+  // several bots on this deployment all use Webhook.
   var webhookUrl=(location.origin||'')+'/qq/webhook';
+  var ownWebhookUrl=appId?((location.origin||'')+'/'+encodeURIComponent(appId)+'/qq/webhook'):'';
   var devUrl=qqDevSettingsUrl(appId);
   var h='<div class="tp-wrap">';
 
@@ -794,6 +832,13 @@ function transportCards(){
       h+='<div class="tp-extra"><span class="tp-k">回调地址</span>'
         +'<code class="tp-url" id="tp-url">'+esc(webhookUrl)+'</code>'
         +'<button class="btn sm" type="button" id="tp-copy">复制</button></div>';
+      if(ownWebhookUrl){
+        h+='<div class="tp-extra"><span class="tp-k">本机器人专用</span>'
+          +'<code class="tp-url" id="tp-own-url">'+esc(ownWebhookUrl)+'</code>'
+          +'<button class="btn sm" type="button" id="tp-copy-own">复制</button></div>'
+          +'<div class="tp-extra"><span class="tp-note">多个机器人同时用 Webhook 时，'
+          +'给每个机器人填它自己这条地址最稳妥（不会和别的机器人混）。</span></div>';
+      }
     }
     h+='</div>';
   }
@@ -825,8 +870,6 @@ function menuBlockHtml(){
     +'<div id="menu-editor"><p class="muted">读取中…</p></div>';
 }
 
-// 内置提示词（人设）库：点击填入系统提示词输入框。
-// 每个条目是一套完整的 system prompt，覆盖常见使用场景。
 var PROMPT_PRESETS = [
   {
     id: 'friendly',
@@ -903,16 +946,23 @@ var FIELDS=[
       hint:'AI 全部不可用时，自动撤回上一条机器人回复，避免留下「没答上来」的消息'},
     {key:'toolCalling',label:'AI 工具调用',type:'select',options:[['1','开（画图 / 定时提醒 / 查群信息）'],['0','关（纯聊天）']],
       hint:'开启后 AI 可以调用内置工具：生成图片、定时提醒、查本群资料 / 机器人状态 / 禁言状态'},
-    {key:'voiceLang',label:'语音语言',type:'select',options:[['zh','中文'],['en','English'],['ja','日本語'],['ko','한국어']],
-      hint:'内置 TTS（Cloudflare Workers AI MeloTTS）合成语音时用的语种，不需要额外 Key'},
+    {key:'groupReplyMode',label:'群聊回复策略',type:'select',
+      options:[['smart','智能参与（推荐）'],['at','仅 @ 时回复'],['all','全部消息都回复']],
+      hint:'智能参与：@ 必回，普通消息只在像在跟机器人说话时才回（提问、点名、请求帮忙）；「仅 @」最不扰民；「全部」会回复群里每一句话。注意：想收到不 @ 的群消息，需要群主在 QQ 里把「机器人可获取的群聊消息范围」设为全部；机器人绝不会主动往群里发消息，否则这个权限会被 QQ 自动关掉'},
+    {key:'groupContextLen',label:'群上下文条数',type:'select',
+      options:[['10','10 条'],['20','20 条（推荐）'],['30','30 条'],['50','50 条']],
+      hint:'AI 回复时能看到本群最近多少条发言，从而接住整个群的话题；越大越费 token'},
+    {key:'voiceLang',label:'语音语言',type:'select',
+      options:[['zh','中文'],['en','English'],['es','Español'],['fr','Français'],['jp','日本語']],
+      hint:'内置 MeloTTS 只支持这 5 种语言；选其它语言会直接报错。外部语音服务不受此限制'},
     {key:'voiceGain',label:'语音音量增益',type:'select',options:[['6','+6dB（推荐）'],['9','+9dB'],['0','关（原始音量）']],
-      hint:'只调整 MP3 响度参数（mp3gain 同款做法），不重新编码；调太大可能有削波失真'}
+      hint:'只对 MP3（外部语音）生效；内置 MeloTTS 输出 WAV，会自动跳过增益'}
   ]},
   {id:'welcome',icon:IX.bot,title:'入群欢迎',desc:'新成员进群 / 机器人被拉进新群时自动发言',items:[
     {key:'welcomeEnabled',label:'开启欢迎',type:'select',options:[['0','关'],['1','开']],
       hint:'开启后需要订阅群成员事件（1<<24），若平台未开通该事件权限会导致无法连接网关，请先在开放平台确认'},
     {key:'welcomeMsg',label:'欢迎语',type:'textarea',ph:'欢迎新成员～ {member}',wide:true,
-      hint:'占位符 {member} 会替换为 @新成员，{group} 会替换为群标识。留空则不发言'}
+      hint:'占位符 {member} 会替换为 @新成员，{group} 会替换为群标识。留空则不发言。欢迎语走「事件回复」（被动消息），不会影响群的全量消息权限'}
   ]},
   {id:'menu',icon:IX.spark,title:'自定义菜单',
     desc:'QQ 聊天窗口左下角那个菜单，用户点开就能看到',custom:menuBlockHtml},
@@ -1008,7 +1058,7 @@ function renderConfig(d){
   CUR_LAST_EVENT_AT=Number(cfg.lastEventAt)||0;
   CUR_PLATFORM_MODE=cfg.platformMode||'';
   var h='';
-  for(var s=0;s<FIELDS.length;s++){
+  h+=botBarHtml();  for(var s=0;s<FIELDS.length;s++){
     var sec=FIELDS[s];
     h+='<div class="form-section fs-sec-'+esc(sec.id)+'"><div class="fs-head"><span class="fs-ico">'+sec.icon+'</span>'
       +'<div><h3>'+esc(sec.title)+'</h3><p>'+esc(sec.desc)+'</p></div>'
@@ -1036,7 +1086,8 @@ function renderConfig(d){
   }
 
   bindTransportCards();
-  // 自定义菜单是独立接口（/v2/menu），不跟 config 一起提交，单独异步加载
+  bindBotBar();
+  bindBotModal();
   if($('menu-editor'))loadMenuEditor();
   bindPromptPresets();
 
@@ -1077,12 +1128,16 @@ function bindSel(root){
     // the loop's var and would open the last dropdown no matter what you click.
     (function(){
       var sel=sels[i];
+      // Skip already-bound selects: re-binding would stack duplicate listeners
+      // and make one click toggle open/closed twice.
+      if(sel.getAttribute('data-bound'))return;
       var key=sel.getAttribute('data-key');
       var trigger=$('selt_'+key);
       var menu=$('selm_'+key);
       var native=sel.querySelector?sel.querySelector('select'):null;
       var label=$('sell_'+key);
       if(!trigger||!menu||!native||!label)return;
+      sel.setAttribute('data-bound','1');
 
       // init: show the current value's label text
       syncSelLabel(label,native,menu);
@@ -1162,7 +1217,6 @@ function markDirty(){
   updateSectionStates();
 }
 
-// 内置提示词：点按钮把对应人设写进系统提示词输入框（不覆盖用户已写的内容，先提示确认）
 function bindPromptPresets(){
   var box=$('pp-systemPrompt');
   if(!box)return;
@@ -1195,27 +1249,40 @@ function bindPromptPresets(){
   });
 }
 
+function copyFromEl(id,okMsg){
+  var el=$(id);
+  var url=(el||{}).textContent||'';
+  if(!url)return;
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(url).then(function(){toast(okMsg,'ok');})
+      .catch(function(){toast('复制失败，请手动选中','bad');});
+  }else{
+    toast('当前浏览器不支持一键复制','bad');
+  }
+}
+
 function bindTransportCards(){
   var copy=$('tp-copy');
   if(copy){
     copy.addEventListener('click',function(e){
       e.stopPropagation();
-      var url=($('tp-url')||{}).textContent||'';
-      if(navigator.clipboard&&navigator.clipboard.writeText){
-        navigator.clipboard.writeText(url).then(function(){toast('回调地址已复制','ok');})
-          .catch(function(){toast('复制失败，请手动选中','bad');});
-      }else{
-        toast('当前浏览器不支持一键复制','bad');
-      }
+      copyFromEl('tp-url','回调地址已复制');
+    });
+  }
+  var copyOwn=$('tp-copy-own');
+  if(copyOwn){
+    copyOwn.addEventListener('click',function(e){
+      e.stopPropagation();
+      copyFromEl('tp-own-url','本机器人专用地址已复制');
     });
   }
   var toWs=$('b-to-ws');
   if(toWs){
     toWs.addEventListener('click',function(){
       busy(toWs,true);
-      api('POST','/api/detect-platform',{action:'to-ws'}).then(function(){
+      api('POST','/api/detect-platform',{action:'to-ws',botId:CUR_BOT}).then(function(){
         toast('已切到 WebSocket 长连接','ok');
-        return api('GET','/api/config').then(function(c){ if(c)renderConfig(c); });
+        return api('GET','/api/config'+botQuery()).then(function(c){ if(c)renderConfig(c); });
       }).catch(function(e){toast(e.message,'bad');})
         .then(function(){busy(toWs,false);});
     });
@@ -1224,9 +1291,9 @@ function bindTransportCards(){
   if(toWh){
     toWh.addEventListener('click',function(){
       busy(toWh,true);
-      api('POST','/api/detect-platform',{action:'to-webhook'}).then(function(){
+      api('POST','/api/detect-platform',{action:'to-webhook',botId:CUR_BOT}).then(function(){
         toast('已切到 Webhook','ok');
-        return api('GET','/api/config').then(function(c){ if(c)renderConfig(c); });
+        return api('GET','/api/config'+botQuery()).then(function(c){ if(c)renderConfig(c); });
       }).catch(function(e){toast(e.message,'bad');})
         .then(function(){busy(toWh,false);});
     });
@@ -1261,6 +1328,63 @@ function updateSectionStates(){
   }
 }
 
+// Multi-bot state: CUR_BOT is the bot whose config the page is editing.
+var botsState={list:[],max:5,loaded:false};
+
+// The bot is fixed by the URL: /<appId>/status means "this bot". The server
+// injects window.__DSH_BOT__ before this script runs, so every API call below is
+// automatically scoped to it and there is no way to edit the wrong bot.
+var BOT_BOOT=(typeof window!=='undefined'&&window.__DSH_BOT__)||{};
+var CUR_BOT=String(BOT_BOOT.botId||'default');
+var CUR_APPID_PATH=String(BOT_BOOT.appId||'');
+
+function botQuery(){
+  return CUR_BOT&&CUR_BOT!=='default'?('?bot='+encodeURIComponent(CUR_BOT)):'';
+}
+
+// Console URL for a page, e.g. pagePath('config') -> /102xxxxxx/config
+function pagePath(page){
+  var key=CUR_APPID_PATH||CUR_BOT||'default';
+  return '/'+encodeURIComponent(key)+'/'+page;
+}
+
+function goPick(){
+  location.href='/pick';
+}
+
+function loadBots(){
+  return api('GET','/api/bots').then(function(d){
+    if(!d)return botsState;
+    botsState.list=d.bots||[];
+    botsState.max=d.max||5;
+    botsState.loaded=true;
+    return botsState;
+  }).catch(function(){return botsState;});
+}
+
+function currentBot(){
+  for(var i=0;i<botsState.list.length;i++)if(botsState.list[i].id===CUR_BOT)return botsState.list[i];
+  return null;
+}
+
+function botBarHtml(){
+  var cur=currentBot();
+  var name=cur?(cur.name||'未命名'):(CUR_APPID_PATH?'AppID '+CUR_APPID_PATH:'默认机器人');
+  var appId=(cur&&cur.appId)||CUR_APPID_PATH||'';
+  var disabled=cur&&!cur.enabled;
+  // Deliberately minimal: one line, no card chrome, so the page keeps the
+  // original 3.20.0 look. Bot management lives on /pick.
+  var h='<div class="bot-line">';
+  h+='<span class="bot-line-ico">'+IX.bot+'</span>';
+  h+='<b>'+esc(name)+'</b>';
+  if(appId)h+='<small>AppID '+esc(appId)+'</small>';
+  if(disabled)h+='<span class="bot-line-off">已停用</span>';
+  h+='<span class="grow"></span>';
+  h+='<button class="btn sm" type="button" id="b-bot-pick">切换 / 管理</button>';
+  h+='</div>';
+  return h;
+}
+
 function showConfig(){
   stopStatusTimer();
   rendered=false;
@@ -1268,7 +1392,9 @@ function showConfig(){
   setTopActions('');
   setPill('配置页','');
   $('wrap').innerHTML=skeletonConfig();
-  api('GET','/api/config').then(function(d){
+  loadBots().then(function(){
+    return api('GET','/api/config'+botQuery());
+  }).then(function(d){
     if(!d)return;
     renderConfig(d);
     if(S&&S.running)setPill('运行中','ok');
@@ -1276,6 +1402,114 @@ function showConfig(){
     $('wrap').innerHTML='<div class="card"><div class="card-head"><h3>配置读取失败</h3></div>'
       +'<p class="error-text">'+esc(e.message)+'</p></div>';
     setPill('读取失败','bad');
+  });
+}
+
+function bindBotBar(){
+  var pick=$('b-bot-pick');
+  if(pick)pick.addEventListener('click',goPick);
+  var add=$('b-bot-add');
+  if(add)add.addEventListener('click',openBotModal);
+  var del=$('b-bot-manage');
+  if(del)del.addEventListener('click',deleteBotConfirm);
+}
+
+function isAllDigits(s){
+  var t=String(s||'');
+  if(!t)return false;
+  for(var i=0;i<t.length;i++){
+    var c=t.charCodeAt(i);
+    if(c<48||c>57)return false;
+  }
+  return true;
+}
+
+function openBotModal(){
+  if(botsState.list.length>=botsState.max){toast('最多 '+botsState.max+' 个机器人','bad');return;}
+  $('bot-modal-title').textContent='添加机器人';
+  $('bot-m-name').value='';
+  $('bot-m-appid').value='';
+  $('bot-m-secret').value='';
+  $('bot-modal-mask').hidden=false;
+}
+
+function closeBotModal(){
+  var m=$('bot-modal-mask');
+  if(m)m.hidden=true;
+}
+
+function saveBotModal(btn){
+  var name=$('bot-m-name').value.trim();
+  var appId=$('bot-m-appid').value.trim();
+  var secret=$('bot-m-secret').value.trim();
+  if(!name){toast('请填写名称','bad');return;}
+  if(!appId){toast('请填写 AppID','bad');return;}
+  if(!isAllDigits(appId)||appId.length<6||appId.length>32){toast('AppID 应该是 6~32 位数字','bad');return;}
+  busy(btn,true);
+  api('POST','/api/bots',{name:name,appId:appId,secret:secret}).then(function(d){
+    closeBotModal();
+    toast('已添加「'+name+'」','ok');
+    // New bot has its own console URL now.
+    var key=(d&&d.bot&&(d.bot.appId||d.bot.id))||id;
+    location.href='/'+encodeURIComponent(key)+'/config';
+  }).catch(function(e){toast(e.message,'bad');})
+    .then(function(){busy(btn,false);});
+}
+
+function deleteBotConfirm(){
+  var bot=currentBot();
+  if(!bot||bot.id==='default'){toast('默认机器人不能删除','bad');return;}
+  confirmDialog({
+    title:'删除「'+(bot.name||'未命名')+'」？',
+    message:'会同时删除它的全部配置（AppID / 提示词 / AI 模型）和会话记忆，无法恢复。',
+    detail:'如果你只是暂时不用，可以把它的「启用」关掉。',
+    confirm:'删除',
+    danger:true
+  }).then(function(yes){
+    if(!yes)return;
+    api('DELETE','/api/bots',{id:bot.id}).then(function(){
+      toast('已删除','ok');
+      location.href='/pick';
+    }).catch(function(e){toast(e.message,'bad');});
+  });
+}
+
+function botModalHtml(){
+  return '<div class="modal-mask" id="bot-modal-mask" hidden>'
+    +'<div class="modal" role="dialog" aria-modal="true" aria-labelledby="bot-modal-title">'
+    +'<div class="modal-head"><h3 id="bot-modal-title">添加机器人</h3>'
+    +'<button class="modal-x" type="button" id="bot-modal-x" aria-label="关闭">×</button></div>'
+    +'<div class="modal-body">'
+    +'<div class="field"><label for="bot-m-name">名称</label>'
+    +'<input id="bot-m-name" name="bot-m-name" maxlength="40" placeholder="例如：客服机器人"></div>'
+    +'<div class="field"><label for="bot-m-appid">QQ AppID</label>'
+    +'<input id="bot-m-appid" name="bot-m-appid" inputmode="numeric" maxlength="32" placeholder="开放平台里的 AppID"></div>'
+    +'<div class="field"><label for="bot-m-secret">QQ Secret</label>'
+    +'<div class="pw-wrap"><input id="bot-m-secret" name="bot-m-secret" type="password" placeholder="机器人密钥" autocomplete="new-password">'
+    +'<button class="pw-toggle" type="button" id="bot-m-secret-toggle">显示</button></div></div>'
+    +'<p class="hint">每个机器人独立配置，互不影响。添加后可分别设置提示词、AI 模型和欢迎语。</p>'
+    +'</div>'
+    +'<div class="modal-foot">'
+    +'<span class="grow"></span>'
+    +'<button class="btn" type="button" id="bot-m-cancel">取消</button>'
+    +'<button class="btn primary" type="button" id="bot-m-save">'+IX.check+'<span>添加</span></button>'
+    +'</div></div></div>';
+}
+
+function bindBotModal(){
+  if($('bot-modal-mask'))return;
+  var wrap=$('wrap');
+  if(!wrap)return;
+  wrap.insertAdjacentHTML('afterbegin',botModalHtml());
+  $('bot-modal-x').addEventListener('click',closeBotModal);
+  $('bot-m-cancel').addEventListener('click',closeBotModal);
+  $('bot-modal-mask').addEventListener('click',function(e){if(e.target===this)closeBotModal();});
+  $('bot-m-save').addEventListener('click',function(){saveBotModal(this);});
+  $('bot-m-secret-toggle').addEventListener('click',function(){
+    var i=$('bot-m-secret');
+    var show=i.type==='password';
+    i.type=show?'text':'password';
+    this.textContent=show?'隐藏':'显示';
   });
 }
 
@@ -1311,7 +1545,7 @@ function restoreOthers(draft){
 function afterSave(d,draft){
   var hot=!(d&&d.botReloaded===false);
   toast(hot?'已保存，热更新生效':'已保存（机器人未运行，启动后生效）','ok');
-  return api('GET','/api/config').then(function(c){
+  return api('GET','/api/config'+botQuery()).then(function(c){
     if(!c)return;
     renderConfig(c);
     if(draft)restoreOthers(draft);
@@ -1321,7 +1555,7 @@ function afterSave(d,draft){
 
 function postConfig(patch,btn,draft){
   busy(btn,true);
-  api('POST','/api/config',patch).then(function(d){
+  api('POST','/api/config'+botQuery(),patch).then(function(d){
     return afterSave(d,draft);
   }).catch(function(e){
     toast(e.message,'bad');
@@ -1332,7 +1566,6 @@ function postConfig(patch,btn,draft){
 function saveSection(secId,btn){
   var patch=collectConfig(secId);
   if(!Object.keys(patch).length){toast('这一块没有可保存的项','bad');return;}
-  // 必填校验：required 字段留空直接拒绝保存
   var missing=missingRequired(secId);
   if(missing){
     toast('「'+missing+'」是必填项，不能为空','bad');
@@ -1343,7 +1576,6 @@ function saveSection(secId,btn){
   postConfig(patch,btn,snapshotOthers(Object.keys(patch)));
 }
 
-// 返回该区块第一个未填写的 required 字段 key，没有则返回空串
 function missingRequired(secId){
   for(var s=0;s<FIELDS.length;s++){
     var sec=FIELDS[s];
@@ -1353,7 +1585,6 @@ function missingRequired(secId){
     for(var i=0;i<items.length;i++){
       var f=items[i];
       if(!f.required)continue;
-      // 敏感字段（secret）有值时后端不回传明文，输入框为空也算「已填」
       var el=$('cf_'+f.key);
       if(!el)continue;
       var saved=!!(f.secret&&String(el.getAttribute('placeholder')||'').indexOf('已设置')===0);
@@ -1440,7 +1671,7 @@ function loadConversations(){
   var list=$('conv-list');
   if(!list)return Promise.resolve();
   list.innerHTML=convSkeleton(6);
-  return api('GET','/api/conversations').then(function(d){
+  return api('GET','/api/conversations'+botQuery()).then(function(d){
     var items=(d&&d.items)||[];
     var sys=(d&&d.system)||{count:0};
     var total=Number(sys.count)||0;
@@ -1513,9 +1744,10 @@ function loadThread(scope,before){
   var body=$('thread-body');
   var first=!before;
   if(first&&body)body.innerHTML='<div class="thread-empty">加载中…</div>';
+  var bq=botQuery();
   var q=scope==='system'
-    ? ('/api/system-messages'+(before?('?before='+before):''))
-    : ('/api/conversations/messages?scope='+encodeURIComponent(scope)+(before?('&before='+before):''));
+    ? ('/api/system-messages'+bq+(before?((bq?'&':'?')+'before='+before):''))
+    : ('/api/conversations/messages'+bq+'?scope='+encodeURIComponent(scope)+(before?('&before='+before):''));
   return api('GET',q).then(function(d){
     var items=(d&&d.items)||[];
     chatState.hasMore=!!(d&&d.hasMore);
@@ -1594,7 +1826,7 @@ function deleteConversation(scope){
     danger:true
   }).then(function(yes){
     if(!yes)return;
-    api('POST','/api/conversations/delete',{scope:scope}).then(function(d){
+    api('POST','/api/conversations/delete'+botQuery(),{scope:scope}).then(function(d){
       toast('已删除 '+((d&&d.deleted)||0)+' 条记录','ok');
       if(chatState.scope===scope){
         chatState.items=[];
@@ -1910,7 +2142,7 @@ function collectProviders(){
 function saveProviders(btn){
   if(!aiState.length){toast('至少保留一个 AI','bad');return;}
   busy(btn,true);
-  api('POST','/api/ai',{providers:collectProviders()})
+  api('POST','/api/ai'+botQuery(),{providers:collectProviders()})
     .then(function(d){
       var n=d&&d.saved?d.saved.length:aiState.length;
       for(var i=0;i<aiState.length;i++){
@@ -1932,8 +2164,8 @@ function showAi(){
   setPill('AI 模型','');
   $('wrap').innerHTML=skeletonAi();
   Promise.all([
-    api('GET','/api/ai'),
-    api('GET','/api/config').catch(function(){ return null; })
+    api('GET','/api/ai'+botQuery()),
+    api('GET','/api/config'+botQuery()).catch(function(){ return null; })
   ]).then(function(r){
     var d=r[0], cfgResp=r[1];
     if(!d)return;
@@ -1971,7 +2203,6 @@ function showAi(){
 var imageGenState={model:'',baseUrl:'',apiKey:'',hasKey:false,testedModel:'',testedUrl:'',tested:false,result:''};
 var igenEscBound=false;
 
-// 内置 CF 能力开关 + 外部语音配置
 var cfState={chat:'1',imageGen:'1',voice:'1'};
 var voiceState={baseUrl:'',apiKey:'',model:'',speaker:'',hasKey:false,tested:false};
 var voiceEscBound=false;
@@ -1980,11 +2211,10 @@ function renderAiPage(){
   var h='<div class="card"><div class="card-head"><h3>AI 模型</h3>'
     +'<span class="hint">内置 Cloudflare 能力开箱即用，外部模型按需添加</span></div>';
 
-  // 内置 CF 能力：固定三项 + 开关
   h+='<div class="ai-sec">'
     +'<div class="ai-sec-head"><b>内置 Cloudflare 能力</b>'
     +'<span class="hint">默认开启，免费额度，无需任何 Key</span></div>'
-    +cfRowHtml('chat','💬','对话','@cf/qwen/qwen3-30b-a3b-fp8','AI 回复用这个内置模型，失败会自动切到下面外部模型')
+    +cfRowHtml('chat','💬','对话','@cf/qwen/qwen3.8-27b','AI 回复用这个内置模型（支持识图），失败会自动切到下面外部模型')
     +cfRowHtml('imageGen','🎨','生图','@cf/black-forest-labs/flux-1-schnell','/画 用它生成图片（配了外部生图模型则优先外部）')
     +cfRowHtml('voice','🔊','语音','@cf/myshell-ai/melotts','/语音 用它合成语音（配了外部语音则优先外部）')
     +'<div class="fs-foot"><span class="fs-foot-note">开关即时保存，热更新生效</span>'
@@ -2009,7 +2239,6 @@ function renderAiPage(){
     +'<button class="btn primary" id="b-igen-save" type="button" disabled>'+IX.check+'<span>保存</span></button></div>'
     +'</div>';
 
-  // 外部语音（OpenAI 兼容 /audio/speech），可选
   h+='<div class="ai-sec">'
     +'<div class="ai-sec-head"><b>语音合成</b>'
     +'<span class="hint">默认用内置 CF 语音；填了外部服务则优先外部（OpenAI 兼容 /audio/speech）</span>'
@@ -2108,6 +2337,7 @@ function showWorkspace(){
     +'<div id="ws-list">'+skListSkeleton(4)+'</div>'
     +'<div class="card-head mt-lg"><h3>定时任务</h3><span class="hint" id="rem-count"></span></div>'
     +'<p class="tip">群里说「明天 8 点提醒我开会」「10 分钟后提醒我喝水」就会出现在这里；到点主动发消息，重复任务自动顺延。'
+    +'群里的提醒会优先在群内 @ 你；如果群没开主动推送或发送失败，会自动改成私聊发给你，并记进私聊对话上下文。'
     +'QQ 对主动消息有频率和配额限制，发送失败的任务会标红。</p>'
     +'<div class="rem-toolbar"><button class="btn sm" type="button" id="rem-refresh">'+IX.refresh+'<span>刷新</span></button>'
     +'<label class="rem-selall"><input type="checkbox" id="rem-sel-all" name="rem-sel-all"><span>全选</span></label>'
@@ -2124,7 +2354,7 @@ function showWorkspace(){
 function loadMenuEditor(){
   var box=$('menu-editor');
   if(!box)return;
-  api('GET','/api/menu').then(function(d){
+  api('GET','/api/menu'+botQuery()).then(function(d){
     var menu=(d&&d.menu)||null;
     renderMenuEditor(menu, d&&d.version);
   }).catch(function(e){
@@ -2137,7 +2367,6 @@ var menuState={items:[],version:0};
 function renderMenuEditor(menu,version){
   var box=$('menu-editor');
   if(!box)return;
-  // 只在「从服务端拉回来的场景」整体替换；内部重绘时传的是当前 items，不能覆盖掉正在编辑的内容
   if(menu&&Array.isArray(menu.items))menuState.items=menu.items;
   if(version)menuState.version=version;
   var h='';
@@ -2156,7 +2385,6 @@ function renderMenuEditor(menu,version){
     +'<button class="btn primary" type="button" id="b-menu-save">'+IX.check+'<span>保存</span></button></div>';
   box.innerHTML=h;
 
-  // 每次重绘都要重新绑定：innerHTML 会把旧节点连同监听一起丢掉
   $('b-menu-add').addEventListener('click',function(){
     if(menuState.items.length>=10){toast('最多 10 个菜单项','bad');return;}
     syncMenuFromDom();
@@ -2164,11 +2392,8 @@ function renderMenuEditor(menu,version){
     renderMenuEditor(null,0);
   });
   $('b-menu-save').addEventListener('click',saveMenu);
-  // 用直接绑定而不是事件委托：下拉框改的是 value，
-  // 委托到 click 上永远收不到，这就是「类型一直选不了」的原因
   var rows=box.querySelectorAll('[data-mi]');
   for(var r=0;r<rows.length;r++)bindMenuRow(rows[r]);
-  // 类型下拉是自绘组件，也要绑一遍（含每一行的 custom select）
   bindSel(box);
 }
 
@@ -2195,7 +2420,6 @@ function bindMenuRow(row){
     typeEl.addEventListener('change',function(){
       var it=menuState.items[idx];
       if(!it)return;
-      // 换类型时先把当前输入存下来，再切，别把用户写的内容丢了
       if(nameEl)it.name=nameEl.value.trim();
       var keep=valEl?valEl.value.trim():'';
       var prevType=it.type;
@@ -2207,7 +2431,6 @@ function bindMenuRow(row){
         it.send_message=prevType==='link'?keep:'';
         it.link='';
       }
-      // 只重绘这一行，避免整块重绘导致焦点丢失
       var fresh=document.createElement('div');
       fresh.innerHTML=menuItemHtml(it,idx);
       var newRow=fresh.firstChild;
@@ -2229,9 +2452,7 @@ function bindMenuRow(row){
 
 function menuItemHtml(it,i){
   var type=it.type||'send_message';
-  // 每个字段都要有唯一 id 并让 label 用 for 指过去，否则无障碍检查会报
   // 「form field should have id or name」「No label associated with a form field」，
-  // 读屏软件也无法把标签念给用户听。
   var idName='menu-'+i+'-name';
   var idType='menu-'+i+'-type';
   var idValue='menu-'+i+'-value';
@@ -2296,7 +2517,7 @@ function saveMenu(){
   busy(btn,true);
   var payload={};
   payload.menu={items:items};
-  api('POST','/api/menu',payload).then(function(){
+  api('POST','/api/menu'+botQuery(),payload).then(function(){
     toast('菜单已保存','ok');
     loadMenuEditor();
   }).catch(function(e){
@@ -2309,9 +2530,9 @@ function loadWorkspaces(){
   var box=$('ws-list');
   if(box)box.innerHTML=skListSkeleton(4);
   Promise.all([
-    api('GET','/api/sandboxes').then(function(d){return (d&&d.items)||[];}).catch(function(){return [];}),
-    api('GET','/api/workspaces').then(function(d){return (d&&d.items)||[];}).catch(function(){return [];}),
-    api('GET','/api/groups').then(function(d){return (d&&d.items)||[];}).catch(function(){return [];})
+    api('GET','/api/sandboxes'+botQuery()).then(function(d){return (d&&d.items)||[];}).catch(function(){return [];}),
+    api('GET','/api/workspaces'+botQuery()).then(function(d){return (d&&d.items)||[];}).catch(function(){return [];}),
+    api('GET','/api/groups'+botQuery()).then(function(d){return (d&&d.items)||[];}).catch(function(){return [];})
   ]).then(function(r){ renderWorkspaces(r[0],r[1],r[2]); })
     .catch(function(e){ if(box)box.innerHTML='<p class="error-text">'+esc(e.message)+'</p>'; });
 }
@@ -2493,7 +2714,7 @@ function onWorkspaceToggle(e){
   var openid=gcard.getAttribute('data-openid')||'';
   var enabled=!!input.checked;
   input.disabled=true;
-  api('POST','/api/groups/reply',{openid:openid,enabled:enabled?1:0}).then(function(){
+  api('POST','/api/groups/reply'+botQuery(),{openid:openid,enabled:enabled?1:0}).then(function(){
     toast(enabled?'已开启该群的回复':'已关闭该群的回复','ok');
   }).catch(function(err){
     input.checked=!enabled;
@@ -2682,7 +2903,6 @@ function saveIgenModal(){
   var url=$('igen-url').value.trim();
   var key=$('igen-key').value.trim();
   var model=$('igen-model').value.trim();
-  // 允许清空：三项全空 = 回到内置 CF 生图
   if(url||model){
     if(!url){toast('请填写 Base URL','bad');return;}
     if(!model){toast('请填写模型名','bad');return;}
@@ -2784,7 +3004,7 @@ function bindCfSwitches(){
 
 function saveCfSwitches(btn){
   busy(btn,true);
-  api('POST','/api/config',{cfChatEnabled:cfState.chat,cfImageGenEnabled:cfState.imageGen,cfVoiceEnabled:cfState.voice})
+  api('POST','/api/config'+botQuery(),{cfChatEnabled:cfState.chat,cfImageGenEnabled:cfState.imageGen,cfVoiceEnabled:cfState.voice})
     .then(function(){
       toast('内置能力开关已保存，立即生效','ok');
     })
@@ -2918,7 +3138,7 @@ function saveVoice(btn){
     return;
   }
   busy(btn,true);
-  api('POST','/api/config',{voiceBaseUrl:url,voiceApiKey:voiceState.apiKey||'',
+  api('POST','/api/config'+botQuery(),{voiceBaseUrl:url,voiceApiKey:voiceState.apiKey||'',
     voiceModel:model,voiceSpeaker:speaker})
     .then(function(){
       if(voiceState.apiKey)voiceState.hasKey=true;
@@ -3009,7 +3229,6 @@ function testImageGen(btn){
 }
 
 function saveImageGen(btn){
-  // 清空（model/baseUrl 都空）时允许保存，回到内置 CF 生图
   if(imageGenState.model||imageGenState.baseUrl){
     if(!imageGenState.tested||imageGenState.model!==imageGenState.testedModel
       ||imageGenState.baseUrl!==imageGenState.testedUrl){
@@ -3018,7 +3237,7 @@ function saveImageGen(btn){
     }
   }
   busy(btn,true);
-  api('POST','/api/config',{imageGenBaseUrl:imageGenState.baseUrl,
+  api('POST','/api/config'+botQuery(),{imageGenBaseUrl:imageGenState.baseUrl,
     imageGenApiKey:imageGenState.apiKey||'',imageGenModel:imageGenState.model})
     .then(function(){
       if(imageGenState.apiKey)imageGenState.hasKey=true;
@@ -3349,7 +3568,6 @@ function bindGrpExtras(){
       .catch(function(err){toast(qqErrHint(err.message),'bad');});
   });
 
-  // 折叠头：点标题或回车切换内邀功能区的展开/收起
   var foldHead=document.querySelector('[data-gfold="blacklist"]');
   if(foldHead){
     foldHead.addEventListener('click',function(){
@@ -3567,7 +3785,7 @@ function openGrpModal(openid,autoMembers){
 var remState={items:[]};
 
 function loadReminders(){
-  api('GET','/api/reminders').then(function(d){
+  api('GET','/api/reminders'+botQuery()).then(function(d){
     remState.items=(d&&d.items)||[];
     renderReminders();
   }).catch(function(e){
@@ -3640,7 +3858,7 @@ function renderReminders(){
         cancel:'再想想'
       }).then(function(yes){
         if(!yes)return;
-        api('POST','/api/reminders/cancel',{id:id}).then(function(){
+        api('POST','/api/reminders/cancel'+botQuery(),{id:id}).then(function(){
           toast('已取消','ok');
           loadReminders();
         }).catch(function(err){toast(err.message,'bad');});
@@ -3658,7 +3876,7 @@ function renderReminders(){
         danger:true
       }).then(function(yes){
         if(!yes)return;
-        api('POST','/api/reminders/delete',{id:did}).then(function(){
+        api('POST','/api/reminders/delete'+botQuery(),{id:did}).then(function(){
           toast('已删除','ok');
           loadReminders();
         }).catch(function(err){toast(err.message,'bad');});
@@ -3724,7 +3942,7 @@ function deleteSelectedReminders(){
     danger:true
   }).then(function(yes){
     if(!yes)return;
-    api('POST','/api/reminders/delete',{ids:ids}).then(function(d){
+    api('POST','/api/reminders/delete'+botQuery(),{ids:ids}).then(function(d){
       toast('已删除 '+(d&&d.deleted||ids.length)+' 条','ok');
       loadReminders();
     }).catch(function(err){ toast(err.message,'bad'); });
@@ -3733,7 +3951,8 @@ function deleteSelectedReminders(){
 
 function route(){
   var p = String(location.pathname || '/').split('/').filter(function(x){ return x; });
-  var tab = p.length ? p[0] : 'status';
+  // Console URLs are /<appId>/<page>; page may also come from the boot payload.
+  var tab = p.length >= 2 ? p[1] : (BOT_BOOT.page || 'status');
   if(tab==='config')showConfig();
   else if(tab==='ai')showAi();
   else if(tab==='imagegen')showAi();
@@ -3777,6 +3996,14 @@ for (var ni = 0; ni < navLinks.length; ni++) {
     var href = this.getAttribute('href') || '';
     if (href.charAt(0) !== '/' || href === '/') return;
     if (href === location.pathname) return;
+    // /pick is a real page (not a console tab) — always do a full navigation.
+    if (href === '/pick') return;
+    // CUR_BOT comes from the boot payload, so jumping to another bot's console
+    // must be a real navigation — a pushState swap would keep the old bot id.
+    var targetBot = href.split('/').filter(Boolean)[0] || '';
+    if (targetBot && targetBot !== (CUR_APPID_PATH || CUR_BOT)) {
+      return; // let the browser navigate
+    }
     ev.preventDefault();
     history.pushState(null, '', href);
     route();

@@ -745,7 +745,7 @@ form.onsubmit=function(ev){
       return r.json().then(function(d){return {status:r.status,body:d,retry:retry};}).catch(function(){return {status:r.status,body:null,retry:retry};});
     })
     .then(function(res){
-      if(res.status===200&&res.body&&res.body.ok){show('登录成功，正在进入...',true);btn.textContent='进入中...';location.replace('/status');return;}
+      if(res.status===200&&res.body&&res.body.ok){show('登录成功，正在进入...',true);btn.textContent='进入中...';location.replace('/pick');return;}
       var text=(res.body&&res.body.error&&res.body.error.message)||'登录失败';
       if(res.status===429){
         locked=true;
@@ -763,10 +763,185 @@ form.onsubmit=function(ev){
 </script></body></html>`;
 }
 
-export function adminPage(nonce) {
-  const shell = shellA(nonce);
+export function adminPage(nonce, opts = {}) {
+  const boot = {
+    botId: String(opts.botId || 'default'),
+    appId: String(opts.appId || ''),
+    page: String(opts.page || 'status'),
+  };
+  // Nav links must match the URL the user is on, so build the shell with it.
+  const shell = shellA(nonce, boot.appId || boot.botId);
+  // The console is scoped to one bot. Inject its identity before the app script
+  // so the client never has to guess (or persist) which bot it is editing.
+  const bootScript =
+    '<script nonce="' + nonce + '">window.__DSH_BOT__=' +
+    JSON.stringify(boot).replace(/</g, '\\u003c') +
+    ';</script>';
   return shell.replace(
     '</body></html>',
-    '<script nonce="' + nonce + '">' + ADMIN_JS + '</script></body></html>'
+    bootScript + '<script nonce="' + nonce + '">' + ADMIN_JS + '</script></body></html>'
   );
+}
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// Landing page after login: pick which bot's console to open.
+export function botPickPage(nonce, bots) {
+  const list = Array.isArray(bots) ? bots : [];
+  const full = list.length >= 5;
+  const cards = list
+    .map((b) => {
+      const href = '/' + encodeURIComponent(b.appId || b.id) + '/status';
+      const off = b.enabled ? '' : '<span class="bp-off">已停用</span>';
+      const canDel = b.id !== 'default';
+      return (
+        '<div class="bp-row">' +
+        '<a class="bp-card" href="' + escapeHtml(href) + '">' +
+        '<span class="bp-ico">' + ROBOT_ICON + '</span>' +
+        '<span class="bp-main"><b>' + escapeHtml(b.name || '未命名') + off + '</b>' +
+        '<small>' + (b.appId ? 'AppID ' + escapeHtml(b.appId) : '还没有填 AppID') + '</small></span>' +
+        '<span class="bp-go">&rsaquo;</span></a>' +
+        (canDel
+          ? '<button class="bp-del" type="button" data-del="' + escapeHtml(b.id) +
+            '" data-name="' + escapeHtml(b.name || '未命名') + '" title="删除这个机器人">删除</button>'
+          : '') +
+        '</div>'
+      );
+    })
+    .join('');
+
+  return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${FAVICON_LINKS}<title>选择机器人 · QQ Bot</title><meta name="robots" content="noindex"><style nonce="${nonce}">
+${LOGIN_CSS}
+body{display:block}
+.bp-wrap{max-width:620px;margin:0 auto;padding:44px 20px 60px}
+.bp-head{text-align:center;margin-bottom:26px}
+.bp-head h1{font-size:20px;margin:14px 0 6px}
+.bp-head p{font-size:13px;color:#6b7280}
+.bp-logo{margin:0 auto}
+.bp-list{display:flex;flex-direction:column;gap:10px}
+.bp-row{display:flex;align-items:stretch;gap:8px}
+.bp-card{flex:1 1 auto;display:flex;align-items:center;gap:14px;padding:15px 17px;border-radius:14px;
+  background:#fff;border:1px solid #e5e7eb;text-decoration:none;color:inherit;min-width:0;
+  transition:border-color .15s,box-shadow .15s,transform .15s}
+.bp-card:hover{border-color:#2563eb;box-shadow:0 4px 16px rgba(37,99,235,.12);transform:translateY(-1px)}
+.bp-ico{width:38px;height:38px;flex:0 0 auto;border-radius:11px;display:flex;align-items:center;justify-content:center;
+  background:#eff6ff;color:#2563eb}
+.bp-ico svg{width:19px;height:19px}
+.bp-main{flex:1 1 auto;min-width:0}
+.bp-main b{display:block;font-size:15px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bp-main small{display:block;font-size:12px;color:#6b7280;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bp-off{display:inline-block;margin-left:8px;font-size:11px;font-weight:600;color:#b45309;
+  background:#fef3c7;border-radius:999px;padding:1px 8px;vertical-align:middle}
+.bp-go{flex:0 0 auto;font-size:22px;color:#9ca3af;line-height:1}
+.bp-del{flex:0 0 auto;padding:0 14px;border-radius:14px;border:1px solid #fecaca;background:#fff;
+  color:#dc2626;font-size:13px;font-weight:600;cursor:pointer;transition:background .15s}
+.bp-del:hover{background:#fef2f2}
+.bp-empty{text-align:center;padding:32px;color:#6b7280;font-size:13px}
+.bp-add{margin-top:16px;width:100%;padding:14px;border-radius:14px;border:1px dashed #cbd5e1;
+  background:#fff;color:#2563eb;font-size:14px;font-weight:700;cursor:pointer;transition:border-color .15s,background .15s}
+.bp-add:hover{border-color:#2563eb;background:#f8fbff}
+.bp-add[disabled]{opacity:.5;cursor:not-allowed}
+.bp-tip{margin-top:10px;text-align:center;font-size:12px;color:#9ca3af}
+.bp-mask{position:fixed;inset:0;background:rgba(17,24,39,.45);display:flex;align-items:center;justify-content:center;
+  padding:20px;z-index:50}
+.bp-mask[hidden]{display:none}
+.bp-modal{background:#fff;border-radius:16px;width:100%;max-width:400px;padding:22px;box-shadow:0 20px 50px rgba(0,0,0,.2)}
+.bp-modal h3{font-size:16px;margin:0 0 16px}
+.bp-modal label{display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:5px}
+.bp-modal input{width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:9px;font-size:14px;
+  margin-bottom:13px;box-sizing:border-box}
+.bp-modal input:focus{outline:none;border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.12)}
+.bp-modal-foot{display:flex;gap:8px;justify-content:flex-end;margin-top:4px}
+.bp-modal-foot button{padding:9px 18px;border-radius:9px;font-size:13px;font-weight:600;cursor:pointer;border:1px solid #d1d5db;background:#fff}
+.bp-modal-foot .ok{background:#2563eb;border-color:#2563eb;color:#fff}
+.bp-err{color:#dc2626;font-size:12px;margin:0 0 10px;min-height:16px}
+</style></head><body>
+<div class="bp-wrap">
+  <div class="bp-head">
+    <div class="logo bp-logo">${ROBOT_ICON}</div>
+    <h1>选择一个机器人</h1>
+    <p>每个机器人有独立的配置、会话与工作区</p>
+  </div>
+  <div class="bp-list">${cards || '<div class="bp-empty">还没有添加机器人</div>'}</div>
+  <button class="bp-add" type="button" id="bp-add"${full ? ' disabled' : ''}>${full ? '已达上限 5 个' : '＋ 添加机器人'}</button>
+  <p class="bp-tip">QQ 个人开发者最多可创建 5 个机器人</p>
+</div>
+
+<div class="bp-mask" id="bp-mask" hidden>
+  <div class="bp-modal">
+    <h3>添加机器人</h3>
+    <p class="bp-err" id="bp-err"></p>
+    <label for="bp-name">名称</label>
+    <input id="bp-name" maxlength="40" placeholder="例如：客服机器人" autocomplete="off">
+    <label for="bp-appid">QQ AppID</label>
+    <input id="bp-appid" maxlength="32" inputmode="numeric" placeholder="开放平台里的 AppID" autocomplete="off">
+    <label for="bp-secret">QQ Secret</label>
+    <input id="bp-secret" type="password" placeholder="机器人密钥" autocomplete="new-password">
+    <div class="bp-modal-foot">
+      <button type="button" id="bp-cancel">取消</button>
+      <button type="button" class="ok" id="bp-save">添加</button>
+    </div>
+  </div>
+</div>
+
+<script nonce="${nonce}">
+(function(){
+  var mask=document.getElementById('bp-mask');
+  var err=document.getElementById('bp-err');
+  function api(method,path,body){
+    return fetch(path,{method:method,headers:{'Content-Type':'application/json','Accept':'application/json'},
+      credentials:'same-origin',body:body===undefined?undefined:JSON.stringify(body)})
+      .then(function(r){return r.json().then(function(d){return {ok:r.ok,data:d};}).catch(function(){return {ok:false,data:null};});});
+  }
+  document.getElementById('bp-add').addEventListener('click',function(){
+    if(this.disabled)return;
+    err.textContent='';
+    document.getElementById('bp-name').value='';
+    document.getElementById('bp-appid').value='';
+    document.getElementById('bp-secret').value='';
+    mask.hidden=false;
+  });
+  document.getElementById('bp-cancel').addEventListener('click',function(){mask.hidden=true;});
+  mask.addEventListener('click',function(e){if(e.target===mask)mask.hidden=true;});
+
+  document.getElementById('bp-save').addEventListener('click',function(){
+    var btn=this;
+    var name=document.getElementById('bp-name').value.trim();
+    var appId=document.getElementById('bp-appid').value.trim();
+    var secret=document.getElementById('bp-secret').value.trim();
+    if(!name){err.textContent='请填写名称';return;}
+    if(!appId){err.textContent='请填写 AppID';return;}
+    if(!/^[0-9]{6,32}$/.test(appId)){err.textContent='AppID 应该是 6~32 位数字';return;}
+    btn.disabled=true;
+    api('POST','/api/bots',{name:name,appId:appId,secret:secret}).then(function(r){
+      btn.disabled=false;
+      if(!r.ok){err.textContent=(r.data&&r.data.error&&r.data.error.message)||'添加失败';return;}
+      location.reload();
+    }).catch(function(){btn.disabled=false;err.textContent='网络错误';});
+  });
+
+  var dels=document.querySelectorAll('[data-del]');
+  for(var i=0;i<dels.length;i++){
+    dels[i].addEventListener('click',function(){
+      var id=this.getAttribute('data-del');
+      var nm=this.getAttribute('data-name');
+      if(!confirm('删除「'+nm+'」？\\n\\n会同时删除它的配置和会话记忆，无法恢复。'))return;
+      var btn=this;
+      btn.disabled=true;
+      api('DELETE','/api/bots',{id:id}).then(function(r){
+        if(!r.ok){btn.disabled=false;alert((r.data&&r.data.error&&r.data.error.message)||'删除失败');return;}
+        location.reload();
+      }).catch(function(){btn.disabled=false;alert('网络错误');});
+    });
+  }
+})();
+</script>
+</body></html>`;
 }

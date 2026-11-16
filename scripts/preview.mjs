@@ -1,6 +1,6 @@
 
 import { createServer } from 'node:http';
-import { adminPage, homePage, loginPage, setupPage, recoverGatePage, keyRecoveryPage } from '../src/html.js';
+import { adminPage, homePage, loginPage, setupPage, recoverGatePage, keyRecoveryPage, botPickPage } from '../src/html.js';
 import { randomHex } from '../src/db.js';
 import { COOKIE_NAME, SESSION_TTL_MS } from '../src/constants.js';
 import { safeEqual } from '../src/utils/security.js';
@@ -103,6 +103,8 @@ const DEMO_CONFIG = {
   cfChatEnabled: '1',
   cfImageGenEnabled: '1',
   cfVoiceEnabled: '1',
+  groupReplyMode: 'smart',
+  groupContextLen: '20',
   voiceBaseUrl: '',
   voiceModel: '',
   voiceSpeaker: '',
@@ -197,13 +199,96 @@ const DEMO_LOGS = Array.from({ length: 23 }, (_, i) => {
 });
 
 function demoApi(pathname, search) {
-  if (pathname === '/api/status') return DEMO_STATUS;
+  if (pathname === '/api/bots') {
+    const which = search.get('bot') || 'default';
+    if (process.env.PREVIEW_EMPTY === '1') return { bots: [], max: 5 };
+    return {
+      bots: [
+        { id: 'default', name: '默认机器人', appId: '102xxxxxx', enabled: 1, createdAt: '', updatedAt: '' },
+        { id: 'bot-demo2', name: '客服机器人', appId: '103xxxxxx', enabled: 1, createdAt: '', updatedAt: '' },
+        { id: 'bot-demo3', name: '测试机器人', appId: '104xxxxxx', enabled: 0, createdAt: '', updatedAt: '' },
+      ],
+      max: 5,
+      current: which,
+    };
+  }
+  if (pathname === '/api/status/all') {
+    return {
+      max: 5,
+      bots: [
+        {
+          id: 'default', name: '默认机器人', enabled: true, appId: '102xxxxxx',
+          transport: 'webhook', platformMode: 'webhook', running: true, desiredRunning: true,
+          qqReady: true, aiReady: true, aiCount: 2, aiModel: 'gpt-4o-mini',
+          wsState: null, sessionCount: 3, tokenValid: true, tokenExpiry: Date.now() + 2400000,
+          lastEventAt: Date.now() - 120000, lastStartAt: Date.now() - 3600000,
+          lastError: '', configError: '', version: '3.20.1', error: '',
+        },
+        {
+          id: 'bot-demo2', name: '客服机器人', enabled: true, appId: '103xxxxxx',
+          transport: 'ws', platformMode: 'ws', running: true, desiredRunning: true,
+          qqReady: true, aiReady: true, aiCount: 1, aiModel: 'gpt-4o-mini',
+          wsState: 1, sessionCount: 5, tokenValid: true, tokenExpiry: Date.now() + 1800000,
+          lastEventAt: Date.now() - 8000, lastStartAt: Date.now() - 7200000,
+          lastError: '', configError: '', version: '3.20.1', error: '',
+        },
+        {
+          id: 'bot-demo3', name: '测试机器人', enabled: false, appId: '104xxxxxx',
+          transport: 'ws', platformMode: 'ws', running: false, desiredRunning: false,
+          qqReady: false, aiReady: false, aiCount: 0, aiModel: '',
+          wsState: 3, sessionCount: 0, tokenValid: false, tokenExpiry: 0,
+          lastEventAt: null, lastStartAt: 0,
+          lastError: '', configError: '', version: '', error: '',
+        },
+      ],
+    };
+  }
+  if (pathname === '/api/status') {
+    const which = search.get('bot') || 'default';
+    const names = { default: '102xxxxxx', 'bot-demo2': '103xxxxxx', 'bot-demo3': '104xxxxxx' };
+    const prompts = { default: '默认人设', 'bot-demo2': '客服人设', 'bot-demo3': '测试人设' };
+    return {
+      ...DEMO_STATUS,
+      botId: which,
+      appId: names[which] || '',
+      aiModel: which === 'bot-demo2' ? 'gpt-4o-mini' : DEMO_STATUS.aiModel,
+      systemPromptShort: prompts[which] || '',
+    };
+  }
   if (pathname === '/api/config') {
+    const which = search.get('bot') || 'default';
     const config = { ...DEMO_CONFIG };
     config.secret = '';
+    // 不同机器人给不同数据，方便肉眼确认切换生效
+    if (which === 'bot-demo2') {
+      config.appId = '103xxxxxx';
+      config.systemPrompt = '你是一个专业的客服机器人，回答简洁礼貌，优先解决问题。';
+      config.welcomeMsg = '欢迎咨询，请问有什么可以帮您？';
+    } else if (which === 'bot-demo3') {
+      config.appId = '104xxxxxx';
+      config.systemPrompt = '你是测试用机器人。';
+      config.groupReplyMode = 'at';
+    }
     return { config, configured: { secret: true, imageGenApiKey: false, voiceApiKey: false } };
   }
   if (pathname === '/api/ai') {
+    const which = search.get('bot') || 'default';
+    // AI 模型按机器人隔离：每个机器人返回自己那套，方便肉眼确认切换生效。
+    if (which === 'bot-demo2') {
+      return {
+        providers: [
+          { id: 'ai-demo-cs', name: '客服专用模型', baseUrl: 'https://api.example.com/v1', model: 'gpt-4o-mini', temperature: '0.5', enabled: 1, hasKey: true },
+        ],
+      };
+    }
+    if (which === 'bot-demo3') {
+      return {
+        providers: [
+          { id: 'ai-demo-t', name: '测试用模型', baseUrl: 'https://test.example.com/v1', model: 'qwen-turbo', temperature: '0.9', enabled: 1, hasKey: true },
+          { id: 'ai-demo-t2', name: '备用模型', baseUrl: 'https://backup.example.com/v1', model: 'llama-3', temperature: '0.7', enabled: 0, hasKey: true },
+        ],
+      };
+    }
     return { providers: DEMO_PROVIDERS };
   }
   if (pathname === '/api/logs') {
@@ -687,8 +772,15 @@ createServer((req, res) => {
       req.on('end', () => sendJson(res, 200, { ok: true, data: { cleared: true } }));
       return;
     }
+    if (url.pathname === '/api/status/all') {
+      sendJson(res, 200, { ok: true, data: demoApi(url.pathname, url.searchParams) });
+      return;
+    }
     if (url.pathname === '/api/status') {
-      sendJson(res, 200, { ok: true, data: url.searchParams.get('empty') ? withFakeBotVolume() : DEMO_STATUS });
+      const data = url.searchParams.get('empty')
+        ? withFakeBotVolume()
+        : demoApi(url.pathname, url.searchParams);
+      sendJson(res, 200, { ok: true, data });
       return;
     }
     if (url.pathname === '/api/conversations') {
@@ -707,16 +799,71 @@ createServer((req, res) => {
       sendJson(res, 200, { ok: true, data: { items: [], page: 1, pageSize: 20, total: 0, totalPages: 1, kind: 'all' } });
       return;
     }
+    // Write operations are not simulated: this server only renders demo data.
+    // Answer honestly so callers/tests don't mistake a no-op for success.
+    if (req.method !== 'GET') {
+      sendJson(res, 501, { ok: false, error: { code: 'preview_readonly', message: '预览服务只读，写操作请用 wrangler dev 或真实部署' } });
+      return;
+    }
     sendJson(res, 200, { ok: true, data: demoApi(url.pathname, url.searchParams) });
     return;
   }
 
   if (url.pathname === '/login' && req.method === 'GET' && hasSession(req)) {
-    res.writeHead(302, { Location: '/status' });
+    res.writeHead(302, { Location: '/pick' });
     res.end();
     return;
   }
 
+  // Bot picker, mirroring the real worker.
+  if (url.pathname === '/pick' && req.method === 'GET') {
+    if (!hasSession(req)) {
+      res.writeHead(302, { Location: '/login' });
+      res.end();
+      return;
+    }
+    const nonce = randomHex(16);
+    // PREVIEW_EMPTY=1 时返回空列表，用于查看「一个机器人都没有」的页面。
+    const bots = process.env.PREVIEW_EMPTY === '1' ? [] : [
+      { id: 'default', name: '默认机器人', appId: '102xxxxxx', enabled: true },
+      { id: 'bot-demo2', name: '客服机器人', appId: '103xxxxxx', enabled: true },
+      { id: 'bot-demo3', name: '测试机器人', appId: '104xxxxxx', enabled: false },
+    ];
+    const html = botPickPage(nonce, bots);
+    res.writeHead(200, htmlResponse(html, nonce));
+    res.end(html);
+    return;
+  }
+
+  const segs = url.pathname.split('/').filter(Boolean);
+  // Never let the console route swallow /api/... — "api" must not be read as a
+  // bot key and "config" as a page name.
+  const isApiPath = segs.length > 0 && segs[0] === 'api';
+  // Per-bot console: /<appId>/<page>
+  if (!isApiPath && req.method === 'GET' && segs.length === 2 && ADMIN_PATHS.has(segs[1])) {
+    if (!hasSession(req)) {
+      res.writeHead(302, { Location: '/login' });
+      res.end();
+      return;
+    }
+    const APPID_TO_ID = { '102xxxxxx': 'default', '103xxxxxx': 'bot-demo2', '104xxxxxx': 'bot-demo3' };
+    const key = decodeURIComponent(segs[0]);
+    // Mirror the worker: an unknown key must NOT fall through to some other
+    // bot. Accept "default" or a known AppID, otherwise send them to /pick.
+    const botId = APPID_TO_ID[key] || (key === 'default' ? 'default' : '');
+    if (!botId) {
+      res.writeHead(302, { Location: '/pick' });
+      res.end();
+      return;
+    }
+    const nonce = randomHex(16);
+    const html = adminPage(nonce, { botId, appId: key, page: segs[1] });
+    res.writeHead(200, htmlResponse(html, nonce));
+    res.end(html);
+    return;
+  }
+
+  // Legacy flat paths go to the picker.
   const seg = url.pathname.slice(1);
   if (req.method === 'GET' && ADMIN_PATHS.has(seg) && !url.pathname.includes('/', 1)) {
     if (!hasSession(req)) {
@@ -724,10 +871,8 @@ createServer((req, res) => {
       res.end();
       return;
     }
-    const nonce = randomHex(16);
-    const html = adminPage(nonce);
-    res.writeHead(200, htmlResponse(html, nonce));
-    res.end(html);
+    res.writeHead(302, { Location: '/pick' });
+    res.end();
     return;
   }
 

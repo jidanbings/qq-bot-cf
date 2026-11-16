@@ -9,6 +9,7 @@ import {
   nextReminderDue,
   rescheduleReminder,
   upsertGroup,
+  DEFAULT_BOT_ID,
 } from './db.js';
 import { parseReminder, nextDueFrom } from './utils/reminder.js';
 import { normalizeFaceTags } from './utils/qq-face.js';
@@ -45,8 +46,109 @@ const IMAGE_CAPTIONS = ['画好啦，看看喜不喜欢～', '喏，画好了 �
 const IMAGE_WAIT_LINES = ['好，我画一下，大概要一分多钟，等我～', '收到，开始画了，稍等一下下～', '在画了在画了，这个模型有点慢，等我一会儿～'];
 const MEME_CAPTIONS = ['（递上梗图）', '看图你就懂了', '这张太应景了', '来，接梗～'];
 
+// Privileged group-management tools. Both the bot AND the requester need rights.
+// Note: official POST /restrict_chat_setting only mutates member-level mutes;
+// global (all-members) mute is read-only via global_rule, so it is not exposed.
+const MANAGE_TOOLS = new Set(['mute_member', 'unmute_member', 'kick_member', 'join_approve']);
+// Tools that change the group irreversibly and therefore need a second "yes".
+const DANGER_TOOLS = new Set(['kick_member']);
+// Confirmation window for a pending dangerous action.
+const PENDING_TTL_MS = 3 * 60 * 1000;
+
 function stripMentions(text) {
   return String(text ?? '').replace(MENTION_RE, '').trim();
+}
+
+// Passive reply reference.
+// QQ allows two ways to reply without consuming the "proactive push" quota:
+//   - msg_id  : replying to a user message (valid 5min in groups, 60min in C2C)
+//   - event_id: replying to a platform event (GROUP_MEMBER_ADD etc.)
+// Anything sent WITHOUT one of these is a proactive message, which the user /
+// group owner can switch off — and doing so silently disables full-message
+// reception for the bot. So always attach whichever reference we have.
+function buildPassiveRef({ msgId, eventId, nextSeq } = {}) {
+  const id = String(msgId || '').trim();
+  if (id) return { msg_id: id, msg_seq: typeof nextSeq === 'function' ? nextSeq() : 1 };
+  const ev = String(eventId || '').trim();
+  if (ev) return { event_id: ev };
+  return {};
+}
+
+// Did this group message mention the bot?
+// Three things can tell us, in order of reliability:
+//   1. data.mentions[] with is_you=true — the platform states it outright.
+//      This works even when we do NOT know our own openid (webhook mode never
+//      receives a gateway READY, so self openid can be unknown for a long time).
+//   2. content tag "<@our_openid>" — what QQ actually puts in GROUP_MESSAGE_CREATE.
+//   3. content tag "<qqbot-at-user id=\"our_openid\" />" — the outgoing format;
+//      tolerated in case a payload echoes it back.
+// "@all" is deliberately NOT treated as a mention: a group-wide ping should not
+// make every bot in the group answer.
+function contentMentionsBot(rawContent, selfOpenid, mentions) {
+  const s = String(rawContent || '');
+
+  if (Array.isArray(mentions)) {
+    const self = String(selfOpenid || '').trim();
+    for (const m of mentions) {
+      if (!m || typeof m !== 'object') continue;
+      if (m.is_you === true || m.isYou === true) return true;
+      const id = String(m.member_openid || m.user_openid || m.id || '').trim();
+      if (self && id && id === self) return true;
+    }
+  }
+
+  const self = String(selfOpenid || '').trim();
+  // Without knowing our own openid we cannot tell "@me" from "@somebody else",
+  // so report "not mentioned" rather than guessing.
+  if (!self) return false;
+  for (const id of [self, self.replace(/[<>\s]/g, '')]) {
+    if (!id) continue;
+    if (s.includes(`<@${id}>`)) return true;
+    if (s.includes(`<@!${id}>`)) return true;
+    if (s.includes(`<@&${id}>`)) return true;
+    if (s.includes(`<qqbot-at-user id="${id}"`)) return true;
+    if (s.includes(`<qqbot-at-user id='${id}'`)) return true;
+  }
+  return false;
+}
+
+//
+const ASK_TAIL_RE = /(什么|啥|怎么|怎么样|如何|为什么|为啥|哪|哪儿|哪里|谁|多少|几点|能不能|可不可以|是不是|有没有|对不对|行不行|好不好|咋办|咋整|吗|么)[啊呀吧了呢哦嘛\s,.，。!！~～]{0,3}$/;
+const ASK_TAIL_LOOSE_RE = /(多少|几点|怎么样|怎么弄|怎么用|为什么|为啥)[\u4e00-\u9fa5]{0,3}[啊呀吧了呢哦嘛\s,.，。!！~～?？]*$/;
+const ASK_HEAD_RE = /^(请问|问下|问一下|请教|为什么|为啥|如何|怎么|什么是|什么是|谁|哪儿|哪里)/;
+const ASK_HEAD_DENY_RE = /^(什么都|什么都|啥都|哪儿都|哪里都|谁都|怎么都)/;
+const QUESTION_MARK_RE = /[?？]/;
+
+const SUMMON_RE = /(机器人|bot|小助手|助手|管理器)/i;
+const TASK_RE = /(帮我|帮忙|给我|请帮|麻烦帮|画一|画个|画张|生成一|生成个|写一|写个|翻译一下|翻译成|总结一下|总结下|查一下|查查|搜索一下|计算一下|提醒我)/;
+
+function shouldReplyToGroup(text, opts = {}) {
+  const s = String(text || '').trim();
+  if (!s) return false;
+  if (/^\/[^\s]/.test(s)) return true;
+  if (SUMMON_RE.test(s)) return true;
+  if (/^(哈+|嗯+|哦+|噢+|好+|收到|了解|明白|可以|行|对|是|在吗|在不在|在|666+|顶|支持|赞|谢谢|感谢|早安|晚安|拜拜|再见|告辞|\+1|同问)[!！。.~～]*$/.test(s)) {
+    return false;
+  }
+  if (TASK_RE.test(s)) return true;
+  if (QUESTION_MARK_RE.test(s)) return true;
+  if (ASK_HEAD_RE.test(s) && !ASK_HEAD_DENY_RE.test(s)) return true;
+  if (ASK_TAIL_RE.test(s)) return true;
+  if (ASK_TAIL_LOOSE_RE.test(s)) return true;
+  if (s.length <= 3) return false;
+  return !!opts.replyToBot;
+}
+
+const GROUP_CTX_PREFIX = 'gctx:';
+const MEMBER_NAME_PREFIX = 'gnick:';
+const GROUP_CTX_MAX_HARD = 50;
+
+function groupCtxKey(scopeId) {
+  return `${GROUP_CTX_PREFIX}${scopeId}`;
+}
+
+function memberNameKey(scopeId) {
+  return `${MEMBER_NAME_PREFIX}${scopeId}`;
 }
 
 function stripToolRecords(text) {
@@ -83,10 +185,6 @@ function fromBase64(b64) {
   return bytes;
 }
 
-/**
- * 算摘要的十六进制串。素材管理的 prepare 接口要求 md5(32位) + sha1(40位)：
- * 平台拿 md5 跟 COS 返回的 ETag 比对，用来确认「传上去的确实是这份文件」。
- */
 async function hexDigest(algo, bytes) {
   const buf = await crypto.subtle.digest(algo, bytes);
   const arr = new Uint8Array(buf);
@@ -226,8 +324,10 @@ export class QQBotDO {
 
     try {
       const { saveConfig } = await import('./db.js');
-      await saveConfig(this.env, { platformMode: 'webhook', webhookVerifiedAt: String(now) });
-      this.logger.info(`平台已切到 Webhook（${reason}），已同步`);
+      // Scoped to this bot, otherwise a secondary bot would rewrite the
+      // DEFAULT bot's transport setting.
+      await saveConfig(this.env, { platformMode: 'webhook', webhookVerifiedAt: String(now) }, this.botId());
+      this.logger.info(`已切到 Webhook（${reason}），已同步`);
     } catch (e) {
       this.logger.warn(`markPlatformWebhook 落盘失败（本次仍已切换）: ${e.message}`);
     }
@@ -252,8 +352,10 @@ export class QQBotDO {
 
     try {
       const { saveConfig } = await import('./db.js');
-      await saveConfig(this.env, { platformMode: 'ws', webhookVerifiedAt: '' });
-      this.logger.info(`平台已切回 WebSocket（${reason}），已同步`);
+      // Must be scoped to this bot: without botId it overwrote the DEFAULT bot's
+      // config, which is why switching to Webhook "reverted by itself".
+      await saveConfig(this.env, { platformMode: 'ws', webhookVerifiedAt: '' }, this.botId());
+      this.logger.info(`已切到 WebSocket（${reason}），已同步`);
     } catch (e) {
       this.logger.warn(`markPlatformWs 落盘失败（本次仍已切换）: ${e.message}`);
     }
@@ -438,7 +540,11 @@ export class QQBotDO {
         this.identifyFailures = 0;
         this.reconnectAttempt = 0;
         this.quotaWaitUntil = 0;
-        await this.loadConfig();
+        try {
+          await this.loadConfig();
+        } catch (e) {
+          return Response.json({ ok: false, msg: '读配置失败', error: String(e.message || e) });
+        }
         await this.startBot();
         return Response.json({ ok: true, msg: 'Bot started', started: this.running, error: this.lastError });
       case '/stop':
@@ -541,7 +647,6 @@ export class QQBotDO {
           return Response.json({ ok: false, error: e.message });
         }
       }
-      /* ---------- 素材管理（图片转 qqbot-media 引用） ---------- */
       case '/media-upload': {
         let body = null;
         try {
@@ -585,10 +690,6 @@ export class QQBotDO {
         }
       }
 
-      /* ---------- 自定义菜单 ---------- */
-      // 注意：worker 的 callBot 一律用 POST 转发，所以这里不能按 request.method 区分读写，
-      // 要按「body 里有没有 menu」区分：带 menu = 保存，不带 = 读取。
-      // 之前按 method 判断导致 GET /api/menu 落进保存分支，返回「缺少 menu」。
       case '/menu': {
         let body = null;
         try {
@@ -610,7 +711,6 @@ export class QQBotDO {
         }
       }
 
-      /* ---------- 入群申请审批 ---------- */
       case '/join-requests': {
         const openid = url.searchParams.get('openid') || '';
         if (!openid) return Response.json({ ok: false, error: '缺少群 openid' });
@@ -653,7 +753,6 @@ export class QQBotDO {
         }
       }
 
-      /* ---------- 群成员管理（平台侧为内邀能力） ---------- */
       case '/members-remove': {
         let body = null;
         try {
@@ -676,7 +775,6 @@ export class QQBotDO {
         }
       }
       case '/members-blacklist': {
-        // 同 /menu：callBot 一律 POST，按 body 里有没有 memberOpenids 区分读写
         let body = null;
         try {
           body = await request.json();
@@ -718,17 +816,20 @@ export class QQBotDO {
         const prevWelcome = this.config.welcomeEnabled;
         const prevTransport = this.transportName();
         const prevCreds = `${this.config.appId || ''}|${this.config.secret || ''}|${this.config.sandbox || ''}`;
-        await this.loadConfig();
+        try {
+          await this.loadConfig();
+        } catch (e) {
+          return Response.json({ ok: false, error: String(e.message || e) });
+        }
         const credsChanged = prevCreds !== `${this.config.appId || ''}|${this.config.secret || ''}|${this.config.sandbox || ''}`;
         this.logSystem('后台修改配置，已热更新生效');
-        if (prevTransport !== this.transportName()) {
-          const now = this.transportName();
-          this.logger.info(`传输方式变化 ${prevTransport} → ${now}，走宽限期切换`);
-          if (now === 'webhook') {
-            await this.markPlatformWebhook('配置热更新');
-          } else {
-            await this.markPlatformWs('配置热更新');
-          }
+        // A reload must NEVER write the transport mode back to 'ws'. The user's
+        // saved setting is the only source of truth; inferring 'ws' here is what
+        // silently reverted a Webhook choice. We only sync when the freshly
+        // loaded config explicitly says webhook (so running state follows it).
+        if (prevTransport !== this.transportName() && this.transportName() === 'webhook') {
+          this.logger.info(`传输方式变化 ${prevTransport} → webhook，走宽限期切换`);
+          await this.markPlatformWebhook('配置热更新');
         } else if (this.isWsTransport() && this.running && credsChanged) {
           this.logger.info(`凭据变化，重连以使用新的 AppID / Secret`);
           this.teardown();
@@ -741,19 +842,20 @@ export class QQBotDO {
         return Response.json({ ok: true, reloaded: true, running: this.running, reconnected: credsChanged });
       }
       case '/reload-quiet':
-        await this.loadConfig();
+        try {
+          await this.loadConfig();
+        } catch (e) {
+          return Response.json({ ok: false, reloaded: false, error: String(e.message || e) });
+        }
         return Response.json({ ok: true, reloaded: true, running: this.running });
       case '/ensure': {
         const prevTransport = this.transportName();
         try { await this.loadConfig(); } catch {}
-        if (prevTransport !== this.transportName()) {
-          const now = this.transportName();
-          this.logger.info(`Watchdog: 传输方式 ${prevTransport} → ${now}，走宽限期切换`);
-          if (now === 'webhook') {
-            await this.markPlatformWebhook('看门狗检测');
-          } else {
-            await this.markPlatformWs('看门狗检测');
-          }
+        // Same rule as /reload: the watchdog may follow an explicit webhook
+        // setting, but must never downgrade the saved mode to 'ws' on its own.
+        if (prevTransport !== this.transportName() && this.transportName() === 'webhook') {
+          this.logger.info(`Watchdog: 传输方式 ${prevTransport} → webhook，走宽限期切换`);
+          await this.markPlatformWebhook('看门狗检测');
         }
         try { await this.fireDueReminders(); } catch (e) { this.logger.warn(`Reminder scan: ${e.message}`); }
         await this.scheduleNextAlarm().catch(() => {});
@@ -799,7 +901,14 @@ export class QQBotDO {
         const aiList = (this.config.aiProviders || []).filter(
           (p) => p && p.enabled !== 0 && p.baseUrl && p.apiKey && p.model
         );
-        const aiReady = aiList.length > 0;
+        // The built-in Cloudflare chat model needs no Base URL / API Key, but it
+        // IS a working model. Counting only external providers made the status
+        // actually answered fine. Active model order must match chatProviders():
+        // built-in CF first, then the enabled external list.
+        const cfChatOn = this.config.cfChatEnabled !== '0';
+        const aiCount = aiList.length + (cfChatOn ? 1 : 0);
+        const aiReady = aiCount > 0;
+        const aiModel = cfChatOn ? CF_MODELS.chat : aiList.length ? aiList[0].model : '';
         const qqReady = !!(this.config.appId && this.config.secret);
         return Response.json({
           version: APP_VERSION,
@@ -807,6 +916,9 @@ export class QQBotDO {
           desiredRunning: this.desiredRunning,
           transport: this.transportName(),
           platformMode: this.config.platformMode || '',
+          // Surfaced so the UI can explain WHY credentials look empty
+          // (usually an encryption-key mismatch after a redeploy).
+          configError: this.configError || '',
           webhookVerifiedAt: this.config.webhookVerifiedAt ? Number(this.config.webhookVerifiedAt) : null,
           lastEventAt: this.lastEventAt || null,
           wsState: this.ws?.readyState,
@@ -825,8 +937,8 @@ export class QQBotDO {
           
           qqReady,
           aiReady,
-          aiCount: aiList.length,
-          aiModel: aiList.length ? aiList[0].model : '',
+          aiCount,
+          aiModel,
           historyLimit: Number(this.config.historyLimit) || 10,
           markdownReply: this.config.markdownReply === '1',
           autoRecall: this.config.autoRecall === '1',
@@ -856,8 +968,12 @@ export class QQBotDO {
           configKeys: Object.keys(this.config),
           appId: this.config.appId || 'missing',
           secret: this.config.secret ? 'set' : 'missing',
-          aiCount: (this.config.aiProviders || []).length,
-          aiModels: (this.config.aiProviders || []).map((p) => (p.enabled !== 0 ? p.model : `${p.model}(停用)`)),
+          aiCount:
+            (this.config.aiProviders || []).length + (this.config.cfChatEnabled !== '0' ? 1 : 0),
+          aiModels: [
+            ...(this.config.cfChatEnabled !== '0' ? [`${CF_MODELS.chat}(内置)`] : []),
+            ...(this.config.aiProviders || []).map((p) => (p.enabled !== 0 ? p.model : `${p.model}(停用)`)),
+          ],
           lastError: this.lastError,
           logs: this.logger.getLogs(30),
         });
@@ -866,8 +982,47 @@ export class QQBotDO {
     }
   }
 
+  // Which bot does this DO instance belong to? Workerd names the instance
+  // "bot:<botId>:<version>" for additional bots and the legacy "bot:<version>"
+  // for the default one, so the id is derived from our own name.
+  // The name lives on state.id (the first constructor arg), NOT on ctx.id —
+  // reading this.ctx silently yielded '' and every instance fell back to the
+  // default namespace, which made a configured bot look unconfigured.
+  botId() {
+    if (this._botId) return this._botId;
+    let id = DEFAULT_BOT_ID;
+    const candidates = [
+      this.state && this.state.id && this.state.id.name,
+      this.ctx && this.ctx.id && this.ctx.id.name,
+      this.id && this.id.name,
+    ];
+    for (const raw of candidates) {
+      if (typeof raw !== 'string' || !raw) continue;
+      const m = /^bot:(bot-[A-Za-z0-9]+):/.exec(raw);
+      if (m) {
+        id = m[1];
+        break;
+      }
+      // A "bot:<version>" name means the legacy default instance.
+      if (/^bot:/.test(raw)) break;
+    }
+    this._botId = id;
+    return id;
+  }
+
   async loadConfig() {
-    const config = await getConfig(this.env);
+    let config;
+    try {
+      config = await getConfig(this.env, { botId: this.botId() });
+      this.configError = null;
+    } catch (e) {
+      // A decryption failure used to leave this.config empty, which surfaced as
+      // "credentials incomplete" plus a wrong transport on the status page.
+      // Keep the last good config and record the real reason instead.
+      this.configError = String((e && e.message) || e);
+      this.logger.error(`Config load failed: ${this.configError}`);
+      throw e;
+    }
     if (config.appId !== this.config.appId || config.secret !== this.config.secret || config.sandbox !== this.config.sandbox) {
       this.token = null;
       this.tokenExpiry = 0;
@@ -881,10 +1036,9 @@ export class QQBotDO {
     this.config = config;
     this.groupBlacklist = new Set((config.groupBlacklist || '').split(/[,，]/).map(s => s.trim()).filter(Boolean));
     this.sensitiveWords = (config.sensitiveWords || '').split(/[,，]/).map(s => s.trim()).filter(Boolean);
-    this.logger.info(`Config loaded (v${APP_VERSION}), keys: ${Object.keys(config).join(',')}`);
+    this.logger.info(`Config loaded (v${APP_VERSION}, bot=${this.botId()}), keys: ${Object.keys(config).join(',')}`);
   }
 
-  // 对话 provider 列表：内置 CF 对话模型（开启时）排最前，后面跟外部 provider。
   chatProviders() {
     const list = [];
     if (this.config.cfChatEnabled !== '0') list.push(cfChatProvider());
@@ -1244,18 +1398,27 @@ export class QQBotDO {
         this.identifyFailures = 0;
         this.lastError = null;
         this.sessionId = d?.session_id || null;
-        this.logger.info(`Bot ready: ${d?.user?.username} session=${this.sessionId || 'none'}`);
+        // Remember our own openid: full-message mode delivers @bot messages as
+        // GROUP_MESSAGE_CREATE with "<@our_openid>" inside content, so we need
+        // this to tell "was I mentioned?" without relying on the event name.
+        const selfId = d?.user?.id || d?.user?.member_openid || d?.user?.user_openid || '';
+        if (selfId) {
+          this.selfOpenid = String(selfId);
+          this.state.storage.put('self_openid', this.selfOpenid).catch(() => {});
+        }
+        this.logger.info(`Bot ready: ${d?.user?.username} self=${this.selfOpenid ? 'y' : 'n'} session=${this.sessionId || 'none'}`);
         this.saveGwState();
-        this.markPlatformWs('网关 READY').catch(() => {});
+        // Do NOT infer the platform's transport from our own gateway connection.
+        // Connecting to the gateway is something WE do; it says nothing about
+        // whether QQ is configured to push webhooks. Inferring it here is what
+        // silently reverted a user's Webhook choice back to WebSocket.
       } else if (t === 'RESUMED') {
         this.reconnectAttempt = 0;
         this.identifyFailures = 0;
         this.lastError = null;
         this.logger.info('Session resumed');
         this.saveGwState();
-        this.markPlatformWs('网关 RESUMED').catch(() => {});
       } else if (t === 'GROUP_AT_MESSAGE_CREATE' || t === 'GROUP_MESSAGE_CREATE' || t === 'C2C_MESSAGE_CREATE') {
-        this.markPlatformWs('收到网关消息事件').catch(() => {});
         await this.handleMessage(t, d);
       } else if (t === 'GROUP_MEMBER_ADD') {
         this.state.waitUntil(this.handleGroupMemberAdd(d));
@@ -1292,8 +1455,19 @@ export class QQBotDO {
       .replace(/\{member\}/g, `<qqbot-at-user id="${memberOpenid}" />`)
       .replace(/\{group\}/g, groupOpenid)
       .slice(0, 1500);
-    await this.sendReply({ isC2C: false, scopeId: groupOpenid, content: text, msgId: '' });
-    this.logSystem('新成员加入群聊，已自动发送欢迎语');
+    // GROUP_MEMBER_ADD carries an event_id, so this is a PASSIVE reply here.
+    // Sending it as a proactive message is what makes the group owner's
+    // "receive all group messages" switch flip itself off.
+    const eventId = data?.event_id || data?.id || '';
+    const sent = await this.sendReply({
+      isC2C: false,
+      scopeId: groupOpenid,
+      content: text,
+      msgId: '',
+      eventId,
+    });
+    if (sent) this.logSystem('新成员加入群聊，已自动发送欢迎语');
+    else this.logger.warn('Welcome message failed (no event_id or platform rejected)');
   }
 
   async handleGroupAddRobot(data) {
@@ -1303,8 +1477,15 @@ export class QQBotDO {
     this.logger.info(`Bot added to group ${groupOpenid.slice(0, 8)}...`);
     const raw = String(this.config.welcomeMsg || '').trim();
     if (!raw || this.config.welcomeEnabled !== '1') return;
-    await this.sendReply({ isC2C: false, scopeId: groupOpenid, content: raw.slice(0, 1500), msgId: '' });
-    this.logSystem('机器人加入新群，已发送欢迎语');
+    const eventId = data?.event_id || data?.id || '';
+    const sent = await this.sendReply({
+      isC2C: false,
+      scopeId: groupOpenid,
+      content: raw.slice(0, 1500),
+      msgId: '',
+      eventId,
+    });
+    if (sent) this.logSystem('机器人加入新群，已发送欢迎语');
   }
 
   logSystem(text) {
@@ -1315,6 +1496,7 @@ export class QQBotDO {
       userContent: String(text || '').slice(0, 500),
       aiReply: '',
       model: null,
+      botId: this.botId(),
     }).catch(() => {});
   }
 
@@ -1326,15 +1508,16 @@ export class QQBotDO {
       userContent: String(userContent ?? '').slice(0, 500),
       aiReply: String(aiReply ?? '').slice(0, 500),
       model: model || null,
+      botId: this.botId(),
     }).catch((e) => this.logger.warn(`Chat log write failed: ${e.message}`));
   }
 
   touchGroup(openid) {
-    upsertGroup(this.env, openid, 'auto').catch(() => {});
+    upsertGroup(this.env, openid, 'auto', this.botId()).catch(() => {});
   }
 
   async downloadAttachment(url, contentType, filenameHint) {
-    const MAX_BYTES = 4 * 1024 * 1024; // 4MB 原始文件上限
+    const MAX_BYTES = 4 * 1024 * 1024;
     const MAX_TEXT = 200000;
     const ct = String(contentType || '').toLowerCase();
     const name = String(filenameHint || url.split('?')[0].split('/').pop() || '').slice(0, 80);
@@ -1508,6 +1691,18 @@ export class QQBotDO {
     const userId = isC2C ? author.user_openid : author.member_openid;
     const scopeId = isC2C ? userId : data.group_openid;
     if (!userId || !scopeId) return;
+    // Docs confirm author.username carries the nickname — cache it so group
+    // context can name people instead of showing raw openids.
+    const authorName = String(author.username || '').trim().slice(0, 32);
+    // author.member_role is the authoritative role of the *sender*
+    // (member/admin/owner) — the only reliable way to gate management actions.
+    const authorRole = String(author.member_role || '').trim().toLowerCase();
+    if (!isC2C && authorName) {
+      this.rememberMemberNames(scopeId, [{ openid: userId, nick: authorName }]).catch(() => {});
+    }
+    if (!isC2C && authorRole) {
+      this.rememberMemberRole(scopeId, userId, authorRole).catch(() => {});
+    }
 
     const dedupeKey = `${data.id || ''}#${data.seq || ''}`;
     if (dedupeKey !== '#' && this.recentMsgIds.has(dedupeKey)) {
@@ -1520,8 +1715,17 @@ export class QQBotDO {
       if (this.msgIdFifo.length > 500) this.recentMsgIds.delete(this.msgIdFifo.shift());
     }
 
-    let content = normalizeFaceTags(stripMentions(data.content));
+    // Decide "was I mentioned?" BEFORE stripping mentions: in full-message mode
+    // the mention survives inside content as "<@our_openid>".
+    const rawContent = String(data.content || '');
+    const atEvent = type === 'GROUP_AT_MESSAGE_CREATE';
+    const selfOpenid = await this.getSelfOpenid(isC2C ? '' : scopeId);
+    const mentioned = atEvent || contentMentionsBot(rawContent, selfOpenid, data.mentions);
+
+    let content = normalizeFaceTags(stripMentions(rawContent));
     if (/^@\S+\s+/.test(content)) content = content.replace(/^@\S+\s+/, '');
+    // GROUP_AT_MESSAGE_CREATE leaves a leading space after the stripped mention
+    content = content.trim();
     const attachments = Array.isArray(data.attachments) ? data.attachments : [];
     let imageUrl = null;
     let fileAttachment = null;
@@ -1554,7 +1758,12 @@ export class QQBotDO {
     } else if (!attachments.length && !isC2C && /\\[图片\\]|\\[image\\]|图片/.test(content)) {
       this.logger.warn('Group message looks like an image but no attachment url (确认是否 @ 了机器人)');
     }
-    if (!content && !imageUrl && !fileAttachment) return;
+    if (!content && !imageUrl && !fileAttachment) {
+      // Pure "@bot" with no words: the user is clearly calling us, so answer
+      // instead of silently dropping the event.
+      if (!isC2C && mentioned) content = '在吗';
+      else return;
+    }
     if (!content) content = imageUrl ? '请描述这张图片' : '（我发了一个文件）';
     const userText = content;
 
@@ -1617,6 +1826,27 @@ export class QQBotDO {
     if (!isC2C && this.groupBlacklist.has(scopeId)) return;
     if (this.sensitiveWords.some((w) => content.includes(w))) return;
 
+    if (!isC2C) {
+      const names = await this.loadMemberNames(scopeId);
+      await this.recordGroupCtx(scopeId, {
+        userId,
+        nick: authorName || names[userId] || '',
+        content,
+        imageUrl,
+        mentioned,
+        bot: false,
+      });
+      if (!mentioned && this.config.groupReplyMode !== 'all') {
+        const mode = this.config.groupReplyMode || 'smart';
+        if (mode === 'at') return;
+        const replyToBot = await this.wasReplyingToBot(scopeId, userId);
+        if (!shouldReplyToGroup(content, { replyToBot })) {
+          this.logger.info(`Group message skipped (not addressed): ${content.slice(0, 30)}`);
+          return;
+        }
+      }
+    }
+
     const key = this.ownerKey({ isC2C, scopeId, userId });
     if (!isC2C) this.touchGroup(scopeId);
     const job = { isC2C, userId, scopeId, content, imageUrl, msgId: data.id, userText, fileName, fileText };
@@ -1642,12 +1872,16 @@ export class QQBotDO {
 
     await this.ensureMemes().catch(() => {});
 
+    if (!isC2C && /^(确认|确定|好的?|yes|confirm|执行)$/i.test(String(content || '').trim())) {
+      const handled = await this.confirmPendingManage({ isC2C, scopeId, msgId, userId });
+      if (handled) return;
+    }
+
     if (/^\/?(菜单|menu|按钮)(\s|$)/i.test(content)) {
       await this.sendMenu({ isC2C, scopeId, msgId });
       return;
     }
 
-    // /全体 内容 —— @全体成员。平台限制：机器人为群管理员、每群每天 1 次。
     if (/^\/?(全体|atall|at_all|everyone)(\s|$)/i.test(content)) {
       if (isC2C) {
         await this.sendReply({ isC2C, scopeId, content: '单聊里没有「全体成员」这个概念～', msgId });
@@ -1662,7 +1896,6 @@ export class QQBotDO {
       return;
     }
 
-    // /审批 —— 拉当前群的入群申请（需要机器人是群管理员）
     if (/^\/?(审批|入群审批|joinrequest)(\s|$)/i.test(content)) {
       if (isC2C) {
         await this.sendReply({ isC2C, scopeId, content: '入群审批只在群聊里用～', msgId });
@@ -1671,6 +1904,10 @@ export class QQBotDO {
       try {
         const r = await this.joinRequestList(scopeId, '', 10);
         const list = Array.isArray(r.list) ? r.list : [];
+        await this.rememberMemberNames(
+          scopeId,
+          list.map((j) => ({ openid: j.member_openid || j.user_openid, nick: j.username }))
+        );
         if (!list.length) {
           await this.sendReply({ isC2C, scopeId, content: '当前没有待审批的入群申请。', msgId });
           return;
@@ -1867,6 +2104,7 @@ export class QQBotDO {
         dueAt: reminderIntent.dueAt,
         text: reminderIntent.text,
         repeatRule: reminderIntent.repeatRule,
+        botId: this.botId(),
       });
       const whenText =
         reminderIntent.whenText ||
@@ -1940,12 +2178,30 @@ export class QQBotDO {
     let aiErr = null;
     let used = null;
 
+    let groupCtxBlock = '';
+    if (!isC2C) {
+      const ctxList = await this.loadGroupCtx(scopeId);
+      const names = await this.loadMemberNames(scopeId);
+      const rendered = this.renderGroupCtx(ctxList, userId, names);
+      if (rendered) {
+        const selfLabel = this.stableMemberLabel(userId, names);
+        const selfNick = names[userId];
+        const selfDesc = selfNick ? `「${selfNick}」` : selfLabel;
+        groupCtxBlock =
+          `\n\n【群聊上下文】下面是这个群最近的发言（按时间先后，最后一条就是现在这条）。` +
+          `现在是 ${selfDesc} 在跟你说话（标记为「当前用户」），其他人是群里别的成员（昵称或成员+尾号）。` +
+          '你不是只在跟一个人私聊，而是在一个群里。需要时可以自然接住群里的话题、' +
+          '也可以提到别人刚才说了什么，但不要在回复里提「上下文」「记录」这类词，也不要逐条回应，只回当前这条就好。\n' +
+          rendered;
+      }
+    }
+
     if (useAiDo) {
       try {
         const out = await this.askAiDo({
           key,
           providers,
-          systemPrompt: this.buildSystemPrompt(),
+          systemPrompt: this.buildSystemPrompt() + groupCtxBlock,
           historyLimit,
           content,
           image: aiImage,
@@ -1976,6 +2232,7 @@ export class QQBotDO {
       while (history.length > historyLimit + 1) history.splice(1, 1);
       const msgs = history.slice();
       if (session.summary) msgs.splice(1, 0, { role: 'system', content: `【早前对话摘要】${session.summary}` });
+      if (groupCtxBlock) msgs.splice(1, 0, { role: 'system', content: groupCtxBlock.trim() });
       if (aiImage) {
         msgs[msgs.length - 1] = {
           role: 'user',
@@ -2129,6 +2386,7 @@ export class QQBotDO {
       userContent: imageUrl ? `[图片] ${content}` : content,
       aiReply: normalizeFaceTags(reply),
       model: used ? `${used.name} · ${used.model}`.slice(0, 128) : null,
+      botId: this.botId(),
     }).catch((e) => this.logger.warn(`Chat log write failed: ${e.message}`));
     if (this.state && typeof this.state.waitUntil === 'function') {
       this.state.waitUntil(logWrite);
@@ -2185,6 +2443,13 @@ export class QQBotDO {
           '\n- group_info：{} —— 查本群资料（仅群聊）' +
           '\n- group_state：{} —— 查机器人在本群的状态（仅群聊）' +
           '\n- mute_state：{} —— 查本群禁言状态（仅群聊）' +
+          '\n- mute_member：{"memberOpenid":"xx","minutes":10} —— 禁言成员（仅群管理，1~43200 分钟）' +
+          '\n- unmute_member：{"memberOpenid":"xx"} —— 解除禁言（仅群管理）' +
+          '\n- kick_member：{"memberOpenid":"xx"} —— 把成员移出群（仅群管理，需二次确认）' +
+          '\n- join_approve：{"memberOpenid":"xx","approve":"approve|decline","reason":"可选"} —— 审批入群申请（仅群管理）' +
+          '\n注意：mute_member / unmute_member / kick_member / join_approve 只有群主和管理员能用；' +
+          '你不是管理员或对方权限不够时会被系统拒绝，如实把拒绝原因告诉用户即可，不要反复重试。' +
+          '用户只是让你「禁言某人」但没给 openid 时，先问清是谁，不要编造 openid。' +
           '\n规则：一次只调用一个工具；调用工具时不要写寒暄、确认或解释（系统会用工具结果自动回复用户）；**image / meme 这两个工具可以在工具行后面再写一句话**（作为配图文案，会跟在图片后面发出去），其它工具不要附加文字；能直接回答的问题不要调用工具；不要编造工具的执行结果；用户没有明确要求时不要调用工具。'
         : '';
     const memes = this.memesCache || [];
@@ -2290,18 +2555,175 @@ export class QQBotDO {
       const what = String(args.text || '').trim().slice(0, 40);
       return when && what ? `设过提醒：${when} 提醒「${what}」` : null;
     }
-    return null; // image / meme / voice / 查询类都不记
+    return null;
   }
 
 
   ownerKey({ isC2C, scopeId, userId }) {
-    return isC2C ? `c2c:${userId || scopeId}` : `group:${scopeId}:u:${userId || 'unknown'}`;
+    const base = isC2C ? `c2c:${userId || scopeId}` : `group:${scopeId}:u:${userId || 'unknown'}`;
+    // Workspaces and per-user memory are namespaced by bot so two bots never
+    // share files or notes. The default bot keeps the legacy key shape so an
+    // existing install keeps its workspaces after upgrading.
+    const bid = this.botId();
+    return bid === DEFAULT_BOT_ID ? base : `bot:${bid}:${base}`;
   }
+
+  async recordGroupCtx(scopeId, entry) {
+    try {
+      const k = groupCtxKey(scopeId);
+      const limit = Math.min(
+        GROUP_CTX_MAX_HARD,
+        Math.max(1, Number(this.config.groupContextLen) || 20)
+      );
+      const buf = (await this.state.storage.get(k)) || [];
+      const list = Array.isArray(buf) ? buf : [];
+      list.push({
+        u: String(entry.userId || '').slice(0, 64),
+        n: String(entry.nick || '').slice(0, 32),
+        c: String(entry.content || '').slice(0, 500),
+        img: entry.imageUrl ? 1 : 0,
+        at: entry.mentioned ? 1 : 0,
+        bot: entry.bot ? 1 : 0,
+        t: Date.now(),
+      });
+      const trimmed = list.slice(-limit);
+      await this.state.storage.put(k, trimmed);
+    } catch (e) {
+      this.logger.warn(`Group ctx record failed: ${e.message}`);
+    }
+  }
+
+  async loadMemberNames(scopeId) {
+    try {
+      const v = await this.state.storage.get(memberNameKey(scopeId));
+      return v && typeof v === 'object' ? v : {};
+    } catch {
+      return {};
+    }
+  }
+
+  async rememberMemberNames(scopeId, pairs) {
+    if (!scopeId || !pairs || !pairs.length) return;
+    try {
+      const cur = await this.loadMemberNames(scopeId);
+      let changed = false;
+      for (const p of pairs) {
+        const id = String((p && p.openid) || '').trim();
+        const nick = String((p && p.nick) || '').trim().slice(0, 32);
+        if (!id || !nick) continue;
+        if (cur[id] !== nick) {
+          cur[id] = nick;
+          changed = true;
+        }
+      }
+      const keys = Object.keys(cur);
+      if (keys.length > 500) {
+        for (const k of keys.slice(0, keys.length - 500)) delete cur[k];
+        changed = true;
+      }
+      if (changed) await this.state.storage.put(memberNameKey(scopeId), cur);
+    } catch (e) {
+      this.logger.warn(`Member name cache failed: ${e.message}`);
+    }
+  }
+
+  stableMemberLabel(openid, names) {
+    const id = String(openid || '');
+    if (!id) return '未知成员';
+    const nick = names && names[id];
+    if (nick) return `「${nick}」`;
+    const tail = id.length > 4 ? id.slice(-4) : id;
+    return `成员${tail}`;
+  }
+
+  async getSelfOpenid(groupOpenid) {
+    if (this.selfOpenid) return this.selfOpenid;
+    try {
+      const saved = await this.state.storage.get('self_openid');
+      if (saved) {
+        this.selfOpenid = String(saved);
+        return this.selfOpenid;
+      }
+    } catch {}
+    // Webhook mode never receives the gateway READY event, so self_openid was
+    // never stored and mention detection degraded to "any @ means me". Recover
+    // it from bot_state, which reports the BOT's own member_openid per group.
+    if (groupOpenid && !this.selfOpenidProbe) {
+      this.selfOpenidProbe = true;
+      try {
+        const st = await this.qqBotState(groupOpenid);
+        const id = String((st && (st.member_openid || st.user_openid)) || '').trim();
+        if (id) {
+          this.selfOpenid = id;
+          this.state.storage.put('self_openid', id).catch(() => {});
+        }
+      } catch {}
+    }
+    return this.selfOpenid || '';
+  }
+
+  async loadGroupCtx(scopeId) {
+    try {
+      const buf = await this.state.storage.get(groupCtxKey(scopeId));
+      return Array.isArray(buf) ? buf : [];
+    } catch {
+      return [];
+    }
+  }
+
+  async wasReplyingToBot(scopeId, userId) {
+    try {
+      const list = await this.loadGroupCtx(scopeId);
+      for (let i = list.length - 1; i >= 0; i--) {
+        const e = list[i];
+        if (!e) continue;
+        if (e.bot) {
+          for (let j = i - 1; j >= 0; j--) {
+            const p = list[j];
+            if (!p || p.bot) continue;
+            return String(p.u || '') === String(userId || '') && !!p.at;
+          }
+          return false;
+        }
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
+  renderGroupCtx(list, selfUserId, names) {
+    if (!Array.isArray(list) || !list.length) return '';
+    const lines = [];
+    for (const e of list) {
+      if (!e) continue;
+      let who;
+      if (e.bot) {
+        who = '我（机器人）';
+      } else if (String(e.u || '') === String(selfUserId || '')) {
+        who = `当前用户${e.n ? '「' + e.n + '」' : ''}`;
+      } else {
+        who = this.stableMemberLabel(e.u, names) || '群成员';
+      }
+      let text = String(e.c || '').replace(/\s+/g, ' ').trim();
+      if (!text && e.img) text = '[图片]';
+      if (!text) continue;
+      if (text.length > 120) text = text.slice(0, 120) + '…';
+      lines.push(`${who}${e.at ? '（@我）' : ''}：${text}`);
+    }
+    return lines.join('\n');
+  }
+
 
 
   async execToolDo(tool, args, { isC2C, scopeId, msgId, caption, userId }) {
     const ns = this.env && (this.env.WORK || this.env.TOOL);
     if (!ns || typeof ns.idFromName !== 'function') return null;
+    // Group + no msgId means the passive window is gone. ToolEngine would then
+    // post a proactive message, which disables the group's full-message switch.
+    if (!isC2C && !msgId) {
+      return { ok: false, note: '被动回复窗口已过（群消息 5 分钟），不再主动发到群里' };
+    }
     const key = this.ownerKey({ isC2C, scopeId, userId });
     const stub = ns.get(ns.idFromName(key));
     const token = await this.getToken();
@@ -2321,6 +2743,9 @@ export class QQBotDO {
           base: this.apiBase(),
           token,
           seqBase,
+          // Reminders created by AI tools must belong to this bot, otherwise
+          // another bot's DO would pick them up and send them.
+          botId: this.botId(),
         },
         cfg: {
           imageGenModel: this.config.imageGenModel || '',
@@ -2509,15 +2934,18 @@ export class QQBotDO {
               const text = String(f.content || '');
               const chunks = [];
               for (let k = 0; k < text.length && chunks.length < 3; k += 1400) chunks.push(text.slice(k, k + 1400));
-              for (const c of chunks) {
-                await this.sendReply({ isC2C, scopeId, content: c, msgId: passiveOk ? msgId : '' });
+              // Only send inside the passive window; never post proactively.
+              if (passiveOk && msgId) {
+                for (const c of chunks) {
+                  await this.sendReply({ isC2C, scopeId, content: c, msgId });
+                }
+                await this.sendReply({
+                  isC2C,
+                  scopeId,
+                  content: `（文件 ${f.path.split('/').pop()} 发送失败，以上是内容节选；完整文件请私聊我说「把 ${f.path.split('/').pop()}」）`,
+                  msgId,
+                });
               }
-              await this.sendReply({
-                isC2C,
-                scopeId,
-                content: `（文件 ${f.path.split('/').pop()} 发送失败，以上是内容节选；完整文件请私聊我说「把 ${f.path.split('/').pop()}」）`,
-                msgId: passiveOk ? msgId : '',
-              });
             }
           }
         } catch (e) {
@@ -2537,8 +2965,10 @@ export class QQBotDO {
       this.logger.warn(`sandbox files NOT sent: ${out.send.join(',')}（任务耗时 ${Math.round(waitMs / 1000)}s, passive=${passiveOk}）`);
     }
     const finalText = `${out.reply}${sentNote}\n\n（沙箱：${out.steps} 步 · ${out.files} 个文件）`;
+    // Never fall back to a proactive group message: that flips off the group
+    // owner's "receive all messages" switch. C2C fallback is fine.
     const sent = await this.sendReply({ isC2C, scopeId, content: finalText, msgId });
-    if (!sent && msgId) {
+    if (!sent && msgId && isC2C) {
       await this.sendReply({ isC2C, scopeId, content: finalText });
     }
     this.logExchange({
@@ -2748,7 +3178,7 @@ export class QQBotDO {
     } catch {}
   }
 
-  async sendReply({ isC2C, scopeId, content, msgId, atEveryone }) {
+  async sendReply({ isC2C, scopeId, content, msgId, eventId, atEveryone }) {
     const token = await this.getToken();
     const sendUrl = isC2C
       ? `${this.apiBase()}/v2/users/${scopeId}/messages`
@@ -2756,8 +3186,6 @@ export class QQBotDO {
 
     let finalContent = normalizeFaceTags(stripMentions(content));
     if (/^@\S+\s+/.test(finalContent)) finalContent = finalContent.replace(/^@\S+\s+/, '');
-    // @全体成员：只有群聊能用，且平台要求机器人为群管理员、每群每天仅 1 次。
-    // 本地先记一次用量再发，避免超发被平台拒绝后消息整条丢掉。
     if (atEveryone && !isC2C) {
       const allowed = await this.consumeAtEveryone(scopeId);
       if (allowed) {
@@ -2769,8 +3197,12 @@ export class QQBotDO {
     finalContent = finalContent.slice(0, 1500);
     if (!finalContent) finalContent = '……';
 
-    const useMarkdown = this.config.markdownReply === '1' && this.isMarkdownSafe(finalContent);
-    const passive = msgId ? { msg_id: msgId, msg_seq: this.nextMsgSeq(msgId) } : {};
+    // <qqbot-at-everyone> / <qqbot-at-user> are text-chain tags that only get
+    // parsed in markdown (msg_type=2). In plain text they leak verbatim, so
+    // force markdown whenever any at-tag is present anywhere in the content.
+    const hasAtTag = !isC2C && /<qqbot-at-(user|everyone)\b/.test(finalContent);
+    const useMarkdown = hasAtTag || (this.config.markdownReply === '1' && this.isMarkdownSafe(finalContent));
+    const passive = buildPassiveRef({ msgId, eventId, nextSeq: () => this.nextMsgSeq(msgId) });
     const buildPayload = (md) =>
       md
         ? { msg_type: 2, markdown: { content: finalContent }, ...passive }
@@ -2795,36 +3227,43 @@ export class QQBotDO {
     };
 
     let payload = buildPayload(useMarkdown);
-    try {
-      return await withRetry(() => sendOnce(token, payload), {
-        maxAttempts: 2,
-        delay: 800,
-        shouldRetry: retryable,
-        onRetry: (err, attempt) => this.logger.warn(`Send retry ${attempt}: ${err.message}`),
-      });
-    } catch (e) {
-      if (useMarkdown && e.status && e.status < 500 && e.status !== 429) {
-        this.logger.warn(`Markdown send rejected (HTTP ${e.status}), falling back to plain text`);
-        try {
-          return await sendOnce(await this.getToken(), buildPayload(false));
-        } catch (e2) {
-          this.logger.warn(`Plain-text fallback failed: ${e2.message}`);
-          return null;
+    const sentId = await (async () => {
+      try {
+        return await withRetry(() => sendOnce(token, payload), {
+          maxAttempts: 2,
+          delay: 800,
+          shouldRetry: retryable,
+          onRetry: (err, attempt) => this.logger.warn(`Send retry ${attempt}: ${err.message}`),
+        });
+      } catch (e) {
+        if (useMarkdown && e.status && e.status < 500 && e.status !== 429) {
+          this.logger.warn(`Markdown send rejected (HTTP ${e.status}), falling back to plain text`);
+          try {
+            return await sendOnce(await this.getToken(), buildPayload(false));
+          } catch (e2) {
+            this.logger.warn(`Plain-text fallback failed: ${e2.message}`);
+            return null;
+          }
         }
-      }
-      if (e.status === 401) {
-        this.token = null;
-        this.tokenExpiry = 0;
-        try {
-          return await sendOnce(await this.getToken(), payload);
-        } catch (e2) {
-          this.logger.warn(`Send failed after re-auth: ${e2.message}`);
-          return null;
+        if (e.status === 401) {
+          this.token = null;
+          this.tokenExpiry = 0;
+          try {
+            return await sendOnce(await this.getToken(), payload);
+          } catch (e2) {
+            this.logger.warn(`Send failed after re-auth: ${e2.message}`);
+            return null;
+          }
         }
+        this.logger.warn(e.message);
+        return null;
       }
-      this.logger.warn(e.message);
-      return null;
+    })();
+
+    if (sentId && !isC2C) {
+      await this.recordGroupCtx(scopeId, { userId: '', content: finalContent, bot: true, mentioned: false });
     }
+    return sentId;
   }
 
   async sendTyping({ scopeId, msgId }) {
@@ -2852,13 +3291,11 @@ export class QQBotDO {
     const sendUrl = isC2C
       ? `${this.apiBase()}/v2/users/${scopeId}/messages`
       : `${this.apiBase()}/v2/groups/${scopeId}/messages`;
-    // 指令按钮：type=2 点击把指令填进输入框，enter=true 直接发送
     const cmd = (label, data, style) => ({
       id: `m_${Math.random().toString(36).slice(2, 9)}`,
       render_data: { label, visited_label: label, style: style || 0 },
       action: { type: 2, permission: { type: 2 }, data, enter: true, reply: true },
     });
-    // 链接按钮：type=0 跳转外链
     const link = (label, url) => ({
       id: `l_${Math.random().toString(36).slice(2, 9)}`,
       render_data: { label, visited_label: label, style: 1 },
@@ -2980,19 +3417,19 @@ export class QQBotDO {
   }
 
 
-  // 语音合成：优先外部 OpenAI 兼容 /audio/speech（配了 voiceBaseUrl/voiceModel 时），
-  // 否则用内置 CF MeloTTS。两者都会被 voiceGain 调整响度。
   async synthVoice(text, lang = 'zh') {
     const base = String(this.config.voiceBaseUrl || '').trim();
     const key = String(this.config.voiceApiKey || '').trim();
     const model = String(this.config.voiceModel || '').trim();
     if (base && key && model) {
-      return this.synthVoiceExternal(text, base, key, model);
+      const bytes = await this.synthVoiceExternal(text, base, key, model);
+      return { bytes, mime: 'audio/mpeg', ext: 'mp3' };
     }
     if (this.config.cfVoiceEnabled === '0') {
       throw new Error('内置语音已关闭，且未配置外部语音服务');
     }
-    return cfTts(this.env, CF_MODELS.voice, text, lang);
+    const bytes = await cfTts(this.env, CF_MODELS.voice, text, lang);
+    return { bytes, mime: 'audio/wav', ext: 'wav' };
   }
 
   async synthVoiceExternal(text, base, key, model) {
@@ -3023,17 +3460,18 @@ export class QQBotDO {
     const clean = String(text || '').trim().slice(0, 300);
     if (!clean) return null;
     try {
-      let bytes = await this.synthVoice(clean, this.config.voiceLang || 'zh');
+      const synth = await this.synthVoice(clean, this.config.voiceLang || 'zh');
+      let bytes = synth.bytes;
       const gainDb = Math.max(0, Math.min(12, Number(this.config.voiceGain || '6') || 0));
-      if (gainDb > 0) {
+      if (gainDb > 0 && synth.ext === 'mp3') {
         try {
           bytes = applyMp3Gain(bytes, gainDb);
         } catch (e) {
           this.logger.warn(`MP3 gain skipped: ${e.message}`);
         }
       }
-      const dataUri = `data:audio/mpeg;base64,${toBase64(bytes)}`;
-      const sent = await this.sendMedia({ isC2C, scopeId, msgId, fileType: 3, source: dataUri, fileExt: 'mp3' });
+      const dataUri = `data:${synth.mime};base64,${toBase64(bytes)}`;
+      const sent = await this.sendMedia({ isC2C, scopeId, msgId, fileType: 3, source: dataUri, fileExt: synth.ext });
       const voiceModel = String(this.config.voiceModel || '').trim() || 'MeloTTS';
       if (sent) {
         this.logExchange({
@@ -3163,11 +3601,7 @@ export class QQBotDO {
     });
   }
 
-  /* ============================ 素材管理（qqbot-media） ============================ */
 
-  // 图片先传到平台，拿到 qqbot-media:// 引用后写进 Markdown / 卡片。
-  // 整条链路：prepare（要 md5/sha1）→ PUT presigned_url → complete（校验 ETag）→ 得到引用。
-  // 平台侧限制：单张 ≤10MB、仅 png/jpeg/gif/webp、每机器人上限 100 张、任务 4 小时过期。
 
   mediaImagePrepare(meta) {
     return this.qqApi('/v2/media-images/prepare', {
@@ -3194,10 +3628,6 @@ export class QQBotDO {
     return this.qqApi(`/v2/media-images/${encodeURIComponent(String(imageId))}/delete`, { method: 'DELETE' });
   }
 
-  /**
-   * 把一张图片（data URI 或公网 URL）上传成平台素材，返回 { imageId, url, ttl } 或 null。
-   * 只在「需要 qqbot-media:// 引用」的场景用；普通富媒体发图走 uploadRichMedia 就行。
-   */
   async uploadMediaImage(source, fileName) {
     let bytes;
     let contentType = 'image/png';
@@ -3221,7 +3651,6 @@ export class QQBotDO {
       const ext = contentType === 'image/jpeg' ? 'jpg' : contentType.split('/')[1];
       name = name.replace(/\.[^.]+$/, '') + '.' + ext;
     } else {
-      // 公网 URL：先抓回来，因为 prepare 必须要 md5/sha1
       let res;
       try {
         res = await fetch(source, { signal: AbortSignal.timeout(20000) });
@@ -3258,7 +3687,6 @@ export class QQBotDO {
       sha1,
     });
 
-    // PUT 直传：Content-Type 必须与 prepare 声明完全一致，否则 COS 403
     const putRes = await fetch(prep.presigned_url, {
       method: 'PUT',
       headers: { 'Content-Type': contentType },
@@ -3275,7 +3703,6 @@ export class QQBotDO {
     return { imageId: done.image_id, url: done.url, ttl: done.ttl, previewUrl: done.preview_url };
   }
 
-  /* ============================ 自定义菜单 / 指令面板 ============================ */
 
   menuGet() {
     return this.qqApi('/v2/menu', { method: 'GET' });
@@ -3289,7 +3716,6 @@ export class QQBotDO {
     });
   }
 
-  /* ============================ 入群申请审批 ============================ */
 
   joinRequestList(openid, cursor, limit) {
     const qs = new URLSearchParams();
@@ -3310,7 +3736,6 @@ export class QQBotDO {
     );
   }
 
-  /* ============================ 群成员管理（内邀） ============================ */
 
   batchRemoveMembers(openid, memberOpenids, addToBlacklist) {
     return this.qqApi(`/v2/groups/${openid}/batch_remove_members`, {
@@ -3340,13 +3765,7 @@ export class QQBotDO {
   }
 
   
-  /**
-   * @全体成员 每日配额（平台规定每个群每天只能发 1 次）。
-   * 用 DO 存储按「群 + 北京时间日期」计数，跨实例有效。
-   * 返回 true 表示这次可以用，同时已经把用量 +1；false 表示今天已经用过了。
-   */
   async consumeAtEveryone(groupOpenid) {
-    // 北京时间（UTC+8）的日期串，跟平台侧口径对齐
     const d = new Date(Date.now() + 8 * 3600 * 1000);
     const day = d.toISOString().slice(0, 10);
     const key = `atall:${groupOpenid}:${day}`;
@@ -3356,7 +3775,6 @@ export class QQBotDO {
     return true;
   }
 
-  /** 清理过期的 @全体 计数（只留今天和昨天，避免存储无限增长） */
   async pruneAtEveryone() {
     const today = new Date(Date.now() + 8 * 3600 * 1000).toISOString().slice(0, 10);
     const map = await this.state.storage.list({ prefix: 'atall:' });
@@ -3368,11 +3786,6 @@ export class QQBotDO {
     if (dead.length) await this.state.storage.delete(dead);
   }
 
-  /**
-   * 发图文卡片（msg_type=8）。
-   * 平台限制：title 1~50 字符、description 1~200 字符、url 与 pic_url 必须是 https 且 ≤1024。
-   * 任一字段不合规平台会直接拒，所以这里先夹一遍。
-   */
   async sendCard({ isC2C, scopeId, msgId, title, description, url, picUrl }) {
     const token = await this.getToken();
     const sendUrl = isC2C
@@ -3412,7 +3825,6 @@ export class QQBotDO {
     return data.id || null;
   }
 
-  /** 发 Markdown（msg_type=2），可带 qqbot-media:// 图片引用 */
   async sendMarkdown({ isC2C, scopeId, msgId, markdown }) {
     const token = await this.getToken();
     const sendUrl = isC2C
@@ -3490,7 +3902,6 @@ export class QQBotDO {
   }
 
   async handleImageGen({ isC2C, scopeId, msgId, prompt, caption, userId, userContent }) {
-    // 生图：优先外部生图配置（imageGenModel 有值时）；否则用内置 CF flux（开关开启时）。
     const extModel = String(this.config.imageGenModel || '').trim();
     const useCf = !extModel && this.config.cfImageGenEnabled !== '0';
 
@@ -3522,10 +3933,12 @@ export class QQBotDO {
       let logModel = '';
 
       if (useCf) {
-        // 内置 CF flux 返回 JPEG（base64），转 data URI 直传
         const img = await cfImage(this.env, CF_MODELS.image, prompt);
         imageUrl = `data:${img.mime};base64,${toBase64(img.bytes)}`;
         logModel = `生图 · ${CF_MODELS.image}`;
+        if (img.promptUsed && img.promptUsed !== prompt) {
+          this.logger.info(`Image prompt translated: ${prompt.slice(0, 40)} -> ${img.promptUsed.slice(0, 60)}`);
+        }
       } else {
         const provider = (this.config.aiProviders || []).find(
           (p) => p && p.enabled !== 0 && p.baseUrl && p.apiKey
@@ -3710,7 +4123,7 @@ export class QQBotDO {
         when = now + QQBotDO.WS_WATCHDOG_MS;
       }
 
-      const nextDue = await nextReminderDue(this.env);
+      const nextDue = await nextReminderDue(this.env, this.botId());
       if (nextDue) {
         const at = new Date(nextDue).getTime();
         if (Number.isFinite(at)) {
@@ -3761,15 +4174,25 @@ export class QQBotDO {
     }
   }
 
-  async sendProactive({ isC2C, scopeId, content }) {
+  async sendProactive({ isC2C, scopeId, content, atUserId }) {
     const token = await this.getToken();
     const sendUrl = isC2C
       ? `${this.apiBase()}/v2/users/${scopeId}/messages`
       : `${this.apiBase()}/v2/groups/${scopeId}/messages`;
+    const text = String(content).slice(0, 1400);
+    const at = String(atUserId || '').trim();
+    // <qqbot-at-user> is a text-chain tag that ONLY gets parsed in markdown
+    // messages (msg_type=2). Inside a plain text content it leaks verbatim,
+    // which is exactly the "<qqbot-at-user id=...>" the user saw. So when we
+    // need to @ someone, send markdown instead of plain text.
+    const useMarkdown = !!at && !isC2C;
+    const body = useMarkdown
+      ? { msg_type: 2, markdown: { content: `<qqbot-at-user id="${at}" /> ${text}`.slice(0, 1500) } }
+      : { msg_type: 0, content: text };
     const res = await fetch(sendUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `QQBot ${token}` },
-      body: JSON.stringify({ msg_type: 0, content: String(content).slice(0, 1500) }),
+      body: JSON.stringify(body),
       signal: AbortSignal.timeout(10000),
     });
     const data = await res.json().catch(() => ({}));
@@ -3784,50 +4207,130 @@ export class QQBotDO {
     try {
       const st = await this.qqBotState(scopeId);
       if (st && st.allow_proactive_msg === false) {
-        return '（⚠️ 这个群还没开启「允许主动推送」，到点可能发不出来，需要在群机器人管理后台打开）';
+        return '（这个群没开主动推送，到点我会私聊发给你）';
       }
+      return '（到点会在群里 @ 你，群里推不出去就私聊）';
     } catch {}
-    return '';
+    return '（到点会提醒你，群里推不出去就私聊）';
   }
 
   async fireDueReminders() {
     if (!this.isAlive()) return;
-    const due = await dueReminders(this.env, new Date().toISOString(), 5);
+    // Scope everything to this bot: without bot_id every reminder DO would race
+    // for every other bot's reminders and send them from the wrong account.
+    const bid = this.botId();
+    const due = await dueReminders(this.env, new Date().toISOString(), 5, bid);
     for (const r of due) {
-      const claimed = await claimReminder(this.env, r.id);
+      const claimed = await claimReminder(this.env, r.id, bid);
       if (!claimed) continue;
       const isC2C = !!r.is_c2c;
-      if (!isC2C) {
-        const st = await this.qqBotState(r.scope_id).catch(() => null);
-        if (st && st.allow_proactive_msg === false) {
-          await finishReminder(this.env, r.id, false, '群未开启「允许主动推送」，去群机器人管理后台开启');
-          this.logSystem(`提醒发送失败：群未开启主动推送（${String(r.text).slice(0, 40)}）`);
-          continue;
-        }
-      }
-      const sent = await this.sendProactive({
-        isC2C,
-        scopeId: r.scope_id,
-        content: `⏰ 提醒：${r.text}`,
-      }).catch((e) => ({ ok: false, error: e.message }));
-      if (!sent.ok) {
-        await finishReminder(this.env, r.id, false, sent.error || '发送失败');
-        this.logSystem(`提醒发送失败：${String(r.text).slice(0, 40)}（${String(sent.error || '').slice(0, 80)}）`);
+      const body = `⏰ 提醒：${r.text}`;
+
+      const delivered = await this.deliverReminder(r, body);
+      if (!delivered.ok) {
+        await finishReminder(this.env, r.id, false, delivered.error || '发送失败', bid);
+        this.logSystem(`提醒发送失败：${String(r.text).slice(0, 40)}（${String(delivered.error || '').slice(0, 80)}）`);
         continue;
       }
       if (r.repeat_rule) {
         const next = nextDueFrom(r.repeat_rule, r.due_at);
         if (next) {
-          await rescheduleReminder(this.env, r.id, next);
+          await rescheduleReminder(this.env, r.id, next, bid);
           this.logSystem(`重复提醒已顺延：${String(r.text).slice(0, 60)} → ${next}`);
         } else {
-          await finishReminder(this.env, r.id, true, null);
+          await finishReminder(this.env, r.id, true, null, bid);
         }
       } else {
-        await finishReminder(this.env, r.id, true, null);
-        this.logSystem(`提醒已发送：${String(r.text).slice(0, 60)}`);
+        await finishReminder(this.env, r.id, true, null, bid);
+        this.logSystem(`提醒已发送（${delivered.via}）：${String(r.text).slice(0, 60)}`);
       }
     }
+  }
+
+  // Delivery order:
+  //   1. as-is (C2C reminder -> C2C; group reminder -> group proactive)
+  //   2. if the group proactive push is refused, fall back to a private message
+  // The group push only works when the group owner enabled the proactive switch,
+  // so try it first and degrade gracefully.
+  async deliverReminder(r, body) {
+    const isC2C = !!r.is_c2c;
+    if (isC2C) {
+      const sent = await this.sendProactive({ isC2C: true, scopeId: r.scope_id, content: body })
+        .catch((e) => ({ ok: false, error: e.message }));
+      return sent.ok ? { ok: true, via: '单聊' } : { ok: false, error: sent.error };
+    }
+
+    // Group reminder: try the group first.
+    const state = await this.qqBotState(r.scope_id).catch(() => null);
+    const groupAllowed = !(state && state.allow_proactive_msg === false);
+    const owner = this.reminderOwnerOpenid(r.scope_key);
+    if (groupAllowed) {
+      const sent = await this.sendProactive({
+        isC2C: false,
+        scopeId: r.scope_id,
+        content: body,
+        atUserId: owner,
+      }).catch((e) => ({ ok: false, error: e.message }));
+      if (sent.ok) {
+        await this.recordGroupCtx(r.scope_id, { userId: '', content: body, bot: true, mentioned: false });
+        return { ok: true, via: '群主动推送' };
+      }
+      this.logger.warn(`Group proactive failed, falling back to C2C: ${sent.error}`);
+    }
+
+    // Fall back to a private message to whoever created the reminder.
+    if (!owner) {
+      return { ok: false, error: '群主动推送不可用，且找不到发起者 openid 用于私聊兜底' };
+    }
+    const sent = await this.sendProactive({ isC2C: true, scopeId: owner, content: body })
+      .catch((e) => ({ ok: false, error: e.message }));
+    if (!sent.ok) return { ok: false, error: sent.error };
+    // Keep the private reminder in the user's chat history so follow-up
+    await this.rememberReminderInChat(owner, body);
+    return { ok: true, via: '私聊兜底' };
+  }
+
+  // Write the reminder into the C2C conversation so the AI has it later.
+  async rememberReminderInChat(openid, body) {
+    const key = `c2c:${openid}`;
+    try {
+      const chatDoNs = this.env && (this.env.CHAT || this.env.AI_WORKER);
+      if (chatDoNs && typeof chatDoNs.idFromName === 'function') {
+        const stub = chatDoNs.get(chatDoNs.idFromName(key));
+        const res = await stub.fetch('https://ai-do/record', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            key,
+            assistant: body,
+            historyLimit: Number(this.config.historyLimit) || 10,
+            providers: [],
+          }),
+        });
+        if (res.ok) return;
+      }
+      // No ChatDO binding: fall back to the in-memory session history.
+      const session = await this.loadSession(key);
+      if (session && Array.isArray(session.history)) {
+        session.history.push({ role: 'assistant', content: body });
+        if (session.history.length > 41) {
+          session.history = [session.history[0]].concat(session.history.slice(-40));
+        }
+        await this.saveSession(key, session);
+      }
+    } catch (e) {
+      this.logger.warn(`rememberReminderInChat failed: ${e.message}`);
+    }
+  }
+
+  // scope_key looks like "group:<groupId>:u:<userOpenid>" / "c2c:<openid>".
+  reminderOwnerOpenid(scopeKey) {
+    const s = String(scopeKey || '');
+    const m = /^group:[^:]+:u:([^:]+)$/.exec(s);
+    if (m) return m[1];
+    const c = /^c2c:(.+)$/.exec(s);
+    if (c) return c[1];
+    return '';
   }
 
 
@@ -3875,8 +4378,181 @@ export class QQBotDO {
     }
   }
 
+  // Member roles cache (openid -> owner/admin/member).
+  // Filled from author.member_role on every group message; the bot_state
+  // endpoint only describes the BOT's own role and may be whitelist-gated,
+  // so it must not be used to judge the requester.
+  roleKey(scopeId) {
+    return `grole:${scopeId}`;
+  }
+
+  async loadMemberRoles(scopeId) {
+    try {
+      const v = await this.state.storage.get(this.roleKey(scopeId));
+      return v && typeof v === 'object' ? v : {};
+    } catch {
+      return {};
+    }
+  }
+
+  async rememberMemberRole(scopeId, openid, role) {
+    const id = String(openid || '').trim();
+    const r = String(role || '').trim().toLowerCase();
+    if (!scopeId || !id || !r) return;
+    try {
+      const cur = await this.loadMemberRoles(scopeId);
+      if (cur[id] === r) return;
+      cur[id] = r;
+      const keys = Object.keys(cur);
+      if (keys.length > 500) {
+        for (const k of keys.slice(0, keys.length - 500)) delete cur[k];
+      }
+      await this.state.storage.put(this.roleKey(scopeId), cur);
+    } catch {}
+  }
+
+  async requesterRole(scopeId, userId) {
+    const roles = await this.loadMemberRoles(scopeId);
+    return String(roles[String(userId || '')] || '');
+  }
+
+  pendingKey(scopeId, userId) {
+    return `pending:${scopeId}:${userId}`;
+  }
+
+  async setPending(scopeId, userId, action) {
+    try {
+      await this.state.storage.put(this.pendingKey(scopeId, userId), {
+        ...action,
+        at: Date.now(),
+      });
+    } catch {}
+  }
+
+  async takePending(scopeId, userId) {
+    const k = this.pendingKey(scopeId, userId);
+    try {
+      const v = await this.state.storage.get(k);
+      await this.state.storage.delete(k);
+      if (!v) return null;
+      if (Date.now() - Number(v.at || 0) > PENDING_TTL_MS) return null;
+      return v;
+    } catch {
+      return null;
+    }
+  }
+
+  async runManageTool(call, { isC2C, scopeId, msgId, userId }) {
+    const name = call.name;
+    const args = call.args || {};
+    const deny = (text) => this.sendReply({ isC2C, scopeId, content: text, msgId });
+
+    if (isC2C) return deny('群管理操作只能在群里用～');
+
+    // Gate on the REQUESTER's role. A missing role means we have never seen
+    // this person speak with a known role, so treat it as "not allowed".
+    const role = await this.requesterRole(scopeId, userId);
+    if (role !== 'owner' && role !== 'admin') {
+      this.logSystem(`拒绝群管理请求（${name}）：请求者角色=${role || '未知'}`);
+      return deny('只有群主和管理员能让我做管理操作～');
+    }
+
+    const target = String(args.memberOpenid || args.member_openid || '').trim();
+    // Never let a requester moderate someone at or above their own level.
+    const targetRole = target ? await this.requesterRole(scopeId, target) : '';
+    const isSelf = target && String(target) === String(userId);
+    if (target && (targetRole === 'owner' || isSelf)) {
+      return deny('不能对群主或自己执行这个操作～');
+    }
+    if (targetRole === 'admin' && role !== 'owner') {
+      return deny('只有群主能对管理员执行这个操作～');
+    }
+
+    if (name === 'mute_member') {
+      if (!target) return deny('要禁言谁？给我对方的 openid。');
+      const minutes = Math.max(1, Math.min(43200, Number(args.minutes) || 10));
+      const expire = new Date(Date.now() + minutes * 60000).toISOString();
+      try {
+        await this.qqMuteMembers(scopeId, [{ op: 'add', member_openid: target, mute_expire_at: expire }]);
+        this.logSystem(`AI 禁言：${target.slice(-6)} ${minutes} 分钟`);
+        return deny(`已禁言该成员 ${minutes} 分钟。`);
+      } catch (e) {
+        return deny(`禁言失败：${this.manageErrorHint(e)}`);
+      }
+    }
+
+    if (name === 'unmute_member') {
+      if (!target) return deny('要解除谁的禁言？给我对方的 openid。');
+      try {
+        await this.qqMuteMembers(scopeId, [{ op: 'del', member_openid: target, mute_expire_at: '' }]);
+        this.logSystem(`AI 解除禁言：${target.slice(-6)}`);
+        return deny('已解除该成员的禁言。');
+      } catch (e) {
+        return deny(`解除禁言失败：${this.manageErrorHint(e)}`);
+      }
+    }
+
+    if (name === 'join_approve') {
+      if (!target) return deny('要审批谁的入群申请？给我对方的 openid。');
+      const approve = String(args.approve || 'approve') === 'approve';
+      try {
+        await this.approvalJoinRequest(scopeId, target, approve
+          ? { approve: true }
+          : { approve: false, reason: String(args.reason || '').slice(0, 60) || undefined });
+        this.logSystem(`AI 入群审批：${target.slice(-6)} -> ${approve ? '通过' : '拒绝'}`);
+        return deny(approve ? '已通过该入群申请。' : '已拒绝该入群申请。');
+      } catch (e) {
+        return deny(`审批失败：${this.manageErrorHint(e)}`);
+      }
+    }
+
+    // Irreversible actions need an explicit second confirmation.
+    if (name === 'kick_member') {
+      if (!target) return deny('要移出谁？给我对方的 openid。');
+      await this.setPending(scopeId, userId, { kind: 'kick', target });
+      return deny(`要把该成员移出群聊（${target.slice(-6)}），这个操作不可撤销。回复「确认」我再执行。`);
+    }
+
+    return deny(`不认识管理操作「${name}」`);
+  }
+
+  manageErrorHint(e) {
+    const code = e && e.qqCode;
+    if (code === 11703) return '我不是这个群的管理员';
+    if (code === 40103004) return '不能对群主/管理员/机器人执行这个操作';
+    if (code === 11253) return '这项是平台内邀能力，需要申请白名单';
+    return String((e && e.message) || e).slice(0, 80);
+  }
+
+  // Execute a previously confirmed dangerous action.
+  async confirmPendingManage({ isC2C, scopeId, msgId, userId }) {
+    if (isC2C || !scopeId || !userId) return null;
+    const pending = await this.takePending(scopeId, userId);
+    if (!pending) return null;
+    const role = await this.requesterRole(scopeId, userId);
+    if (role !== 'owner' && role !== 'admin') {
+      await this.sendReply({ isC2C, scopeId, content: '只有群主和管理员能让我做管理操作～', msgId });
+      return true;
+    }
+    try {
+      if (pending.kind === 'kick') {
+        await this.batchRemoveMembers(scopeId, [pending.target], false);
+        this.logSystem(`AI 移出成员：${String(pending.target).slice(-6)}`);
+        await this.sendReply({ isC2C, scopeId, content: '已把该成员移出群聊。', msgId });
+      }
+    } catch (e) {
+      await this.sendReply({ isC2C, scopeId, content: `执行失败：${this.manageErrorHint(e)}`, msgId });
+    }
+    return true;
+  }
+
   async runTool(call, { isC2C, scopeId, key, msgId, userId, userContent, useAiDo }) {
     const name = call.name;
+    // Group management tools are privileged: the bot being an admin is not
+    // enough, the requester must also be the group owner or an admin.
+    if (MANAGE_TOOLS.has(name)) {
+      return this.runManageTool(call, { isC2C, scopeId, msgId, userId });
+    }
     if (name === 'sandbox') {
       const task = String(call.args.task || '').trim();
       if (!task) return this.sendReply({ isC2C, scopeId, content: '要做什么？给我一句任务描述吧～', msgId });
@@ -3901,9 +4577,11 @@ export class QQBotDO {
           await this.rememberSandboxFact({ key, task, isC2C, scopeId, userId, useAiDo });
         } catch (e) {
           this.logger.warn(`sandbox background failed: ${e.message}`);
-          try {
-            await this.sendReply({ isC2C, scopeId, content: `工作区执行失败：${e.message.slice(0, 80)}` });
-          } catch {
+          if (isC2C && msgId) {
+            try {
+              await this.sendReply({ isC2C, scopeId, content: `工作区执行失败：${e.message.slice(0, 80)}`, msgId });
+            } catch {
+            }
           }
         } finally {
           this.sandboxRunning = Math.max(0, (this.sandboxRunning || 1) - 1);
@@ -4013,6 +4691,7 @@ export class QQBotDO {
           dueAt: parsed.dueAt,
           text: parsed.text,
           repeatRule: parsed.repeatRule,
+          botId: this.botId(),
         });
         this.logSystem(`新增定时提醒（AI 工具）：${parsed.text.slice(0, 60)} @ ${parsed.dueAt}`);
         await this.scheduleNextAlarm().catch(() => {});
@@ -4037,7 +4716,15 @@ export class QQBotDO {
       if (name === 'mute_state') {
         if (isC2C) return this.sendReply({ isC2C, scopeId, content: '这个只能在群里查～', msgId });
         const ms = await this.qqMuteState(scopeId);
-        return this.sendReply({ isC2C, scopeId, content: this.formatMuteState(ms), msgId });
+        await this.rememberMemberNames(
+          scopeId,
+          (Array.isArray(ms && ms.members) ? ms.members : []).map((m) => ({
+            openid: m.member_openid,
+            nick: m.username,
+          }))
+        );
+        const names = await this.loadMemberNames(scopeId);
+        return this.sendReply({ isC2C, scopeId, content: this.formatMuteState(ms, names), msgId });
       }
       return this.sendReply({ isC2C, scopeId, content: `我不认识工具「${name}」`, msgId });
     } catch (e) {
@@ -4075,7 +4762,7 @@ export class QQBotDO {
     return lines.join('\n');
   }
 
-  formatMuteState(ms) {
+  formatMuteState(ms, names) {
     const mode = ms && ms.global_rule ? ms.global_rule.mode : 'none';
     const modeTxt = mode === 'always' ? '全员禁言中' : mode === 'schedule' ? '定时/周期禁言' : '未开启全员禁言';
     const members = Array.isArray(ms && ms.members) ? ms.members : [];
@@ -4086,7 +4773,8 @@ export class QQBotDO {
         const until = m.mute_expire_at
           ? new Date(m.mute_expire_at).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })
           : '—';
-        lines.push(`· ${m.username || '(无昵称)'} 到 ${until}`);
+        const nick = m.username || (names && names[m.member_openid]) || '(无昵称)';
+        lines.push(`· ${nick} 到 ${until}`);
       }
     } else {
       lines.push('当前没有成员被禁言');
