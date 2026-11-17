@@ -1,21 +1,9 @@
-// Cloudflare Workers AI helpers.
-// Unlike external OpenAI-compatible endpoints (which we call over fetch),
-// built-in CF models run through the env.AI binding. env.AI.run() resolves to
-// the same object the REST API puts under `result`:
-//   - chat  (qwen3):  { choices: [{ message: { content, reasoning } }], response }
-//   - image (flux):   { image: "<base64 jpeg>" }
-//   - tts   (melotts):{ audio: "<base64 wav>" }
-
 export const CF_MODELS = {
-  // Qwen 3.8 27B: vision + 262k context. Default reasoning effort is "xhigh",
-  // which is far too slow for a chat bot, so cfText pins it to "low".
   chat: '@cf/qwen/qwen3.8-27b',
   image: '@cf/black-forest-labs/flux-1-schnell',
   voice: '@cf/myshell-ai/melotts',
 };
 
-// qwen3 is a reasoning model: it spends tokens on `reasoning` before writing
-// `content`. Too small a budget leaves content null with finish_reason=length.
 const CHAT_MAX_TOKENS = 2048;
 
 function hasImageParts(messages) {
@@ -25,7 +13,6 @@ function hasImageParts(messages) {
   return false;
 }
 
-// Replace image parts with a short note so a vision failure still yields a reply.
 function stripImageParts(messages) {
   return (Array.isArray(messages) ? messages : []).map((m) => {
     if (!m || !Array.isArray(m.content)) return m;
@@ -45,7 +32,6 @@ export function cfChatProvider() {
     apiKey: '',
     temperature: '0.8',
     enabled: 1,
-    // qwen3.8-27b is a vision language model, so image messages can go to it.
     vision: '1',
   };
 }
@@ -53,14 +39,12 @@ export function cfChatProvider() {
 function extractText(out) {
   if (typeof out === 'string') return out.trim();
   if (!out || typeof out !== 'object') return '';
-  // Primary shape (verified): OpenAI-style chat completion
   const choice = Array.isArray(out.choices) ? out.choices[0] : null;
   const msg = choice && choice.message ? choice.message : null;
   if (msg) {
     const content = typeof msg.content === 'string' ? msg.content.trim() : '';
     if (content) return content;
   }
-  // Fallbacks for other CF text models
   if (typeof out.response === 'string' && out.response.trim()) return out.response.trim();
   if (out.result && typeof out.result === 'object') {
     const nested = extractText(out.result);
@@ -76,7 +60,6 @@ function extractText(out) {
   return '';
 }
 
-// Why content can still be empty: the model used the whole budget on reasoning.
 function describeEmpty(out) {
   const choice = out && Array.isArray(out.choices) ? out.choices[0] : null;
   const finish = choice ? choice.finish_reason : '';
@@ -91,28 +74,22 @@ function b64ToBytes(b64) {
   return bytes;
 }
 
-// Normalizes whatever env.AI.run returned into raw bytes.
-// Handles: base64 field, raw binary, stream, and a `result`-wrapped envelope.
 async function toBytes(out) {
   if (!out) return null;
   if (out instanceof ArrayBuffer) return new Uint8Array(out);
   if (out instanceof Uint8Array) return out;
   if (typeof out.arrayBuffer === 'function') return new Uint8Array(await out.arrayBuffer());
   if (typeof out.getReader === 'function') {
-    // ReadableStream
     return new Uint8Array(await new Response(out).arrayBuffer());
   }
   if (typeof out === 'object') {
     if (typeof out.image === 'string') return b64ToBytes(out.image);
     if (typeof out.audio === 'string') return b64ToBytes(out.audio);
-    // Some endpoints wrap everything under `result`
     if (out.result && typeof out.result === 'object') return toBytes(out.result);
   }
   return null;
 }
 
-// Text generation. `messages` is [{ role, content }]; content must be a string
-// (the built-in CF chat model is text-only, no image input).
 export async function cfText(env, model, messages, temperature) {
   const ai = env && env.AI;
   if (!ai || typeof ai.run !== 'function') {
@@ -121,11 +98,8 @@ export async function cfText(env, model, messages, temperature) {
   const t = Number(temperature);
   const inputs = {
     messages,
-    // qwen3.8 renamed this to max_completion_tokens (max_tokens is deprecated).
     max_completion_tokens: CHAT_MAX_TOKENS,
-    // The model's default reasoning effort is "xhigh", which can burn the whole
-    // budget on thinking before writing a single visible character. "low" keeps
-    // replies inside QQ's passive-reply window.
+    // 该模型默认推理强度是 xhigh，会先烧掉大量 token 再写正文，聊天场景会被 QQ 的被动回复窗口卡死
     reasoning_effort: 'low',
   };
   if (Number.isFinite(t)) inputs.temperature = t;
@@ -133,8 +107,7 @@ export async function cfText(env, model, messages, temperature) {
   try {
     out = await ai.run(model, inputs);
   } catch (err) {
-    // Vision payloads are the most version-sensitive part. If an image makes the
-    // call throw, retry once as plain text so the user still gets an answer.
+    // 图片请求被拒时退回纯文本再问一次，避免整条消息没有回复
     if (!hasImageParts(messages)) throw err;
     out = await ai.run(model, { ...inputs, messages: stripImageParts(messages) });
   }
@@ -143,8 +116,6 @@ export async function cfText(env, model, messages, temperature) {
   return text;
 }
 
-// flux-1-schnell is English-trained: a Chinese prompt produces unrelated imagery
-// So any non-ASCII prompt is translated to English first via the CF chat model.
 const HAS_CJK = /[\u3400-\u9fff\u3040-\u30ff\uac00-\ud7af]/;
 
 export async function cfTranslatePrompt(env, prompt) {
@@ -172,13 +143,10 @@ export async function cfTranslatePrompt(env, prompt) {
       .trim();
     return clean || zh;
   } catch {
-    // Translation is best-effort: a failure must not block image generation.
     return zh;
   }
 }
 
-// Image generation. Returns { bytes, mime, promptUsed }.
-// flux returns base64 JPEG in `image`; Chinese prompts are auto-translated.
 export async function cfImage(env, model, prompt) {
   const ai = env && env.AI;
   if (!ai || typeof ai.run !== 'function') {
@@ -196,8 +164,6 @@ export async function cfImage(env, model, prompt) {
   return { bytes, mime: 'image/jpeg', promptUsed: finalPrompt };
 }
 
-// Text-to-speech. Returns WAV bytes (PCM 16bit/44.1kHz/mono — NOT mp3).
-// Supported langs (verified): en, es, fr, jp, zh. Anything else returns HTTP 400.
 export const CF_TTS_LANGS = ['zh', 'en', 'es', 'fr', 'jp'];
 
 export async function cfTts(env, model, text, lang) {
@@ -215,8 +181,6 @@ export async function cfTts(env, model, text, lang) {
   return bytes;
 }
 
-// Unified chat completion: routes to env.AI for builtin CF models, otherwise
-// to the OpenAI-compatible endpoint. Returns the assistant text.
 export async function providerChat(env, provider, messages, { temperature, timeout = 90000 } = {}) {
   if (provider && provider.builtin === 'cf') {
     return cfText(env, provider.model, messages, temperature);

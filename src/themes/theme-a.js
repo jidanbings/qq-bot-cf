@@ -858,8 +858,7 @@ export const ICONS_A = {
 };
 
 export function shellA(nonce, botKey) {
-  // Every nav link is scoped to one bot: /<appId>/<page>.
-  const base = '/' + encodeURIComponent(String(botKey || 'default'));
+  const base = '/' + encodeURIComponent(String(botKey || ''));
   return `<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="icon" href="/favicon-32.png" type="image/png" sizes="32x32"><link rel="shortcut icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><meta name="robots" content="noindex"><title>QQ Bot 管理后台</title><style nonce="${nonce}">
 ${CSS_A}
 </style></head><body>

@@ -1,4 +1,3 @@
-
 export const ADMIN_JS = `
 var confirmState={el:null,resolve:null,lastFocus:null,onKey:null,finishing:false};
 
@@ -511,9 +510,6 @@ function paintStatus(s){
     var botName=curB?(curB.name||'未命名'):'机器人';
     var lab=el.querySelector('.stat-label');
     if(lab)lab.textContent=botName;
-    // Guard every child: if the card is missing its inner nodes (stale markup),
-    // a thrown error here would abort the rest of paintStatus and leave the
-    // whole page blank.
     var bv=el.querySelector('.stat-value');
     if(bv){
       bv.innerHTML=(s.running
@@ -783,7 +779,6 @@ function resetLimits(){
   }).catch(function(e){toast(e.message,'bad');}).then(function(){busy(btn,false);});
 }
 
-
 function qqDevSettingsUrl(appId){
   var id=String(appId||'').replace(/[^0-9]/g,'');
   return 'https://q.qq.com/qqbot/dashboard/manage/'+id+'?sec=dev-settings';
@@ -792,8 +787,6 @@ function qqDevSettingsUrl(appId){
 function transportCards(){
   var isWebhook=(CUR_PLATFORM_MODE==='webhook')||(CUR_PLATFORM_MODE!=='ws'&&!!(CUR_WEBHOOK_VERIFIED||CUR_LAST_EVENT_AT));
   var appId=CUR_APPID||'';
-  // Shared URL works for every bot; the per-bot URL removes all guesswork when
-  // several bots on this deployment all use Webhook.
   var webhookUrl=(location.origin||'')+'/qq/webhook';
   var ownWebhookUrl=appId?((location.origin||'')+'/'+encodeURIComponent(appId)+'/qq/webhook'):'';
   var devUrl=qqDevSettingsUrl(appId);
@@ -1004,8 +997,6 @@ function fieldHtml(f,cfg,conf){
       h+='</div>';
     }
   }else if(f.type==='select'){
-    // Custom select: a hidden native select keeps the value (collectConfig still
-    // reads its .value); the visible trigger/menu are built by selHtml() below.
     h+=selHtml(f.key,v,f.options,{narrow:f.narrow});
   }else if(f.type==='password'){
     var hasSaved=!!(f.secret&&conf[f.key]);
@@ -1020,10 +1011,6 @@ function fieldHtml(f,cfg,conf){
   return h;
 }
 
-// Reusable custom-select markup. Kept separate so every native <select> on the
-// page (config fields, menu editor "type", AI modal "model/vision", group modal
-// "mute") can render the same safe dropdown instead of the browser default.
-// opts: {narrow:bool, nativeId:'...', nativeAttrs:' name="x" data-mf="y"'}
 function selHtml(key,value,options,opts){
   opts=opts||{};
   var nativeId=opts.nativeId||('cf_'+key);
@@ -1112,11 +1099,6 @@ function renderConfig(d){
   setTopActions('');
 }
 
-// Custom select: open/close/select/keyboard/click-outside live here.
-// Safety: option text is escaped then set via textContent (never innerHTML);
-// the chosen value is stored in the hidden native select, so collectors stay unchanged.
-// bindSel(root) binds every .sel inside root (a DOM node, default document),
-// so modals and re-rendered menu rows can share the exact same component.
 var selOpenKey=null;
 var selOuterBound=false;
 
@@ -1124,12 +1106,8 @@ function bindSel(root){
   root=root||document;
   var sels=root.querySelectorAll?root.querySelectorAll('.sel'):[];
   for(var i=0;i<sels.length;i++){
-    // IIFE captures each select's own refs; without it every handler shares
-    // the loop's var and would open the last dropdown no matter what you click.
     (function(){
       var sel=sels[i];
-      // Skip already-bound selects: re-binding would stack duplicate listeners
-      // and make one click toggle open/closed twice.
       if(sel.getAttribute('data-bound'))return;
       var key=sel.getAttribute('data-key');
       var trigger=$('selt_'+key);
@@ -1139,7 +1117,6 @@ function bindSel(root){
       if(!trigger||!menu||!native||!label)return;
       sel.setAttribute('data-bound','1');
 
-      // init: show the current value's label text
       syncSelLabel(label,native,menu);
 
       trigger.addEventListener('click',function(e){
@@ -1157,7 +1134,6 @@ function bindSel(root){
           var val=this.getAttribute('data-val');
           native.value=val;
           syncSelLabel(label,native,menu);
-          // fire a native change event so markDirty / row handlers run
           if(native.dispatchEvent){
             var ev;
             try{ev=new Event('change',{bubbles:true});}catch(e2){ev=document.createEvent('Event');ev.initEvent('change',true,false);}
@@ -1168,9 +1144,6 @@ function bindSel(root){
       }
     })();
   }
-  // Click-outside close: the trigger's click calls stopPropagation, so it never
-  // reaches here; an option click selects first, then reaches here; any other
-  // click on the page just closes the open menu.
   if(!selOuterBound){
     selOuterBound=true;
     document.addEventListener('click',function(){
@@ -1196,7 +1169,6 @@ function syncSelLabel(label,native,menu){
     }
   }
   label.textContent=text;
-  // sync aria-selected
   for(var j=0;j<opts.length;j++){
     var isSel=opts[j].getAttribute('data-val')===val;
     if(isSel)opts[j].setAttribute('aria-selected','true');
@@ -1328,23 +1300,18 @@ function updateSectionStates(){
   }
 }
 
-// Multi-bot state: CUR_BOT is the bot whose config the page is editing.
 var botsState={list:[],max:5,loaded:false};
 
-// The bot is fixed by the URL: /<appId>/status means "this bot". The server
-// injects window.__DSH_BOT__ before this script runs, so every API call below is
-// automatically scoped to it and there is no way to edit the wrong bot.
 var BOT_BOOT=(typeof window!=='undefined'&&window.__DSH_BOT__)||{};
-var CUR_BOT=String(BOT_BOOT.botId||'default');
+var CUR_BOT=String(BOT_BOOT.botId||'');
 var CUR_APPID_PATH=String(BOT_BOOT.appId||'');
 
 function botQuery(){
-  return CUR_BOT&&CUR_BOT!=='default'?('?bot='+encodeURIComponent(CUR_BOT)):'';
+  return CUR_BOT?('?bot='+encodeURIComponent(CUR_BOT)):'';
 }
 
-// Console URL for a page, e.g. pagePath('config') -> /102xxxxxx/config
 function pagePath(page){
-  var key=CUR_APPID_PATH||CUR_BOT||'default';
+  var key=CUR_APPID_PATH||CUR_BOT;
   return '/'+encodeURIComponent(key)+'/'+page;
 }
 
@@ -1372,8 +1339,6 @@ function botBarHtml(){
   var name=cur?(cur.name||'未命名'):(CUR_APPID_PATH?'AppID '+CUR_APPID_PATH:'默认机器人');
   var appId=(cur&&cur.appId)||CUR_APPID_PATH||'';
   var disabled=cur&&!cur.enabled;
-  // Deliberately minimal: one line, no card chrome, so the page keeps the
-  // original 3.20.0 look. Bot management lives on /pick.
   var h='<div class="bot-line">';
   h+='<span class="bot-line-ico">'+IX.bot+'</span>';
   h+='<b>'+esc(name)+'</b>';
@@ -1449,7 +1414,6 @@ function saveBotModal(btn){
   api('POST','/api/bots',{name:name,appId:appId,secret:secret}).then(function(d){
     closeBotModal();
     toast('已添加「'+name+'」','ok');
-    // New bot has its own console URL now.
     var key=(d&&d.bot&&(d.bot.appId||d.bot.id))||id;
     location.href='/'+encodeURIComponent(key)+'/config';
   }).catch(function(e){toast(e.message,'bad');})
@@ -1458,7 +1422,7 @@ function saveBotModal(btn){
 
 function deleteBotConfirm(){
   var bot=currentBot();
-  if(!bot||bot.id==='default'){toast('默认机器人不能删除','bad');return;}
+  if(!bot){toast('找不到这个机器人','bad');return;}
   confirmDialog({
     title:'删除「'+(bot.name||'未命名')+'」？',
     message:'会同时删除它的全部配置（AppID / 提示词 / AI 模型）和会话记忆，无法恢复。',
@@ -1869,7 +1833,6 @@ function modelSelOptions(p){
   return opts;
 }
 
-// Re-render the model custom select (its options depend on the fetched model list)
 function renderModelSel(cur,models){
   var wrap=$('ai-m-model-wrap');
   if(!wrap)return;
@@ -2319,7 +2282,6 @@ function onPresetClick(e){
   openAiModal(-1,{name:p.name,url:p.url,model:p.model});
 }
 
-
 function showWorkspace(){
   stopStatusTimer();
   rendered=false;
@@ -2452,7 +2414,6 @@ function bindMenuRow(row){
 
 function menuItemHtml(it,i){
   var type=it.type||'send_message';
-  // 「form field should have id or name」「No label associated with a form field」，
   var idName='menu-'+i+'-name';
   var idType='menu-'+i+'-type';
   var idValue='menu-'+i+'-value';
@@ -2570,7 +2531,7 @@ function renderWorkspaces(sandboxes,workspaces,groupRows){
   }
 
   var c2c=[];
-  var groups={};   // groupOpenid -> { users:[...], latestAt, groupMeta }
+  var groups={};
   for(var m=0;m<items.length;m++){
     var it=items[m];
     if(it.kind==='c2c'){ c2c.push(it); continue; }
@@ -3287,7 +3248,6 @@ function copyGrpId(text){
   }
 }
 
-
 function grpInfoHtml(info,state){
   var h='<dl class="dl">';
   if(info){
@@ -3951,7 +3911,6 @@ function deleteSelectedReminders(){
 
 function route(){
   var p = String(location.pathname || '/').split('/').filter(function(x){ return x; });
-  // Console URLs are /<appId>/<page>; page may also come from the boot payload.
   var tab = p.length >= 2 ? p[1] : (BOT_BOOT.page || 'status');
   if(tab==='config')showConfig();
   else if(tab==='ai')showAi();
@@ -3996,13 +3955,10 @@ for (var ni = 0; ni < navLinks.length; ni++) {
     var href = this.getAttribute('href') || '';
     if (href.charAt(0) !== '/' || href === '/') return;
     if (href === location.pathname) return;
-    // /pick is a real page (not a console tab) — always do a full navigation.
     if (href === '/pick') return;
-    // CUR_BOT comes from the boot payload, so jumping to another bot's console
-    // must be a real navigation — a pushState swap would keep the old bot id.
     var targetBot = href.split('/').filter(Boolean)[0] || '';
     if (targetBot && targetBot !== (CUR_APPID_PATH || CUR_BOT)) {
-      return; // let the browser navigate
+      return;
     }
     ev.preventDefault();
     history.pushState(null, '', href);

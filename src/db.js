@@ -1,4 +1,3 @@
-
 import { SESSION_TTL_MS, CHAT_LOG_MAX_ROWS } from './constants.js';
 import { encryptText, decryptText, isEncrypted, keyFingerprint, maskId } from './utils/crypto.js';
 
@@ -36,9 +35,6 @@ export const CONFIG_FIELDS = {
 
 export const AI_LIST_KEY = 'aiProviders';
 export const AI_MAX_PROVIDERS = 10;
-const LEGACY_AI_KEYS = ['aiBaseUrl', 'aiApiKey', 'aiModel', 'aiTemperature'];
-const LEGACY_KEYS = [...LEGACY_AI_KEYS, 'replyAt'];
-
 const CONFIG_KEYS = Object.keys(CONFIG_FIELDS);
 const SECRET_CONFIG_KEYS = CONFIG_KEYS.filter((k) => CONFIG_FIELDS[k].secret);
 
@@ -206,8 +202,6 @@ export async function initSchema(env) {
       return { ok: true, created: false };
     }
     await env.DB.batch(SCHEMA_STATEMENTS.map((sql) => env.DB.prepare(sql)));
-    // Fresh tables already declare bot_id, but an install whose tables were
-    // created by an older version still needs the ALTER path.
     await migrateBotColumns(env).catch(() => {});
     return { ok: true, created: true };
   } catch (err) {
@@ -215,11 +209,6 @@ export async function initSchema(env) {
   }
 }
 
-// Multi-bot: chat log / groups / reminders / workspaces / sandboxes all gain a
-// bot_id column so each bot keeps its own history and workspaces. Existing rows
-// belong to the default bot, so they stay visible after upgrading.
-// Table and column names below are hardcoded literals (never user input), and
-// each statement is written out in full so no identifier is interpolated.
 const BOT_COLUMN_MIGRATIONS = [
   ['chat_log', 'SELECT bot_id FROM chat_log LIMIT 1',
     "ALTER TABLE chat_log ADD COLUMN bot_id TEXT NOT NULL DEFAULT 'default'",
@@ -249,7 +238,6 @@ async function migrateBotColumns(env) {
         await env.DB.prepare(alterSql).run();
         await env.DB.prepare(indexSql).run();
       } catch {
-        // Table may not exist yet (older install); retry on the next boot.
         return;
       }
     }
@@ -264,26 +252,22 @@ function upsertConfig(env, key, value, now) {
   ).bind(key, value, now);
 }
 
-// Multi-bot config isolation.
-// Every bot stores its own keys under "bot:<id>:<field>" in the existing config
-// table. Keys without a prefix belong to the legacy single-bot install and are
-// treated as the default bot, so upgrading never loses the current settings.
-export const DEFAULT_BOT_ID = 'default';
+// 没有「默认机器人」：每个机器人都有一行 bots 记录，配置一律存成 bot:<id>:<字段>。
+// NO_BOT 只是「没给机器人」时的哨兵值，匹配不到任何真实机器人，读出来就是空，
+// 绝不会串到别人的数据上。
+export const NO_BOT = '__no_bot__';
 export const MAX_BOTS = 5;
 const BOT_KEY_PREFIX = 'bot:';
-// Sentinel meaning "every bot" — used by key probing / recovery, not by config reads.
 const ALL_BOTS = '__all__';
 
 export function botConfigKey(botId, field) {
-  return `${BOT_KEY_PREFIX}${botId || DEFAULT_BOT_ID}:${field}`;
+  return `${BOT_KEY_PREFIX}${botId || NO_BOT}:${field}`;
 }
 
 function isBotScopedKey(key) {
   return typeof key === 'string' && key.startsWith(BOT_KEY_PREFIX);
 }
 
-// Flatten a namespaced key for "__all__" reads so probes can see every secret:
-// "bot:abc:secret" -> "secret", "bot:abc:aiProviders" -> "aiProviders".
 function stripBotPrefix(key) {
   const rest = key.slice(BOT_KEY_PREFIX.length);
   const i = rest.indexOf(':');
@@ -299,35 +283,24 @@ export async function readRawConfig(env, botId) {
     }
     return raw;
   }
-  const prefix = botConfigKey(botId || DEFAULT_BOT_ID, '');
+  const prefix = botConfigKey(botId || NO_BOT, '');
   for (const row of results || []) {
     const k = row.key;
-    if (isBotScopedKey(k)) {
-      // Only this bot's namespaced keys
-      if (k.startsWith(prefix)) raw[k.slice(prefix.length)] = row.value;
-      continue;
-    }
-    // Legacy unprefixed keys belong to the default bot
-    if ((botId || DEFAULT_BOT_ID) === DEFAULT_BOT_ID) raw[k] = row.value;
+    if (isBotScopedKey(k) && k.startsWith(prefix)) raw[k.slice(prefix.length)] = row.value;
   }
   return raw;
 }
 
 async function decryptSecrets(env, raw, botId) {
   const cfg = { ...raw };
-  const legacy = [];
-  const bid = botId || DEFAULT_BOT_ID;
+  const toSeal = [];
+  const bid = botId || NO_BOT;
   for (const key of SECRET_CONFIG_KEYS) {
     if (!cfg[key]) continue;
-    // Values that are not encrypted yet are stored as-is; re-encrypt below.
     if (!isEncrypted(cfg[key])) {
-      legacy.push(key);
+      toSeal.push(key);
       continue;
     }
-    // The storage key is the AES-GCM AAD. A pre-multi-bot install encrypted
-    // with the bare field name ("secret"), which no longer matches, so decryption
-    // legitimately fails — surface it loudly instead of silently returning empty
-    // credentials (that looked like "AppID/Secret missing" + wrong transport).
     const namespaced = botConfigKey(bid, key);
     let plaintext;
     try {
@@ -340,10 +313,10 @@ async function decryptSecrets(env, raw, botId) {
     }
     cfg[key] = plaintext;
   }
-  if (legacy.length) {
+  if (toSeal.length) {
     const now = new Date().toISOString();
     const statements = [];
-    for (const key of legacy) {
+    for (const key of toSeal) {
       const namespaced = botConfigKey(bid, key);
       statements.push(upsertConfig(env, namespaced, await encryptText(env, cfg[key], namespaced), now));
     }
@@ -367,8 +340,6 @@ function normalizeProvider(raw, index) {
   };
 }
 
-// AI model list is per-bot: each bot keeps its own providers and keys,
-// so two bots can point at different models without interfering.
 export async function readAiProviders(env, botId) {
   const storageKey = botConfigKey(botId, AI_LIST_KEY);
   let row;
@@ -413,56 +384,6 @@ export async function getAiProvider(env, id, botId) {
   return list.find((p) => p.id === id) || null;
 }
 
-async function migrateLegacyAi(env, cfg, botId) {
-  if (!cfg.aiBaseUrl && !cfg.aiApiKey && !cfg.aiModel) return;
-  let key = cfg.aiApiKey || '';
-  if (key && isEncrypted(key)) {
-    try {
-      key = await decryptText(env, key, 'aiApiKey');
-    } catch {
-      return;
-    }
-  }
-  const provider = normalizeProvider(
-    {
-      id: 'ai-legacy',
-      name: 'AI 1',
-      baseUrl: cfg.aiBaseUrl,
-      apiKey: key,
-      model: cfg.aiModel,
-      temperature: cfg.aiTemperature,
-    },
-    0
-  );
-  if (!provider.baseUrl || !provider.apiKey || !provider.model) return;
-
-  try {
-    const listKey = botConfigKey(botId, AI_LIST_KEY);
-    const sealed = await encryptText(env, JSON.stringify([provider]), listKey);
-    const now = new Date().toISOString();
-    const stmts = [upsertConfig(env, listKey, sealed, now)];
-    for (const k of LEGACY_AI_KEYS) {
-      stmts.push(env.DB.prepare('DELETE FROM config WHERE key = ?1').bind(k));
-    }
-    await env.DB.batch(stmts);
-  } catch {
-    return;
-  }
-  cfg.aiProviders = [provider];
-  for (const k of LEGACY_AI_KEYS) delete cfg[k];
-}
-
-async function dropLegacyKeys(env, cfg) {
-  const present = LEGACY_KEYS.filter((k) => Object.prototype.hasOwnProperty.call(cfg, k));
-  if (!present.length) return;
-  try {
-    await env.DB.batch(present.map((k) => env.DB.prepare('DELETE FROM config WHERE key = ?1').bind(k)));
-  } catch {
-    return;
-  }
-  for (const k of present) delete cfg[k];
-}
-
 export async function saveAiProviders(env, input, botId) {
   if (!Array.isArray(input)) return { ok: false, error: 'AI 列表必须是数组' };
   if (!input.length) return { ok: false, error: '至少保留一个 AI' };
@@ -503,15 +424,11 @@ export async function saveAiProviders(env, input, botId) {
 }
 
 export async function getConfig(env, { decrypt = true, botId } = {}) {
-  const bid = botId || DEFAULT_BOT_ID;
+  const bid = botId || NO_BOT;
   const raw = await readRawConfig(env, bid);
   if (!decrypt) return raw;
   const cfg = await decryptSecrets(env, raw, bid);
   cfg.aiProviders = await readAiProviders(env, bid);
-  if (!cfg.aiProviders.length && bid === DEFAULT_BOT_ID) await migrateLegacyAi(env, cfg, bid);
-  await dropLegacyKeys(env, cfg);
-  // "== null" misses the empty string, which is what a legacy DB stores when a
-  // flag was never explicitly set. Treat "" as unset so the default "on" holds.
   if (cfg.cfChatEnabled == null || cfg.cfChatEnabled === '') cfg.cfChatEnabled = '1';
   if (cfg.cfImageGenEnabled == null || cfg.cfImageGenEnabled === '') cfg.cfImageGenEnabled = '1';
   if (cfg.cfVoiceEnabled == null || cfg.cfVoiceEnabled === '') cfg.cfVoiceEnabled = '1';
@@ -557,19 +474,13 @@ export async function ensureKey(env) {
     return { action: 'no-db', key: provided };
   }
 
-  // Collect every encrypted secret-ish value together with the AAD that
-  // getConfig would actually use for it. Probing with a DIFFERENT AAD than the
-  // read path is what made this report "ok" while getConfig still failed,
-  // sending users to a /recover page that simply redirected home.
   const probes = [];
   for (const r of rows) {
     if (r.key === KEY_CHECK_KEY) continue;
     if (!isEncrypted(r.value)) continue;
-    const scoped = isBotScopedKey(r.key);
-    const field = scoped ? stripBotPrefix(r.key) : r.key;
+    const field = stripBotPrefix(r.key);
     if (!SECRET_CONFIG_KEYS.includes(field) && field !== AI_LIST_KEY) continue;
-    // Where the value should live, and what AAD the read path uses.
-    const botId = scoped ? r.key.slice(BOT_KEY_PREFIX.length, r.key.lastIndexOf(':')) : DEFAULT_BOT_ID;
+    const botId = r.key.slice(BOT_KEY_PREFIX.length, r.key.lastIndexOf(':'));
     probes.push({ row: r, aad: botConfigKey(botId, field) });
   }
 
@@ -581,9 +492,6 @@ export async function ensureKey(env) {
 
   if (!provided) return { action: 'missing', key: '' };
 
-  // The key is "good" only if EVERY secret decrypts with its expected AAD.
-  // A single failure means the config cannot be fully read, so the operator
-  // must be sent to /recover.
   for (const p of probes) {
     try {
       await decryptText({ CONFIG_ENC_KEY: provided }, p.row.value, p.aad);
@@ -664,7 +572,7 @@ export async function saveConfig(env, patch, botId) {
   const unknown = Object.keys(patch).filter((k) => !CONFIG_KEYS.includes(k));
   if (unknown.length) return { ok: false, error: `未知配置项: ${unknown.join(', ')}` };
 
-  const bid = botId || DEFAULT_BOT_ID;
+  const bid = botId || NO_BOT;
   const now = new Date().toISOString();
   const statements = [];
   const saved = [];
@@ -765,7 +673,7 @@ export async function addChatLog(env, entry) {  const isSystem = entry.kind === 
       String(entry.userContent ?? '').slice(0, 4000),
       String(entry.aiReply ?? '').slice(0, 4000),
       entry.model || null,
-      entry.botId || DEFAULT_BOT_ID
+      entry.botId || NO_BOT
     )
     .run();
 
@@ -781,7 +689,7 @@ export async function addChatLog(env, entry) {  const isSystem = entry.kind === 
 export async function listChatLogs(env, { page = 1, pageSize = 50, kind = '', botId } = {}) {
   const size = Math.min(Math.max(Number(pageSize) || 50, 1), 200);
   const k = kind === 'group' || kind === 'c2c' || kind === 'system' ? kind : '';
-  const bid = botId || DEFAULT_BOT_ID;
+  const bid = botId || NO_BOT;
 
   const totalRow = k
     ? await env.DB.prepare('SELECT COUNT(*) AS total FROM chat_log WHERE bot_id = ?1 AND kind = ?2').bind(bid, k).first()
@@ -837,10 +745,9 @@ export async function clearChatLogs(env) {
   return res.meta?.changes ?? 0;
 }
 
-
 export async function listConversations(env, { limit = 100, botId } = {}) {
   try {
-    const bid = botId || DEFAULT_BOT_ID;
+    const bid = botId || NO_BOT;
     const { results } = await env.DB.prepare(
       "SELECT scope_id, MAX(id) AS last_id, COUNT(*) AS n FROM chat_log " +
         "WHERE bot_id = ?1 AND kind IN ('group','c2c') GROUP BY scope_id ORDER BY last_id DESC LIMIT ?2"
@@ -877,7 +784,7 @@ export async function listConversations(env, { limit = 100, botId } = {}) {
 
 export async function getConversationMessages(env, scopeId, { before = 0, limit = 50, botId } = {}) {
   const size = Math.min(Math.max(Number(limit) || 50, 1), 100);
-  const bid = botId || DEFAULT_BOT_ID;
+  const bid = botId || NO_BOT;
   const { results } = await env.DB.prepare(
     "SELECT id, kind, scope_id, user_content, ai_reply, model, created_at FROM chat_log " +
       "WHERE bot_id = ?1 AND scope_id = ?2 AND kind IN ('group','c2c') AND id < ?3 ORDER BY id DESC LIMIT ?4"
@@ -901,7 +808,7 @@ export async function getConversationMessages(env, scopeId, { before = 0, limit 
 
 export async function systemSummary(env, botId) {
   try {
-    const bid = botId || DEFAULT_BOT_ID;
+    const bid = botId || NO_BOT;
     const { results } = await env.DB.prepare(
       "SELECT COUNT(*) AS n FROM chat_log WHERE bot_id = ?1 AND kind = 'system'"
     ).bind(bid).all();
@@ -922,7 +829,7 @@ export async function systemSummary(env, botId) {
 
 export async function getSystemMessages(env, { before = 0, limit = 50, botId } = {}) {
   const size = Math.min(Math.max(Number(limit) || 50, 1), 100);
-  const bid = botId || DEFAULT_BOT_ID;
+  const bid = botId || NO_BOT;
   const { results } = await env.DB.prepare(
     "SELECT id, user_content, created_at FROM chat_log WHERE bot_id = ?1 AND kind = 'system' AND id < ?2 ORDER BY id DESC LIMIT ?3"
   )
@@ -938,13 +845,12 @@ export async function getSystemMessages(env, { before = 0, limit = 50, botId } =
 export async function deleteConversation(env, scopeId, botId) {
   const scope = String(scopeId || '').trim();
   if (!scope) return 0;
-  const bid = botId || DEFAULT_BOT_ID;
+  const bid = botId || NO_BOT;
   const res = await env.DB.prepare(
     'DELETE FROM chat_log WHERE bot_id = ?1 AND scope_id = ?2'
   ).bind(bid, scope).run();
   return res.meta?.changes ?? 0;
 }
-
 
 export async function upsertGroup(env, openid, source, botId) {
   const id = String(openid || '').trim();
@@ -954,7 +860,7 @@ export async function upsertGroup(env, openid, source, botId) {
     'INSERT INTO groups (openid, source, added_at, last_seen, bot_id) VALUES (?1, ?2, ?3, ?3, ?4) ' +
       'ON CONFLICT(openid) DO UPDATE SET last_seen = excluded.last_seen, bot_id = excluded.bot_id'
   )
-    .bind(id, source === 'manual' ? 'manual' : 'auto', now, botId || DEFAULT_BOT_ID)
+    .bind(id, source === 'manual' ? 'manual' : 'auto', now, botId || NO_BOT)
     .run();
 }
 
@@ -962,7 +868,7 @@ export async function listGroups(env, botId) {
   try {
     const { results } = await env.DB.prepare(
       'SELECT openid, source, added_at, last_seen FROM groups WHERE bot_id = ?1 ORDER BY COALESCE(last_seen, added_at) DESC'
-    ).bind(botId || DEFAULT_BOT_ID).all();
+    ).bind(botId || NO_BOT).all();
     return results || [];
   } catch {
     return [];
@@ -973,10 +879,9 @@ export async function removeGroup(env, openid) {
   await env.DB.prepare('DELETE FROM groups WHERE openid = ?1').bind(String(openid || '').trim()).run();
 }
 
-
 export async function addReminder(env, { scopeKey, isC2C, scopeId, dueAt, text, repeatRule, botId }) {
   const now = new Date().toISOString();
-  const bid = botId || DEFAULT_BOT_ID;
+  const bid = botId || NO_BOT;
   const res = await env.DB.prepare(
     'INSERT INTO reminders (bot_id, scope_key, is_c2c, scope_id, due_at, text, repeat_rule, status, created_at) ' +
       'VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)'
@@ -998,7 +903,7 @@ export async function addReminder(env, { scopeKey, isC2C, scopeId, dueAt, text, 
 
 export async function listReminders(env, { limit = 100, botId } = {}) {
   try {
-    const bid = botId || DEFAULT_BOT_ID;
+    const bid = botId || NO_BOT;
     const { results } = await env.DB.prepare(
       "SELECT id, bot_id, scope_key, is_c2c, scope_id, due_at, text, repeat_rule, status, created_at, fired_at, last_error " +
         "FROM reminders WHERE bot_id = ?1 ORDER BY CASE status WHEN 'pending' THEN 0 ELSE 1 END, due_at ASC LIMIT ?2"
@@ -1013,7 +918,7 @@ export async function listReminders(env, { limit = 100, botId } = {}) {
 
 export async function dueReminders(env, nowIso, limit = 5, botId) {
   try {
-    const bid = botId || DEFAULT_BOT_ID;
+    const bid = botId || NO_BOT;
     const { results } = await env.DB.prepare(
       "SELECT id, bot_id, scope_key, is_c2c, scope_id, due_at, text, repeat_rule FROM reminders " +
         "WHERE bot_id = ?1 AND status = 'pending' AND due_at <= ?2 ORDER BY due_at ASC LIMIT ?3"
@@ -1028,7 +933,7 @@ export async function dueReminders(env, nowIso, limit = 5, botId) {
 
 export async function nextReminderDue(env, botId) {
   try {
-    const bid = botId || DEFAULT_BOT_ID;
+    const bid = botId || NO_BOT;
     const row = await env.DB.prepare(
       "SELECT due_at FROM reminders WHERE bot_id = ?1 AND status = 'pending' ORDER BY due_at ASC LIMIT 1"
     )
@@ -1041,7 +946,7 @@ export async function nextReminderDue(env, botId) {
 }
 
 export async function claimReminder(env, id, botId) {
-  const bid = botId || DEFAULT_BOT_ID;
+  const bid = botId || NO_BOT;
   const res = await env.DB.prepare(
     "UPDATE reminders SET status = 'sending' WHERE id = ?1 AND bot_id = ?2 AND status = 'pending'"
   )
@@ -1052,7 +957,7 @@ export async function claimReminder(env, id, botId) {
 
 export async function finishReminder(env, id, ok, error, botId) {
   const now = new Date().toISOString();
-  const bid = botId || DEFAULT_BOT_ID;
+  const bid = botId || NO_BOT;
   await env.DB.prepare(
     "UPDATE reminders SET status = ?1, fired_at = ?2, last_error = ?3 WHERE id = ?4 AND bot_id = ?5"
   )
@@ -1061,7 +966,7 @@ export async function finishReminder(env, id, ok, error, botId) {
 }
 
 export async function rescheduleReminder(env, id, nextDue, botId) {
-  const bid = botId || DEFAULT_BOT_ID;
+  const bid = botId || NO_BOT;
   await env.DB.prepare(
     "UPDATE reminders SET due_at = ?1, status = 'pending', fired_at = ?2 WHERE id = ?3 AND bot_id = ?4"
   )
@@ -1070,7 +975,7 @@ export async function rescheduleReminder(env, id, nextDue, botId) {
 }
 
 export async function cancelReminder(env, id, botId) {
-  const bid = botId || DEFAULT_BOT_ID;
+  const bid = botId || NO_BOT;
   const res = await env.DB.prepare(
     "UPDATE reminders SET status = 'cancelled' WHERE id = ?1 AND bot_id = ?2 AND status IN ('pending', 'sending')"
   )
@@ -1084,7 +989,7 @@ export async function deleteReminders(env, ids, botId) {
     .map((n) => Number(n))
     .filter((n) => Number.isInteger(n) && n > 0);
   if (!nums.length) return 0;
-  const bid = botId || DEFAULT_BOT_ID;
+  const bid = botId || NO_BOT;
   const res = await env.DB.prepare(
     `DELETE FROM reminders WHERE bot_id = ? AND id IN (${nums
       .map(() => '?')
@@ -1094,7 +999,6 @@ export async function deleteReminders(env, ids, botId) {
     .run();
   return res.meta?.changes ?? 0;
 }
-
 
 export async function listMemes(env) {
   try {
@@ -1123,7 +1027,7 @@ export async function listWorkspaces(env, botId) {
   try {
     const { results } = await env.DB.prepare(
       'SELECT scope, kind, runs, tasks, notes, last_task, updated_at FROM workspaces WHERE bot_id = ?1 ORDER BY updated_at DESC LIMIT 200'
-    ).bind(botId || DEFAULT_BOT_ID).all();
+    ).bind(botId || NO_BOT).all();
     return results || [];
   } catch {
     return [];
@@ -1139,12 +1043,9 @@ export async function deleteWorkspace(env, scope) {
   }
 }
 
-
-// Owner keys for non-default bots look like "bot:<botId>:<scope>", so the bot
-// id can be recovered without threading it through every internal call.
 export function botIdFromScope(scope) {
   const m = /^bot:([^:]+):/.exec(String(scope || ''));
-  return m ? m[1] : DEFAULT_BOT_ID;
+  return m ? m[1] : NO_BOT;
 }
 
 export async function getSandbox(env, scope, botId) {
@@ -1180,7 +1081,7 @@ export async function listSandboxes(env, botId) {
   try {
     const { results } = await env.DB.prepare(
       'SELECT scope, kind, runs, files, last_task, updated_at FROM sandboxes WHERE bot_id = ?1 ORDER BY updated_at DESC LIMIT 200'
-    ).bind(botId || DEFAULT_BOT_ID).all();
+    ).bind(botId || NO_BOT).all();
     return results || [];
   } catch {
     return [];
@@ -1195,10 +1096,6 @@ export async function deleteSandbox(env, scope) {
     return false;
   }
 }
-
-// ── Multi-bot management ──────────────────────────────────────────────
-// QQ allows at most 5 bots per individual developer account, so the same cap
-// is enforced here. Every bot keeps its own config namespace + DO instance.
 
 function normalizeBotRow(row) {
   if (!row) return null;
@@ -1273,7 +1170,6 @@ export async function createBot(env, { name, appId, secret }) {
   } catch (e) {
     return { ok: false, error: `创建失败：${e.message}` };
   }
-  // Seed this bot's own credential fields (never shares the default bot's).
   const patch = { appId: cleanAppId };
   if (secret) patch.secret = String(secret);
   const saved = await saveConfig(env, patch, id);
@@ -1303,17 +1199,13 @@ export async function updateBot(env, id, { name, enabled }) {
 export async function deleteBot(env, id) {
   const bid = String(id || '').trim();
   if (!bid) return { ok: false, error: '缺少机器人 id' };
-  if (bid === DEFAULT_BOT_ID) return { ok: false, error: '默认机器人不能删除' };
   const bot = await getBot(env, bid);
   if (!bot) return { ok: false, error: '机器人不存在' };
   try {
     await env.DB.prepare('DELETE FROM bots WHERE id = ?1').bind(bot.id).run();
-    // Remove every config key belonging to this bot so nothing leaks.
     const prefix = botConfigKey(bot.id, '');
     const stmts = [
       env.DB.prepare('DELETE FROM config WHERE key LIKE ?1').bind(`${prefix}%`),
-      // Drop this bot's data rows too. Pending reminders in particular would
-      // otherwise linger forever, since the bot's DO never runs again.
       env.DB.prepare('DELETE FROM reminders WHERE bot_id = ?1').bind(bot.id),
       env.DB.prepare('DELETE FROM chat_log WHERE bot_id = ?1').bind(bot.id),
       env.DB.prepare('DELETE FROM groups WHERE bot_id = ?1').bind(bot.id),
@@ -1321,11 +1213,9 @@ export async function deleteBot(env, id) {
       env.DB.prepare('DELETE FROM sandboxes WHERE bot_id = ?1').bind(bot.id),
     ];
     for (const st of stmts) {
-      // A fresh install may not have every table yet; skip those quietly.
       try {
         await st.run();
       } catch {
-        /* table not created yet */
       }
     }
     return { ok: true };
@@ -1334,7 +1224,6 @@ export async function deleteBot(env, id) {
   }
 }
 
-// Resolve which bot a webhook/event belongs to, by AppID.
 export async function findBotByAppId(env, appId) {
   const clean = String(appId || '').trim();
   if (!clean) return null;

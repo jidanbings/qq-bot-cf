@@ -26,7 +26,6 @@ export class ToolEngine {
     this.seq = 0;
   }
 
-
   msgUrl(ctx, withId = false) {
     const t = ctx.isC2C ? `users/${ctx.scopeId}` : `groups/${ctx.scopeId}`;
     return `${ctx.base}/v2/${t}/messages${withId && ctx.msgId ? '' : ''}`;
@@ -128,7 +127,6 @@ export class ToolEngine {
     return data.id || null;
   }
 
-
   async toolImage(ctx, args, cfg) {
     const extModel = String(cfg.imageGenModel || '').trim();
     const useCf = !extModel && cfg.cfImageGenEnabled !== '0';
@@ -179,7 +177,6 @@ export class ToolEngine {
     return { note: `已发送梗图「${row.name}」` };
   }
 
-  // Returns { bytes, mime, ext }. Built-in MeloTTS yields WAV(PCM), external yields mp3.
   async synthVoice(text, lang, cfg = {}) {
     const base = String(cfg.voiceBaseUrl || '').trim();
     const key = String(cfg.voiceApiKey || '').trim();
@@ -212,7 +209,6 @@ export class ToolEngine {
     if (!text) throw new Error('缺少要说的内容');
     const synth = await this.synthVoice(text, cfg.voiceLang || 'zh', cfg || {});
     let bytes = synth.bytes;
-    // Gain is MP3-only; skip for WAV so the file stays valid.
     const gain = Math.max(0, Math.min(12, Number(cfg.voiceGain || '6') || 0));
     if (gain > 0 && synth.ext === 'mp3') {
       try {
@@ -315,7 +311,6 @@ export class ToolEngine {
     return lines.join('\n');
   }
 
-
   async exec({ tool, args, ctx, cfg }) {
     this.seq = 0;
     const a = args && typeof args === 'object' ? args : {};
@@ -346,4 +341,3 @@ export class ToolEngine {
   }
 
 }
-

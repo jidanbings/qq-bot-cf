@@ -42,7 +42,6 @@ export const AIDO_ENV_RULES = `
 表格里不要嵌套反引号，直接写文件名。
 不要用 # 标题、不要用 ** 加粗（QQ 会原样显示星号）。`;
 
-
 function safePath(p) {
   const s = String(p || '').replace(/\\/g, '/').trim();
   if (!s || s.startsWith('/') || s.includes('..') || s.length > 120) return null;

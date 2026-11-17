@@ -1,4 +1,3 @@
-
 const PREFIX = 'enc:v1:';
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();

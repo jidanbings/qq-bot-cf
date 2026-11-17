@@ -37,7 +37,7 @@ import {
   systemSummary,
   toPublicConfig,
   upsertGroup,
-  DEFAULT_BOT_ID,
+  NO_BOT,
   MAX_BOTS,
   botConfigKey,
   listBots,
@@ -96,17 +96,16 @@ async function requireSession(request, env) {
 }
 
 function botStub(env, version, botId) {
-  // DO names are per-bot AND per-version: "bot:<botId>:<version>".
-  // A separate instance per bot keeps sessions, group context and caches apart.
-  // The default bot keeps the LEGACY name ("bot:<version>") so an existing
-  // install upgrades in place without losing sessions or group memory.
   const v = version || APP_VERSION;
-  const b = botId || DEFAULT_BOT_ID;
-  const name = b === DEFAULT_BOT_ID ? `bot:${v}` : `bot:${b}:${v}`;
+  const b = botId || NO_BOT;
+  const name = `bot:${b}:${v}`;
   return env.QQ_BOT.get(env.QQ_BOT.idFromName(name));
 }
 
 async function callBot(env, action, body, botId) {
+  if (!botId || botId === NO_BOT) {
+    throw new HttpError(400, 'bot_required', '缺少机器人标识，请先从机器人列表里选择一个');
+  }
   let res;
   try {
     const init = {
@@ -323,36 +322,35 @@ async function handleQqWebhook(request, env, ctx, hintBotId) {
   }
   const op = Number(payload && payload.op);
 
-  // op=13 is QQ's "callback URL verification" handshake.
-  // The body only carries plain_token/event_ts, but the platform DOES identify
-  // the bot through the X-Bot-Appid request header (per the official example:
-  //   headers: User-Agent:[QQBot-Callback] X-Bot-Appid:[11111111]
-  //   body: {"d":{"plain_token":"...","event_ts":"..."},"op":13}
-  // ). Signing with the default bot's secret made every additional bot fail
   let validationSecret = '';
-  let validationBotId = DEFAULT_BOT_ID;
+  let validationBotId = '';
+  let validationMiss = '';
   if (op === 13) {
-    // A per-bot callback URL (/<appId>/qq/webhook) already names the bot, so it
-    // wins over any header sniffing.
     const headerAppId = String(request.headers.get('X-Bot-Appid') || '').trim();
     try {
       let target = hintBotId ? { id: hintBotId } : null;
-      if (!target && headerAppId) {
-        target = await findBotByAppId(env, headerAppId).catch(() => null);
-        // Legacy install: the AppID lives in config rather than the bots table.
-        if (!target) {
-          const cfg = await getConfig(env, { decrypt: false, botId: DEFAULT_BOT_ID }).catch(() => ({}));
-          if (cfg && String(cfg.appId || '') === headerAppId) target = { id: DEFAULT_BOT_ID };
+      if (!target && headerAppId) target = await findBotByAppId(env, headerAppId).catch(() => null);
+      if (!target) {
+        const all = await listBots(env).catch(() => []);
+        // 只有一个机器人时它是唯一的，不算猜测；多个时必须靠专用地址或请求头
+        if (all.length === 1) target = { id: all[0].id };
+      }
+      if (!target) {
+        validationMiss = headerAppId
+          ? `AppID ${headerAppId} 未在机器人列表里`
+          : '缺少 X-Bot-Appid 请求头，且不止一个机器人';
+      } else {
+        validationBotId = target.id;
+        const raw = await readRawConfig(env, validationBotId);
+        if (raw.secret) {
+          validationSecret = await decryptText(env, raw.secret, botConfigKey(validationBotId, 'secret'));
+        } else {
+          validationMiss = `机器人 ${validationBotId} 还没填 Secret`;
         }
       }
-      if (!target) target = { id: DEFAULT_BOT_ID };
-      validationBotId = target.id;
-      const raw = await readRawConfig(env, validationBotId);
-      if (raw.secret) {
-        validationSecret = await decryptText(env, raw.secret, botConfigKey(validationBotId, 'secret'));
-      }
     } catch (err) {
-      console.error('webhook: 读取 Secret 失败:', redact(String(err && err.message ? err.message : err)));
+      validationMiss = String((err && err.message) || err);
+      console.error('webhook: 读取 Secret 失败:', redact(validationMiss));
     }
   }
 
@@ -366,7 +364,14 @@ async function handleQqWebhook(request, env, ctx, hintBotId) {
       }
     }
     if (!d || typeof d !== 'object') d = {};
-    if (!validationSecret) return jsonFail(503, 'no_secret', '尚未配置 Secret');
+    if (!validationSecret) {
+      console.warn('webhook: op=13 无法验证回调地址:', validationMiss || '没有可用的 Secret');
+      return jsonFail(
+        400,
+        'bot_unresolved',
+        validationMiss || '无法确定这个回调验证属于哪个机器人'
+      );
+    }
     try {
       const res = await qqValidationResponse(validationSecret, d);
       const markVerified = (async () => {
@@ -385,9 +390,6 @@ async function handleQqWebhook(request, env, ctx, hintBotId) {
     }
   }
 
-  // Multi-bot: every bot shares this callback URL, so figure out which bot the
-  // event belongs to by trying each bot's secret against the signature. The
-  // legacy single-bot install only has the default bot, which is tried first.
   const signature = request.headers.get('X-Signature-Ed25519') || '';
   const timestamp = request.headers.get('X-Signature-Timestamp') || '';
   const matched = await resolveBotBySignature(env, body, signature, timestamp, hintBotId);
@@ -400,11 +402,6 @@ async function handleQqWebhook(request, env, ctx, hintBotId) {
     return qqAck();
   }
 
-  // Ack QQ FIRST, then hand the event to the bot's DO in the background.
-  // Awaiting the DO before answering meant a cold or busy instance could blow
-  // past the platform's deadline (the old 2.5s abort) and drop the event —
-  // which is exactly what happens once two bots share this callback URL and the
-  // traffic doubles. waitUntil keeps the Worker alive until the forward settles.
   const forward = (async () => {
     try {
       const stub = botStub(env, undefined, matched.botId);
@@ -425,12 +422,6 @@ async function handleQqWebhook(request, env, ctx, hintBotId) {
   return qqAck();
 }
 
-// Find which bot a webhook belongs to. Returns { botId, secret } or null.
-// The DEFAULT bot is ALWAYS a candidate, even when it has no row in the bots
-// table: on an install that existed before multi-bot support, only the bots
-// created later have rows, so building the candidate list purely from `listBots`
-// silently dropped the original bot — its events then always failed with 401,
-// which is why only the newest bot appeared to work with Webhook.
 async function resolveBotBySignature(env, body, signature, timestamp, hintBotId) {
   const bots = await listBots(env).catch(() => []);
 
@@ -443,11 +434,8 @@ async function resolveBotBySignature(env, body, signature, timestamp, hintBotId)
   };
 
   if (hintBotId) {
-    // A per-bot callback URL pins the bot: verify only that one, so a bot whose
-    // AppID is on its own path can never be shadowed by another bot's secret.
     push(hintBotId);
   } else {
-    push(DEFAULT_BOT_ID);
     for (const b of bots) if (b.enabled) push(b.id);
   }
 
@@ -458,7 +446,6 @@ async function resolveBotBySignature(env, body, signature, timestamp, hintBotId)
       const raw = await readRawConfig(env, id);
       if (raw.secret) secret = await decryptText(env, raw.secret, botConfigKey(id, 'secret'));
     } catch {
-      // Unreadable secret: this bot simply cannot verify. Keep going for others.
       continue;
     }
     if (secret) candidates.push({ botId: id, secret });
@@ -477,7 +464,7 @@ async function resolveBotBySignature(env, body, signature, timestamp, hintBotId)
 }
 
 async function readPublicConfig(env, botId) {
-  const bid = botId || DEFAULT_BOT_ID;
+  const bid = botId || NO_BOT;
   const cfg = await getConfig(env, { decrypt: false, botId: bid });
   const pub = toPublicConfig(cfg);
   try {
@@ -489,6 +476,14 @@ async function readPublicConfig(env, botId) {
   return pub;
 }
 
+function requireBotId(url, body) {
+  const b = String((body && body.botId) || url.searchParams.get('bot') || '').trim();
+  if (!b || b === NO_BOT) {
+    throw new HttpError(400, 'bot_required', '缺少机器人标识，请先从机器人列表里选择一个机器人');
+  }
+  return b;
+}
+
 async function handleApi(request, env, url) {
   const path = url.pathname;
   const method = request.method;
@@ -498,9 +493,6 @@ async function handleApi(request, env, url) {
     return handleLogin(request, env, request.headers.get('cf-connecting-ip') || '0.0.0.0');
   }
 
-  // Bot management needs DELETE (remove a bot) and PATCH/PUT (rename / toggle),
-  // so those verbs must pass this gate. Every mutating verb still goes through
-  // the same-origin check below.
   const ALLOWED_METHODS = new Set(['GET', 'POST', 'DELETE', 'PATCH', 'PUT']);
   if (!ALLOWED_METHODS.has(method)) {
     throw new HttpError(405, 'method_not_allowed', `不支持的方法 ${method}`);
@@ -529,10 +521,9 @@ async function handleApi(request, env, url) {
 
     case '/api/status': {
       if (method === 'GET') {
-        const botId = url.searchParams.get('bot') || DEFAULT_BOT_ID;
+        const botId = requireBotId(url);
         const data = await callBot(env, 'status', undefined, botId);
         const dos = await doStatuses(env, data);
-        // Surface which bot this snapshot belongs to, so the UI can label it.
         const cfg = await getConfig(env, { decrypt: false, botId }).catch(() => ({}));
         return jsonResult({
           ...(data || {}),
@@ -547,12 +538,7 @@ async function handleApi(request, env, url) {
 
     case '/api/status/all': {
       if (method === 'GET') {
-        // One snapshot per bot so the status page can show every bot at once.
-        const bots = await listBots(env).catch(() => []);
-        const hasDefault = bots.some((b) => b.id === DEFAULT_BOT_ID);
-        const list = hasDefault
-          ? bots
-          : [{ id: DEFAULT_BOT_ID, name: '默认机器人', appId: '', enabled: 1, createdAt: '', updatedAt: '' }, ...bots];
+        const list = await listBots(env).catch(() => []);
         const rows = await Promise.all(
           list.map(async (bot) => {
             let st = null;
@@ -596,25 +582,25 @@ async function handleApi(request, env, url) {
 
     case '/api/debug':
       if (method === 'GET') {
-        return jsonResult(await callBot(env, 'debug', undefined, url.searchParams.get('bot') || DEFAULT_BOT_ID));
+        return jsonResult(await callBot(env, 'debug', undefined, requireBotId(url)));
       }
       break;
 
     case '/api/bot/start':
       if (method === 'POST') {
-        return jsonResult(await callBot(env, 'start', undefined, url.searchParams.get('bot') || DEFAULT_BOT_ID));
+        return jsonResult(await callBot(env, 'start', undefined, requireBotId(url)));
       }
       break;
 
     case '/api/bot/stop':
       if (method === 'POST') {
-        return jsonResult(await callBot(env, 'stop', undefined, url.searchParams.get('bot') || DEFAULT_BOT_ID));
+        return jsonResult(await callBot(env, 'stop', undefined, requireBotId(url)));
       }
       break;
 
     case '/api/bot/restart':
       if (method === 'POST') {
-        const bid = url.searchParams.get('bot') || DEFAULT_BOT_ID;
+        const bid = requireBotId(url);
         await callBot(env, 'stop', undefined, bid);
         return jsonResult(await callBot(env, 'start', undefined, bid));
       }
@@ -628,11 +614,7 @@ async function handleApi(request, env, url) {
 
     case '/api/bots': {
       if (method === 'GET') {
-        const bots = await listBots(env);
-        // Surface the legacy single-bot install as the default bot even before
-        // any bots row exists, so the UI always has something to show.
-        const hasDefault = bots.some((b) => b.id === DEFAULT_BOT_ID);
-        const list = hasDefault ? bots : [{ id: DEFAULT_BOT_ID, name: '默认机器人', appId: '', enabled: 1, createdAt: '', updatedAt: '' }, ...bots];
+        const list = await listBots(env);
         return jsonResult({ bots: list, max: MAX_BOTS });
       }
       if (method === 'POST') {
@@ -661,7 +643,7 @@ async function handleApi(request, env, url) {
     }
 
     case '/api/config': {
-      const botId = url.searchParams.get('bot') || DEFAULT_BOT_ID;
+      const botId = requireBotId(url);
       if (method === 'GET') return jsonResult(await readPublicConfig(env, botId));
       const body = await readJson(request);
       delete body.transport;
@@ -680,15 +662,12 @@ async function handleApi(request, env, url) {
       const body = await readJson(request).catch(() => ({}));
       const target = body && (body.action === 'to-ws' || body.action === 'to-webhook') ? body.action : 'detect';
       const qs = target === 'detect' ? '' : `?action=${target}`;
-      // Accept the bot from the body (what the console sends) or the query string
-      // (what every other endpoint uses). Only reading the body meant a caller
-      // that passed ?bot= silently switched the DEFAULT bot instead.
-      const botId = (body && body.botId) || url.searchParams.get('bot') || DEFAULT_BOT_ID;
+      const botId = requireBotId(url, body);
       return jsonResult(await callBot(env, `detect-platform${qs}`, undefined, botId));
     }
 
     case '/api/ai': {
-      const botId = url.searchParams.get('bot') || DEFAULT_BOT_ID;
+      const botId = requireBotId(url);
       if (method === 'GET') {
         return jsonResult({ providers: await listAiProviders(env, botId) });
       }
@@ -764,7 +743,7 @@ async function handleApi(request, env, url) {
             page: url.searchParams.get('page'),
             pageSize: url.searchParams.get('pageSize'),
             kind: url.searchParams.get('kind'),
-            botId: url.searchParams.get('bot') || DEFAULT_BOT_ID,
+            botId: requireBotId(url),
           })
         );
       }
@@ -772,7 +751,7 @@ async function handleApi(request, env, url) {
 
     case '/api/conversations':
       if (method === 'GET') {
-        const convBotId = url.searchParams.get('bot') || DEFAULT_BOT_ID;
+        const convBotId = requireBotId(url);
         return jsonResult({
           items: await listConversations(env, { limit: 100, botId: convBotId }),
           system: await systemSummary(env, convBotId),
@@ -784,7 +763,7 @@ async function handleApi(request, env, url) {
       if (method === 'GET') {
         const before = Number(url.searchParams.get('before') || 0);
         const limit = Number(url.searchParams.get('limit') || 50);
-        const smBotId = url.searchParams.get('bot') || DEFAULT_BOT_ID;
+        const smBotId = requireBotId(url);
         return jsonResult(await getSystemMessages(env, { before, limit, botId: smBotId }));
       }
       break;
@@ -797,7 +776,7 @@ async function handleApi(request, env, url) {
       }
       const before = Number(url.searchParams.get('before') || 0);
       const limit = Number(url.searchParams.get('limit') || 50);
-      const msgBotId = url.searchParams.get('bot') || DEFAULT_BOT_ID;
+      const msgBotId = requireBotId(url);
       return jsonResult(await getConversationMessages(env, scope, { before, limit, botId: msgBotId }));
     }
 
@@ -806,7 +785,7 @@ async function handleApi(request, env, url) {
       const body = await readJson(request);
       const scope = String(body?.scope || '').trim();
       if (!/^[0-9a-zA-Z_-]{1,64}$/.test(scope)) throw new HttpError(400, 'invalid_scope', '会话标识格式不对');
-      const delBotId = body?.botId || url.searchParams.get('bot') || DEFAULT_BOT_ID;
+      const delBotId = requireBotId(url, body);
       return jsonResult({ scope, deleted: await deleteConversation(env, scope, delBotId) });
     }
 
@@ -821,10 +800,9 @@ async function handleApi(request, env, url) {
       }
       break;
 
-
     case '/api/groups':
       if (method === 'GET') {
-        const groupsBotId = url.searchParams.get('bot') || DEFAULT_BOT_ID;
+        const groupsBotId = requireBotId(url);
         const rows = await listGroups(env, groupsBotId);
         const cfg = await getConfig(env, { decrypt: false, botId: groupsBotId });
         const blocked = new Set(
@@ -852,7 +830,7 @@ async function handleApi(request, env, url) {
       if (!/^[A-Za-z0-9_-]{10,128}$/.test(openid)) {
         throw new HttpError(400, 'invalid_openid', '群 openid 格式不对（应为字母数字组成的字符串）');
       }
-      await upsertGroup(env, openid, 'manual', body?.botId || DEFAULT_BOT_ID);
+      await upsertGroup(env, openid, 'manual', requireBotId(url, body));
       return jsonResult({ openid });
     }
 
@@ -871,8 +849,7 @@ async function handleApi(request, env, url) {
       const openid = String(body?.openid || '').trim();
       const enabled = body?.enabled !== 0 && body?.enabled !== '0' && body?.enabled !== false;
       if (!openid) throw new HttpError(400, 'invalid_openid', '缺少群 openid');
-      // Group reply switches belong to one bot; read and write within its scope.
-      const replyBotId = body?.botId || url.searchParams.get('bot') || DEFAULT_BOT_ID;
+      const replyBotId = requireBotId(url, body);
       const cfg = await getConfig(env, { decrypt: false, botId: replyBotId });
       const list = String(cfg.groupBlacklist || '').split(/[,，]/).map((s) => s.trim()).filter(Boolean);
       const next = enabled ? list.filter((s) => s !== openid) : [...new Set([...list, openid])];
@@ -934,7 +911,6 @@ async function handleApi(request, env, url) {
       return jsonResult({ openid, memberOpenid, op });
     }
 
-
     case '/api/media/upload': {
       if (method !== 'POST') throw new HttpError(405, 'method_not_allowed', '请使用 POST');
       const body = await readJson(request);
@@ -973,8 +949,7 @@ async function handleApi(request, env, url) {
     }
 
     case '/api/menu': {
-      // Menus belong to a specific bot on the QQ platform, so pass the id through.
-      const botId = url.searchParams.get('bot') || DEFAULT_BOT_ID;
+      const botId = requireBotId(url);
       if (method === 'GET') {
         const data = await callBot(env, 'menu', undefined, botId);
         if (!data || data.ok !== true) {
@@ -1087,7 +1062,7 @@ async function handleApi(request, env, url) {
 
     case '/api/sandboxes': {
       if (method !== 'GET') throw new HttpError(405, 'method_not_allowed', '请使用 GET');
-      const rows = await listSandboxes(env, url.searchParams.get('bot') || DEFAULT_BOT_ID);
+      const rows = await listSandboxes(env, requireBotId(url));
       const items = [];
       for (const r of rows) {
         items.push({
@@ -1126,7 +1101,6 @@ async function handleApi(request, env, url) {
       return jsonResult({ cleared: true });
     }
 
-
     case '/api/memory': {
       if (method !== 'POST') throw new HttpError(405, 'method_not_allowed', '请使用 POST');
       const body = await readJson(request);
@@ -1154,10 +1128,9 @@ async function handleApi(request, env, url) {
       return jsonResult({ cleared: true });
     }
 
-
     case '/api/workspaces': {
       if (method !== 'GET') throw new HttpError(405, 'method_not_allowed', '请使用 GET');
-      const rows = await listWorkspaces(env, url.searchParams.get('bot') || DEFAULT_BOT_ID);
+      const rows = await listWorkspaces(env, requireBotId(url));
       const items = [];
       for (const r of rows) {
         items.push({
@@ -1197,10 +1170,9 @@ async function handleApi(request, env, url) {
       return jsonResult({ cleared: true });
     }
 
-
     case '/api/reminders':
       if (method === 'GET') {
-        const remBotId = url.searchParams.get('bot') || DEFAULT_BOT_ID;
+        const remBotId = requireBotId(url);
         const rows = await listReminders(env, { limit: 200, botId: remBotId });
         const items = [];
         for (const r of rows) {
@@ -1226,7 +1198,7 @@ async function handleApi(request, env, url) {
       const body = await readJson(request);
       const id = Number(body?.id) || 0;
       if (!id) throw new HttpError(400, 'invalid_id', '缺少提醒 id');
-      const cancelBotId = body?.botId || url.searchParams.get('bot') || DEFAULT_BOT_ID;
+      const cancelBotId = requireBotId(url, body);
       const cancelled = await cancelReminder(env, id, cancelBotId);
       return jsonResult({ id, cancelled });
     }
@@ -1235,7 +1207,7 @@ async function handleApi(request, env, url) {
       if (method !== 'POST') throw new HttpError(405, 'method_not_allowed', '请使用 POST');
       const body = await readJson(request);
       const ids = Array.isArray(body?.ids) ? body.ids : [Number(body?.id) || 0];
-      const delRemBotId = body?.botId || url.searchParams.get('bot') || DEFAULT_BOT_ID;
+      const delRemBotId = requireBotId(url, body);
       const deleted = await deleteReminders(env, ids, delRemBotId);
       return jsonResult({ deleted });
     }
@@ -1335,19 +1307,12 @@ async function handle(request, env, ctx) {
   const url = new URL(request.url);
   const path = url.pathname;
 
-  // Webhook callback. Two shapes are accepted:
-  //   /qq/webhook            — one URL for every bot; the bot is resolved from
-  //                            the signature (and X-Bot-Appid for op=13).
-  //   /<appId>/qq/webhook    — per-bot URL; the bot is known up front, so the
-  //                            op=13 handshake cannot be ambiguous. Handy when
-  //                            several bots share this deployment.
   if (path === '/qq/webhook' || /^\/[^/]+\/qq\/webhook$/.test(path)) {
     try {
       let hintBotId;
       if (path !== '/qq/webhook') {
         const key = decodeURIComponent(path.split('/').filter(Boolean)[0] || '');
         const bot = await resolveBotByPathKey(env, key).catch(() => null);
-        // An unknown key must not fall through to some other bot.
         if (!bot) return jsonFail(404, 'not_found', '未知的机器人');
         hintBotId = bot.id;
       }
@@ -1413,10 +1378,6 @@ async function handle(request, env, ctx) {
 
   if (keyBroken) {
     if (path.startsWith('/api/')) {
-      // Do NOT leak internal crypto state to anonymous callers. Only an
-      // authenticated admin gets the actionable message; everyone else sees
-      // a generic "temporarily unavailable", which is also what a probe would
-      // expect from any misconfigured deployment.
       const authed = !!(await requireSession(request, env));
       if (!authed) {
         return jsonFail(503, 'unavailable', '服务暂时不可用，请稍后再试');
@@ -1447,15 +1408,10 @@ async function handle(request, env, ctx) {
     return htmlResponse(loginPage(nonce), nonce);
   }
 
-  // Bot picker: choose which bot's console to open.
   if (path === '/pick' && request.method === 'GET') {
     if (!(await requireSession(request, env))) return redirect('/login');
     const nonce = randomHex(16);
-    const bots = await listBots(env).catch(() => []);
-    const hasDefault = bots.some((b) => b.id === DEFAULT_BOT_ID);
-    const list = hasDefault
-      ? bots
-      : [{ id: DEFAULT_BOT_ID, name: '默认机器人', appId: '', enabled: 1 }, ...bots];
+    const list = await listBots(env).catch(() => []);
     const rows = await Promise.all(
       list.map(async (b) => {
         const cfg = await getConfig(env, { decrypt: false, botId: b.id }).catch(() => ({}));
@@ -1467,15 +1423,9 @@ async function handle(request, env, ctx) {
         };
       })
     );
-    // Always render the picker. It used to bounce straight into the console when
-    // the click went /pick -> 302 -> /<appId>/status, i.e. right back in.
-    // The picker is a real management page now (add / delete), so it always shows.
     return htmlResponse(botPickPage(nonce, rows), nonce);
   }
 
-  // Per-bot console: /<appId>/<page>, e.g. /102xxxxxx/config
-  // Must never capture /api/... — "api" would look like a bot key and "config"
-  // like a page, turning API calls into HTML pages.
   const ADMIN_PATHS = new Set(['status', 'config', 'ai', 'groups', 'workspace', 'logs']);
   const segs = path.split('/').filter(Boolean);
   const isApiPath = segs.length > 0 && segs[0] === 'api';
@@ -1488,7 +1438,6 @@ async function handle(request, env, ctx) {
     return htmlResponse(adminPage(nonce, { botId: bot.id, appId: key, page: segs[1] }), nonce);
   }
 
-  // Old flat paths: send users to the picker (or straight to their only bot).
   if (!isApiPath && request.method === 'GET' && segs.length === 1 && ADMIN_PATHS.has(segs[0])) {
     if (!(await requireSession(request, env))) return redirect('/login');
     return redirect('/pick');
@@ -1501,28 +1450,13 @@ async function handle(request, env, ctx) {
   return handleApi(request, env, url);
 }
 
-// The console URL carries the bot's QQ AppID (what the user recognises), but a
-// bot may not have one yet, so "default" is also accepted as a fallback key.
-// Returns null when the key matches nothing — callers must then redirect to
-// /pick rather than silently opening some other bot.
 async function resolveBotByPathKey(env, key) {
   const k = String(key || '').trim();
   if (!k) return null;
-  // The key is a dynamic URL segment. Everything here is looked up by value (so
-  // it cannot be injected), but reject odd shapes early: no separator, no dot
-  // sequences, bounded length. Only [A-Za-z0-9_-] is ever a real AppID/id.
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(k)) return null;
-  if (k === DEFAULT_BOT_ID) return { id: DEFAULT_BOT_ID };
   const byAppId = await findBotByAppId(env, k).catch(() => null);
   if (byAppId) return byAppId;
-  const byId = await getBot(env, k).catch(() => null);
-  if (byId) return byId;
-  // Legacy single-bot install: the AppID lives in the config row, not in the
-  // bots table, so match it there too — otherwise an existing install could not
-  // open its own console after upgrading.
-  const cfg = await getConfig(env, { decrypt: false, botId: DEFAULT_BOT_ID }).catch(() => ({}));
-  if (cfg && String(cfg.appId || '') === k) return { id: DEFAULT_BOT_ID };
-  return null;
+  return (await getBot(env, k).catch(() => null)) || null;
 }
 
 export default {

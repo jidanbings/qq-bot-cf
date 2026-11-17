@@ -1,4 +1,3 @@
-
 const SEED_SIZE = 32;
 
 const PKCS8_PREFIX = new Uint8Array([

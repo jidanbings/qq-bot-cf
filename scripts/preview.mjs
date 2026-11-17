@@ -200,11 +200,11 @@ const DEMO_LOGS = Array.from({ length: 23 }, (_, i) => {
 
 function demoApi(pathname, search) {
   if (pathname === '/api/bots') {
-    const which = search.get('bot') || 'default';
+    const which = search.get('bot') || 'bot-demo1';
     if (process.env.PREVIEW_EMPTY === '1') return { bots: [], max: 5 };
     return {
       bots: [
-        { id: 'default', name: '默认机器人', appId: '102xxxxxx', enabled: 1, createdAt: '', updatedAt: '' },
+        { id: 'bot-demo1', name: '默认机器人', appId: '102xxxxxx', enabled: 1, createdAt: '', updatedAt: '' },
         { id: 'bot-demo2', name: '客服机器人', appId: '103xxxxxx', enabled: 1, createdAt: '', updatedAt: '' },
         { id: 'bot-demo3', name: '测试机器人', appId: '104xxxxxx', enabled: 0, createdAt: '', updatedAt: '' },
       ],
@@ -217,7 +217,7 @@ function demoApi(pathname, search) {
       max: 5,
       bots: [
         {
-          id: 'default', name: '默认机器人', enabled: true, appId: '102xxxxxx',
+          id: 'bot-demo1', name: '默认机器人', enabled: true, appId: '102xxxxxx',
           transport: 'webhook', platformMode: 'webhook', running: true, desiredRunning: true,
           qqReady: true, aiReady: true, aiCount: 2, aiModel: 'gpt-4o-mini',
           wsState: null, sessionCount: 3, tokenValid: true, tokenExpiry: Date.now() + 2400000,
@@ -244,7 +244,7 @@ function demoApi(pathname, search) {
     };
   }
   if (pathname === '/api/status') {
-    const which = search.get('bot') || 'default';
+    const which = search.get('bot') || 'bot-demo1';
     const names = { default: '102xxxxxx', 'bot-demo2': '103xxxxxx', 'bot-demo3': '104xxxxxx' };
     const prompts = { default: '默认人设', 'bot-demo2': '客服人设', 'bot-demo3': '测试人设' };
     return {
@@ -256,7 +256,7 @@ function demoApi(pathname, search) {
     };
   }
   if (pathname === '/api/config') {
-    const which = search.get('bot') || 'default';
+    const which = search.get('bot') || 'bot-demo1';
     const config = { ...DEMO_CONFIG };
     config.secret = '';
     // 不同机器人给不同数据，方便肉眼确认切换生效
@@ -272,7 +272,7 @@ function demoApi(pathname, search) {
     return { config, configured: { secret: true, imageGenApiKey: false, voiceApiKey: false } };
   }
   if (pathname === '/api/ai') {
-    const which = search.get('bot') || 'default';
+    const which = search.get('bot') || 'bot-demo1';
     // AI 模型按机器人隔离：每个机器人返回自己那套，方便肉眼确认切换生效。
     if (which === 'bot-demo2') {
       return {
@@ -825,7 +825,7 @@ createServer((req, res) => {
     const nonce = randomHex(16);
     // PREVIEW_EMPTY=1 时返回空列表，用于查看「一个机器人都没有」的页面。
     const bots = process.env.PREVIEW_EMPTY === '1' ? [] : [
-      { id: 'default', name: '默认机器人', appId: '102xxxxxx', enabled: true },
+      { id: 'bot-demo1', name: '默认机器人', appId: '102xxxxxx', enabled: true },
       { id: 'bot-demo2', name: '客服机器人', appId: '103xxxxxx', enabled: true },
       { id: 'bot-demo3', name: '测试机器人', appId: '104xxxxxx', enabled: false },
     ];
@@ -846,11 +846,9 @@ createServer((req, res) => {
       res.end();
       return;
     }
-    const APPID_TO_ID = { '102xxxxxx': 'default', '103xxxxxx': 'bot-demo2', '104xxxxxx': 'bot-demo3' };
+    const APPID_TO_ID = { '102xxxxxx': 'bot-demo1', '103xxxxxx': 'bot-demo2', '104xxxxxx': 'bot-demo3' };
     const key = decodeURIComponent(segs[0]);
-    // Mirror the worker: an unknown key must NOT fall through to some other
-    // bot. Accept "default" or a known AppID, otherwise send them to /pick.
-    const botId = APPID_TO_ID[key] || (key === 'default' ? 'default' : '');
+    const botId = APPID_TO_ID[key] || '';
     if (!botId) {
       res.writeHead(302, { Location: '/pick' });
       res.end();

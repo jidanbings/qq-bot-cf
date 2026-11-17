@@ -1,4 +1,3 @@
-
 import { ADMIN_JS } from './themes/admin-core.js';
 import { HOME_CSS } from './themes/home-css.js';
 import { LOGIN_CSS } from './themes/login-css.js';
@@ -111,16 +110,23 @@ function adminAddress(reqUrl) {
 
 const FEATURES = [
   {
-    icon: CHAT_ICON,
-    title: '群聊与单聊都能接',
-    desc: '群里 @ 机器人、或者私聊它都行。每个会话独立保留上下文，按会话串行处理，同一句话不会被并发答两遍。',
-    tags: ['GROUP_AT_MESSAGE', 'C2C_MESSAGE', 'msg_id 去重'],
+    icon: ROBOT_ICON,
+    title: '一台部署，管 5 个机器人',
+    desc: 'QQ 个人开发者最多能建 5 个机器人，这里一次全管。每个机器人有独立的 AppID / 人设提示词 / AI 模型 / 对话记忆 / 工作区 / 定时提醒，后台按 URL 区分，<b>点进去就是它自己的后台</b>，物理上不可能改错人；任何一个都能删，删光再重建也没问题。',
+    tags: ['最多 5 个', '配置全隔离', '独立控制台', '可随时删'],
+    wide: true,
   },
   {
     icon: CUBE_ICON,
-    title: '多个 AI 轮着用',
-    desc: '后台「AI 模型」里可以加多套 Base URL / Key / 模型，按顺序排优先级，前一个超时或报错就自动切下一个。调用跑在独立的 ChatDO 里，慢请求（带图最长 180 秒）不会卡住事件分发。',
-    tags: ['多套配置', '自动切换', '/chat/completions'],
+    title: '内置 AI，开箱即用',
+    desc: '默认对话模型是 Cloudflare 上的 <b>Qwen 3.8 27B</b>：262K 上下文、能看图，<b>不需要任何 API Key</b>，走账号额度就能聊。想换更强的模型，再按顺序叠加自己的 Base URL / Key 即可，前一个超时或报错会自动切下一个。',
+    tags: ['免 Key', '262K 上下文', '支持识图', '可叠加外部模型'],
+  },
+  {
+    icon: CHAT_ICON,
+    title: '群聊与单聊都能接',
+    desc: '群里 @ 机器人、或者私聊它都行。每个会话独立保留上下文，按会话串行处理，同一句话不会被并发答两遍。只有真正 @ 到它才会接话——群友互相 @ 不会插嘴。',
+    tags: ['GROUP_AT_MESSAGE', 'C2C_MESSAGE', 'msg_id 去重'],
   },
   {
     icon: BELL_ICON,
@@ -143,31 +149,31 @@ const FEATURES = [
   {
     icon: MIC_ICON,
     title: '语音消息，免 Key',
-    desc: '用 Cloudflare Workers AI 的 MeloTTS 合成语音，不需要额外买 TTS 服务：/语音 你好呀 直接发语音条，AI 也会在合适时用语音回你。音量还能增益 +6 / +9dB。',
+    desc: '用 Cloudflare Workers AI 的 MeloTTS 合成语音，不需要额外买 TTS 服务：/语音 你好呀 直接发语音条，AI 也会在合适时用语音回你。也可以接外部 TTS 服务，那才支持 +6 / +9dB 音量增益。',
     tags: ['MeloTTS', 'Workers AI', '免 Key', '音量增益'],
+  },
+  {
+    icon: DB_ICON,
+    title: '分层记忆，忘不掉也不烧钱',
+    desc: '三层结构：最近 N 条原文逐字保真、滚动摘要覆盖中期脉络、长期事实记住你是谁。每 20 条才压缩一次；原文全丢时仍能靠长期事实答出你的名字、城市、技术栈和做过的事。',
+    tags: ['短期原文', '滚动摘要 ≤2 万字', '长期事实 ≤40 条', '每 20 条压缩'],
   },
   {
     icon: LIFE_ICON,
     title: '两种接法，按需选',
-    desc: 'Webhook 走 HTTP 回调，处理完就休眠、空闲不计费；WebSocket 走网关长连接，配好 AppID / Secret 即可用。后台会跟随 QQ 平台的设置自动切换，不用手动改。',
+    desc: 'Webhook 走 HTTP 回调，处理完就休眠、空闲不计费；WebSocket 走网关长连接，配好 AppID / Secret 即可用。多个机器人同时用 Webhook 时，可以共用一个回调地址（按签名自动认出是谁），也可以给每个机器人填它自己的 /<AppID>/qq/webhook。',
     steps: [
-      ['1', 'Webhook', 'QQ 直接 POST 到 /qq/webhook，Ed25519 验签，处理完即休眠'],
+      ['1', 'Webhook', 'QQ 直接 POST 到回调地址，Ed25519 验签，处理完即休眠'],
       ['2', 'WebSocket', '出站连网关，断线走 RESUME 续会话、漏掉的事件由网关补发'],
       ['3', '自动跟随', '收到推送即判定为 Webhook；改回长连接后一键同步'],
     ],
     wide: true,
   },
   {
-    icon: DB_ICON,
-    title: '分层记忆，忘不掉也不烧钱',
-    desc: '三层结构：最近 N 条原文逐字保真、滚动摘要覆盖中期脉络、长期事实记住你是谁。每 20 条才压缩一次；原文全丢时仍能靠长期事实答出你的名字、城市、技术栈和做过的事。',
-    tags: ['短期原文', '滚动摘要 ≤1500 字', '长期事实 ≤40 条', '每 20 条压缩'],
-  },
-  {
     icon: SHIELD_ICON,
-    title: '密钥加密存储',
-    desc: '机器人 Secret 与 AI Key 以 AES-256-GCM 加密后落库，主密钥只存在 Worker Secret 里，后台永不回显明文。',
-    tags: ['AES-256-GCM', 'enc:v1', '不回显'],
+    title: '安全该做的都做了',
+    desc: '机器人 Secret 与 AI Key 以 AES-256-GCM 加密后落库，主密钥只存在 Worker Secret 里，后台永不回显明文；群黑名单、敏感词、登录与接口限流各管一段，刷屏和探测进不到 AI 那一层。',
+    tags: ['AES-256-GCM', '不回显明文', '黑名单 / 敏感词', '接口限流'],
   },
   {
     icon: IMAGE_ICON,
@@ -192,12 +198,6 @@ const FEATURES = [
     title: '官方小功能都接齐了',
     desc: 'Markdown 排版回复、图片上传转存后发送、/撤回 指令、入群欢迎语、/菜单 按钮面板——都是官方文档里的正经接口，后台一键开关。',
     tags: ['Markdown', '/撤回', '入群欢迎', '/菜单'],
-  },
-  {
-    icon: GAUGE_ICON,
-    title: '该拒的会拒',
-    desc: '群黑名单、敏感词、登录限流、接口限流各管一段，刷屏和探测进不到 AI 那一层。',
-    tags: ['黑名单', '敏感词', '5 次 / 15 分钟'],
   },
   {
     icon: CHAT_ICON,
@@ -283,15 +283,15 @@ ${HOME_CSS}
       <div>
         <span class="pill reveal"><span class="live"></span>Webhook / WebSocket 双模式<b>Serverless</b></span>
         <h1 class="reveal d1">把你的 QQ 号<br>变成<span class="grad">会思考的助手</span></h1>
-        <p class="lede reveal d2">接入 QQ 开放平台，在群聊与私聊中由 AI 自然作答：会画图、会发梗图、会发语音、会自己定提醒，能读你发来的文件，还会<b>分层记得住</b>你们聊过的一切。支持 Webhook 与 WebSocket 两种事件接收方式，空闲时不产生费用。<b>零服务器</b>——没有 VPS、没有 Docker、没有常驻进程；<b>零运行时依赖</b>——<code>dependencies</code> 是空的，不用装 Node、Python、Redis 或任何数据库。整个机器人就是一个 Worker、五个 Durable Object、一张 D1 表。</p>
+        <p class="lede reveal d2">接入 QQ 开放平台，在群聊与私聊中由 AI 自然作答。<b>最多 5 个机器人</b>同时管，每个都有独立的配置、记忆、工作区与定时提醒，互不串味；<b>内置 Cloudflare AI 开箱即用</b>，不用买 Key，也能叠加任意 OpenAI 兼容模型。它会画图、发梗图、发语音、自己定提醒，读得懂你发来的文件和图片。支持 Webhook 与 WebSocket 两种接法，空闲时不产生费用。<b>零服务器</b>——没有 VPS、没有 Docker、没有常驻进程；<b>零运行时依赖</b>——<code>dependencies</code> 是空的，不用装 Node、Python、Redis 或任何数据库。整个机器人就是一个 Worker、几个 Durable Object、一张 D1 表。</p>
         <div class="cta reveal d3">
           <a class="btn btn-primary" href="/login">进入管理后台${ARROW_ICON}</a>
           <a class="btn btn-ghost" href="#features">看看它能做什么</a>
         </div>
         <div class="facts reveal d4">
+          <span class="fact"><i></i>最多 5 个机器人</span>
+          <span class="fact"><i></i>内置 AI 免 Key</span>
           <span class="fact"><i></i>零服务器</span>
-          <span class="fact"><i></i>零运行时依赖</span>
-          <span class="fact"><i></i>D1 持久化</span>
         </div>
       </div>
 
@@ -308,11 +308,10 @@ ${HOME_CSS}
           </div>
           <div class="win-body">
             <div class="win-chips">
-              <span class="chip">模型<b>已选择</b></span>
-              <span class="chip">密钥<b>已加密</b></span>
+              <span class="chip">机器人<b>5 个</b></span>
+              <span class="chip">内置 AI<b>免 Key</b></span>
               <span class="chip">记忆<b>三层</b></span>
               <span class="chip">梗图<b>35 张</b></span>
-              <span class="chip">语音<b>内置 TTS</b></span>
             </div>
             <div class="chats">
               <div class="msg out">
@@ -326,7 +325,7 @@ ${HOME_CSS}
             </div>
             <div class="metrics">
               <span class="metric"><b class="ok">正常</b><span>事件接收</span></span>
-              <span class="metric"><b>35 张</b><span>内置梗图</span></span>
+              <span class="metric"><b>262K</b><span>上下文窗口</span></span>
               <span class="metric"><b>2000</b><span>聊天记录上限</span></span>
             </div>
           </div>
@@ -342,10 +341,10 @@ ${HOME_CSS}
   <!-- ------------------------------ 数据条 ------------------------------ -->
   <section class="band">
     <div class="wrap band-in">
-      <div class="cell reveal"><b>0</b><span>需要维护的服务器</span></div>
-      <div class="cell reveal d1"><b>全兼容</b><span>OpenAI Chat Completions</span></div>
+      <div class="cell reveal"><b>5 个</b><span>可同时管理的机器人</span></div>
+      <div class="cell reveal d1"><b>0 台</b><span>需要维护的服务器</span></div>
       <div class="cell reveal d2"><b>3 层</b><span>记忆结构（原文/摘要/事实）</span></div>
-      <div class="cell reveal d3"><b>35 张</b><span>内置梗图 / 表情</span></div>
+      <div class="cell reveal d3"><b>262K</b><span>内置模型上下文窗口</span></div>
     </div>
   </section>
 
@@ -385,7 +384,7 @@ ${HOME_CSS}
                 <p>Worker 主动连 <b>wss 网关</b>：HELLO 拿心跳间隔，IDENTIFY 建会话；断线用 <b>RESUME</b> 带上 session_id 与 seq 续上，漏掉的事件由网关补发，不重复消耗配额。</p>
               </div>
             </div>
-            <p class="p-note">后台「事件接入」里可以显式切换。收到 Webhook 推送即自动判定为 Webhook 模式；改回长连接后点一下按钮同步即可。</p>
+            <p class="p-note">后台「事件接入」里可以显式切换。收到 Webhook 推送才会判定为 Webhook 模式，<b>不会因为连着网关就把你选的 Webhook 改回去</b>；改回长连接后点一下按钮同步即可。多个机器人共用回调地址时按签名识别归属，也可以各填各的专用地址。</p>
           </div></div>
           <div class="fitem"><span class="fnum">02</span><div><h4>事件过滤</h4><p>按 <b>msg_id + msg_seq</b> 去重（平台会重复推送）、剥掉 @ 标记、命中群黑名单或敏感词直接丢弃。两种接入方式共用这一层，判定逻辑完全一致。</p></div></div>
           <div class="fitem"><span class="fnum">03</span><div><h4>排队与会话隔离</h4><p>同一会话串行、不同会话并行。记忆分三层存在 ChatDO 的 SQLite 里：最近 N 条原文、滚动摘要、长期事实；每 20 条才压缩一次，重启与换版本都不丢。</p></div></div>
@@ -401,7 +400,7 @@ ${HOME_CSS}
         <div class="arrow">${ARROW_DOWN}</div>
         <div class="node core"><div class="n-k">边缘</div><div class="n-v">Worker 路由</div><div class="n-d">验签 · 登录 · 会话 · 限流</div></div>
         <div class="arrow">${ARROW_DOWN}</div>
-        <div class="node"><div class="n-k">分发</div><div class="n-v">QQBotDO</div><div class="n-d">事件分发 · 消息队列 · 工具调度</div></div>
+        <div class="node"><div class="n-k">分发</div><div class="n-v">QQBotDO</div><div class="n-d">每个机器人一个实例 · 事件分发 · 队列 · 工具调度</div></div>
         <div class="arrow">${ARROW_DOWN}</div>
         <div class="split">
           <div class="node"><div class="n-v">ChatDO</div><div class="n-d">分层记忆 · 模型调用</div></div>
@@ -765,14 +764,11 @@ form.onsubmit=function(ev){
 
 export function adminPage(nonce, opts = {}) {
   const boot = {
-    botId: String(opts.botId || 'default'),
+    botId: String(opts.botId || ''),
     appId: String(opts.appId || ''),
     page: String(opts.page || 'status'),
   };
-  // Nav links must match the URL the user is on, so build the shell with it.
   const shell = shellA(nonce, boot.appId || boot.botId);
-  // The console is scoped to one bot. Inject its identity before the app script
-  // so the client never has to guess (or persist) which bot it is editing.
   const bootScript =
     '<script nonce="' + nonce + '">window.__DSH_BOT__=' +
     JSON.stringify(boot).replace(/</g, '\\u003c') +
@@ -792,7 +788,6 @@ function escapeHtml(s) {
     .replace(/'/g, '&#39;');
 }
 
-// Landing page after login: pick which bot's console to open.
 export function botPickPage(nonce, bots) {
   const list = Array.isArray(bots) ? bots : [];
   const full = list.length >= 5;
@@ -800,7 +795,6 @@ export function botPickPage(nonce, bots) {
     .map((b) => {
       const href = '/' + encodeURIComponent(b.appId || b.id) + '/status';
       const off = b.enabled ? '' : '<span class="bp-off">已停用</span>';
-      const canDel = b.id !== 'default';
       return (
         '<div class="bp-row">' +
         '<a class="bp-card" href="' + escapeHtml(href) + '">' +
@@ -808,10 +802,8 @@ export function botPickPage(nonce, bots) {
         '<span class="bp-main"><b>' + escapeHtml(b.name || '未命名') + off + '</b>' +
         '<small>' + (b.appId ? 'AppID ' + escapeHtml(b.appId) : '还没有填 AppID') + '</small></span>' +
         '<span class="bp-go">&rsaquo;</span></a>' +
-        (canDel
-          ? '<button class="bp-del" type="button" data-del="' + escapeHtml(b.id) +
-            '" data-name="' + escapeHtml(b.name || '未命名') + '" title="删除这个机器人">删除</button>'
-          : '') +
+        '<button class="bp-del" type="button" data-del="' + escapeHtml(b.id) +
+        '" data-name="' + escapeHtml(b.name || '未命名') + '" title="删除这个机器人">删除</button>' +
         '</div>'
       );
     })

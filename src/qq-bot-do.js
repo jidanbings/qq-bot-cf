@@ -9,7 +9,7 @@ import {
   nextReminderDue,
   rescheduleReminder,
   upsertGroup,
-  DEFAULT_BOT_ID,
+  NO_BOT,
 } from './db.js';
 import { parseReminder, nextDueFrom } from './utils/reminder.js';
 import { normalizeFaceTags } from './utils/qq-face.js';
@@ -46,26 +46,14 @@ const IMAGE_CAPTIONS = ['画好啦，看看喜不喜欢～', '喏，画好了 �
 const IMAGE_WAIT_LINES = ['好，我画一下，大概要一分多钟，等我～', '收到，开始画了，稍等一下下～', '在画了在画了，这个模型有点慢，等我一会儿～'];
 const MEME_CAPTIONS = ['（递上梗图）', '看图你就懂了', '这张太应景了', '来，接梗～'];
 
-// Privileged group-management tools. Both the bot AND the requester need rights.
-// Note: official POST /restrict_chat_setting only mutates member-level mutes;
-// global (all-members) mute is read-only via global_rule, so it is not exposed.
 const MANAGE_TOOLS = new Set(['mute_member', 'unmute_member', 'kick_member', 'join_approve']);
-// Tools that change the group irreversibly and therefore need a second "yes".
 const DANGER_TOOLS = new Set(['kick_member']);
-// Confirmation window for a pending dangerous action.
 const PENDING_TTL_MS = 3 * 60 * 1000;
 
 function stripMentions(text) {
   return String(text ?? '').replace(MENTION_RE, '').trim();
 }
 
-// Passive reply reference.
-// QQ allows two ways to reply without consuming the "proactive push" quota:
-//   - msg_id  : replying to a user message (valid 5min in groups, 60min in C2C)
-//   - event_id: replying to a platform event (GROUP_MEMBER_ADD etc.)
-// Anything sent WITHOUT one of these is a proactive message, which the user /
-// group owner can switch off — and doing so silently disables full-message
-// reception for the bot. So always attach whichever reference we have.
 function buildPassiveRef({ msgId, eventId, nextSeq } = {}) {
   const id = String(msgId || '').trim();
   if (id) return { msg_id: id, msg_seq: typeof nextSeq === 'function' ? nextSeq() : 1 };
@@ -74,16 +62,6 @@ function buildPassiveRef({ msgId, eventId, nextSeq } = {}) {
   return {};
 }
 
-// Did this group message mention the bot?
-// Three things can tell us, in order of reliability:
-//   1. data.mentions[] with is_you=true — the platform states it outright.
-//      This works even when we do NOT know our own openid (webhook mode never
-//      receives a gateway READY, so self openid can be unknown for a long time).
-//   2. content tag "<@our_openid>" — what QQ actually puts in GROUP_MESSAGE_CREATE.
-//   3. content tag "<qqbot-at-user id=\"our_openid\" />" — the outgoing format;
-//      tolerated in case a payload echoes it back.
-// "@all" is deliberately NOT treated as a mention: a group-wide ping should not
-// make every bot in the group answer.
 function contentMentionsBot(rawContent, selfOpenid, mentions) {
   const s = String(rawContent || '');
 
@@ -98,8 +76,6 @@ function contentMentionsBot(rawContent, selfOpenid, mentions) {
   }
 
   const self = String(selfOpenid || '').trim();
-  // Without knowing our own openid we cannot tell "@me" from "@somebody else",
-  // so report "not mentioned" rather than guessing.
   if (!self) return false;
   for (const id of [self, self.replace(/[<>\s]/g, '')]) {
     if (!id) continue;
@@ -112,7 +88,6 @@ function contentMentionsBot(rawContent, selfOpenid, mentions) {
   return false;
 }
 
-//
 const ASK_TAIL_RE = /(什么|啥|怎么|怎么样|如何|为什么|为啥|哪|哪儿|哪里|谁|多少|几点|能不能|可不可以|是不是|有没有|对不对|行不行|好不好|咋办|咋整|吗|么)[啊呀吧了呢哦嘛\s,.，。!！~～]{0,3}$/;
 const ASK_TAIL_LOOSE_RE = /(多少|几点|怎么样|怎么弄|怎么用|为什么|为啥)[\u4e00-\u9fa5]{0,3}[啊呀吧了呢哦嘛\s,.，。!！~～?？]*$/;
 const ASK_HEAD_RE = /^(请问|问下|问一下|请教|为什么|为啥|如何|怎么|什么是|什么是|谁|哪儿|哪里)/;
@@ -324,8 +299,6 @@ export class QQBotDO {
 
     try {
       const { saveConfig } = await import('./db.js');
-      // Scoped to this bot, otherwise a secondary bot would rewrite the
-      // DEFAULT bot's transport setting.
       await saveConfig(this.env, { platformMode: 'webhook', webhookVerifiedAt: String(now) }, this.botId());
       this.logger.info(`已切到 Webhook（${reason}），已同步`);
     } catch (e) {
@@ -352,8 +325,6 @@ export class QQBotDO {
 
     try {
       const { saveConfig } = await import('./db.js');
-      // Must be scoped to this bot: without botId it overwrote the DEFAULT bot's
-      // config, which is why switching to Webhook "reverted by itself".
       await saveConfig(this.env, { platformMode: 'ws', webhookVerifiedAt: '' }, this.botId());
       this.logger.info(`已切到 WebSocket（${reason}），已同步`);
     } catch (e) {
@@ -823,10 +794,6 @@ export class QQBotDO {
         }
         const credsChanged = prevCreds !== `${this.config.appId || ''}|${this.config.secret || ''}|${this.config.sandbox || ''}`;
         this.logSystem('后台修改配置，已热更新生效');
-        // A reload must NEVER write the transport mode back to 'ws'. The user's
-        // saved setting is the only source of truth; inferring 'ws' here is what
-        // silently reverted a Webhook choice. We only sync when the freshly
-        // loaded config explicitly says webhook (so running state follows it).
         if (prevTransport !== this.transportName() && this.transportName() === 'webhook') {
           this.logger.info(`传输方式变化 ${prevTransport} → webhook，走宽限期切换`);
           await this.markPlatformWebhook('配置热更新');
@@ -851,8 +818,6 @@ export class QQBotDO {
       case '/ensure': {
         const prevTransport = this.transportName();
         try { await this.loadConfig(); } catch {}
-        // Same rule as /reload: the watchdog may follow an explicit webhook
-        // setting, but must never downgrade the saved mode to 'ws' on its own.
         if (prevTransport !== this.transportName() && this.transportName() === 'webhook') {
           this.logger.info(`Watchdog: 传输方式 ${prevTransport} → webhook，走宽限期切换`);
           await this.markPlatformWebhook('看门狗检测');
@@ -901,10 +866,6 @@ export class QQBotDO {
         const aiList = (this.config.aiProviders || []).filter(
           (p) => p && p.enabled !== 0 && p.baseUrl && p.apiKey && p.model
         );
-        // The built-in Cloudflare chat model needs no Base URL / API Key, but it
-        // IS a working model. Counting only external providers made the status
-        // actually answered fine. Active model order must match chatProviders():
-        // built-in CF first, then the enabled external list.
         const cfChatOn = this.config.cfChatEnabled !== '0';
         const aiCount = aiList.length + (cfChatOn ? 1 : 0);
         const aiReady = aiCount > 0;
@@ -916,8 +877,6 @@ export class QQBotDO {
           desiredRunning: this.desiredRunning,
           transport: this.transportName(),
           platformMode: this.config.platformMode || '',
-          // Surfaced so the UI can explain WHY credentials look empty
-          // (usually an encryption-key mismatch after a redeploy).
           configError: this.configError || '',
           webhookVerifiedAt: this.config.webhookVerifiedAt ? Number(this.config.webhookVerifiedAt) : null,
           lastEventAt: this.lastEventAt || null,
@@ -982,15 +941,9 @@ export class QQBotDO {
     }
   }
 
-  // Which bot does this DO instance belong to? Workerd names the instance
-  // "bot:<botId>:<version>" for additional bots and the legacy "bot:<version>"
-  // for the default one, so the id is derived from our own name.
-  // The name lives on state.id (the first constructor arg), NOT on ctx.id —
-  // reading this.ctx silently yielded '' and every instance fell back to the
-  // default namespace, which made a configured bot look unconfigured.
   botId() {
     if (this._botId) return this._botId;
-    let id = DEFAULT_BOT_ID;
+    let id = NO_BOT;
     const candidates = [
       this.state && this.state.id && this.state.id.name,
       this.ctx && this.ctx.id && this.ctx.id.name,
@@ -998,13 +951,11 @@ export class QQBotDO {
     ];
     for (const raw of candidates) {
       if (typeof raw !== 'string' || !raw) continue;
-      const m = /^bot:(bot-[A-Za-z0-9]+):/.exec(raw);
+      const m = /^bot:([^:]+):/.exec(raw);
       if (m) {
         id = m[1];
         break;
       }
-      // A "bot:<version>" name means the legacy default instance.
-      if (/^bot:/.test(raw)) break;
     }
     this._botId = id;
     return id;
@@ -1016,9 +967,6 @@ export class QQBotDO {
       config = await getConfig(this.env, { botId: this.botId() });
       this.configError = null;
     } catch (e) {
-      // A decryption failure used to leave this.config empty, which surfaced as
-      // "credentials incomplete" plus a wrong transport on the status page.
-      // Keep the last good config and record the real reason instead.
       this.configError = String((e && e.message) || e);
       this.logger.error(`Config load failed: ${this.configError}`);
       throw e;
@@ -1398,9 +1346,6 @@ export class QQBotDO {
         this.identifyFailures = 0;
         this.lastError = null;
         this.sessionId = d?.session_id || null;
-        // Remember our own openid: full-message mode delivers @bot messages as
-        // GROUP_MESSAGE_CREATE with "<@our_openid>" inside content, so we need
-        // this to tell "was I mentioned?" without relying on the event name.
         const selfId = d?.user?.id || d?.user?.member_openid || d?.user?.user_openid || '';
         if (selfId) {
           this.selfOpenid = String(selfId);
@@ -1408,10 +1353,6 @@ export class QQBotDO {
         }
         this.logger.info(`Bot ready: ${d?.user?.username} self=${this.selfOpenid ? 'y' : 'n'} session=${this.sessionId || 'none'}`);
         this.saveGwState();
-        // Do NOT infer the platform's transport from our own gateway connection.
-        // Connecting to the gateway is something WE do; it says nothing about
-        // whether QQ is configured to push webhooks. Inferring it here is what
-        // silently reverted a user's Webhook choice back to WebSocket.
       } else if (t === 'RESUMED') {
         this.reconnectAttempt = 0;
         this.identifyFailures = 0;
@@ -1455,9 +1396,6 @@ export class QQBotDO {
       .replace(/\{member\}/g, `<qqbot-at-user id="${memberOpenid}" />`)
       .replace(/\{group\}/g, groupOpenid)
       .slice(0, 1500);
-    // GROUP_MEMBER_ADD carries an event_id, so this is a PASSIVE reply here.
-    // Sending it as a proactive message is what makes the group owner's
-    // "receive all group messages" switch flip itself off.
     const eventId = data?.event_id || data?.id || '';
     const sent = await this.sendReply({
       isC2C: false,
@@ -1691,11 +1629,7 @@ export class QQBotDO {
     const userId = isC2C ? author.user_openid : author.member_openid;
     const scopeId = isC2C ? userId : data.group_openid;
     if (!userId || !scopeId) return;
-    // Docs confirm author.username carries the nickname — cache it so group
-    // context can name people instead of showing raw openids.
     const authorName = String(author.username || '').trim().slice(0, 32);
-    // author.member_role is the authoritative role of the *sender*
-    // (member/admin/owner) — the only reliable way to gate management actions.
     const authorRole = String(author.member_role || '').trim().toLowerCase();
     if (!isC2C && authorName) {
       this.rememberMemberNames(scopeId, [{ openid: userId, nick: authorName }]).catch(() => {});
@@ -1715,8 +1649,6 @@ export class QQBotDO {
       if (this.msgIdFifo.length > 500) this.recentMsgIds.delete(this.msgIdFifo.shift());
     }
 
-    // Decide "was I mentioned?" BEFORE stripping mentions: in full-message mode
-    // the mention survives inside content as "<@our_openid>".
     const rawContent = String(data.content || '');
     const atEvent = type === 'GROUP_AT_MESSAGE_CREATE';
     const selfOpenid = await this.getSelfOpenid(isC2C ? '' : scopeId);
@@ -1724,7 +1656,6 @@ export class QQBotDO {
 
     let content = normalizeFaceTags(stripMentions(rawContent));
     if (/^@\S+\s+/.test(content)) content = content.replace(/^@\S+\s+/, '');
-    // GROUP_AT_MESSAGE_CREATE leaves a leading space after the stripped mention
     content = content.trim();
     const attachments = Array.isArray(data.attachments) ? data.attachments : [];
     let imageUrl = null;
@@ -1759,8 +1690,6 @@ export class QQBotDO {
       this.logger.warn('Group message looks like an image but no attachment url (确认是否 @ 了机器人)');
     }
     if (!content && !imageUrl && !fileAttachment) {
-      // Pure "@bot" with no words: the user is clearly calling us, so answer
-      // instead of silently dropping the event.
       if (!isC2C && mentioned) content = '在吗';
       else return;
     }
@@ -2558,14 +2487,10 @@ export class QQBotDO {
     return null;
   }
 
-
   ownerKey({ isC2C, scopeId, userId }) {
     const base = isC2C ? `c2c:${userId || scopeId}` : `group:${scopeId}:u:${userId || 'unknown'}`;
-    // Workspaces and per-user memory are namespaced by bot so two bots never
-    // share files or notes. The default bot keeps the legacy key shape so an
-    // existing install keeps its workspaces after upgrading.
-    const bid = this.botId();
-    return bid === DEFAULT_BOT_ID ? base : `bot:${bid}:${base}`;
+    // 必须带 bot 前缀，否则两个机器人的工作区、沙箱、记忆会共用同一份
+    return `bot:${this.botId()}:${base}`;
   }
 
   async recordGroupCtx(scopeId, entry) {
@@ -2645,9 +2570,6 @@ export class QQBotDO {
         return this.selfOpenid;
       }
     } catch {}
-    // Webhook mode never receives the gateway READY event, so self_openid was
-    // never stored and mention detection degraded to "any @ means me". Recover
-    // it from bot_state, which reports the BOT's own member_openid per group.
     if (groupOpenid && !this.selfOpenidProbe) {
       this.selfOpenidProbe = true;
       try {
@@ -2714,13 +2636,9 @@ export class QQBotDO {
     return lines.join('\n');
   }
 
-
-
   async execToolDo(tool, args, { isC2C, scopeId, msgId, caption, userId }) {
     const ns = this.env && (this.env.WORK || this.env.TOOL);
     if (!ns || typeof ns.idFromName !== 'function') return null;
-    // Group + no msgId means the passive window is gone. ToolEngine would then
-    // post a proactive message, which disables the group's full-message switch.
     if (!isC2C && !msgId) {
       return { ok: false, note: '被动回复窗口已过（群消息 5 分钟），不再主动发到群里' };
     }
@@ -2743,8 +2661,6 @@ export class QQBotDO {
           base: this.apiBase(),
           token,
           seqBase,
-          // Reminders created by AI tools must belong to this bot, otherwise
-          // another bot's DO would pick them up and send them.
           botId: this.botId(),
         },
         cfg: {
@@ -2934,7 +2850,6 @@ export class QQBotDO {
               const text = String(f.content || '');
               const chunks = [];
               for (let k = 0; k < text.length && chunks.length < 3; k += 1400) chunks.push(text.slice(k, k + 1400));
-              // Only send inside the passive window; never post proactively.
               if (passiveOk && msgId) {
                 for (const c of chunks) {
                   await this.sendReply({ isC2C, scopeId, content: c, msgId });
@@ -2965,8 +2880,6 @@ export class QQBotDO {
       this.logger.warn(`sandbox files NOT sent: ${out.send.join(',')}（任务耗时 ${Math.round(waitMs / 1000)}s, passive=${passiveOk}）`);
     }
     const finalText = `${out.reply}${sentNote}\n\n（沙箱：${out.steps} 步 · ${out.files} 个文件）`;
-    // Never fall back to a proactive group message: that flips off the group
-    // owner's "receive all messages" switch. C2C fallback is fine.
     const sent = await this.sendReply({ isC2C, scopeId, content: finalText, msgId });
     if (!sent && msgId && isC2C) {
       await this.sendReply({ isC2C, scopeId, content: finalText });
@@ -2980,7 +2893,6 @@ export class QQBotDO {
       model: String(out.model || '').slice(0, 128) || 'AiDO',
     });
   }
-
 
   async handleWorkspaceCommand({ isC2C, scopeId, msgId, content, userId }) {
     const ns = this.env && (this.env.WORK || this.env.WORKSPACE);
@@ -3071,7 +2983,6 @@ export class QQBotDO {
       model: String(out.model || '').slice(0, 128) || '工作区',
     });
   }
-
 
   chatDoStub(key) {
     const ns = this.env && (this.env.CHAT || this.env.AI_WORKER);
@@ -3197,9 +3108,6 @@ export class QQBotDO {
     finalContent = finalContent.slice(0, 1500);
     if (!finalContent) finalContent = '……';
 
-    // <qqbot-at-everyone> / <qqbot-at-user> are text-chain tags that only get
-    // parsed in markdown (msg_type=2). In plain text they leak verbatim, so
-    // force markdown whenever any at-tag is present anywhere in the content.
     const hasAtTag = !isC2C && /<qqbot-at-(user|everyone)\b/.test(finalContent);
     const useMarkdown = hasAtTag || (this.config.markdownReply === '1' && this.isMarkdownSafe(finalContent));
     const passive = buildPassiveRef({ msgId, eventId, nextSeq: () => this.nextMsgSeq(msgId) });
@@ -3416,7 +3324,6 @@ export class QQBotDO {
     return data.file_info;
   }
 
-
   async synthVoice(text, lang = 'zh') {
     const base = String(this.config.voiceBaseUrl || '').trim();
     const key = String(this.config.voiceApiKey || '').trim();
@@ -3489,7 +3396,6 @@ export class QQBotDO {
       return null;
     }
   }
-
 
   async downloadImageAsBase64(imageUrl) {
     if (!imageUrl) return null;
@@ -3601,8 +3507,6 @@ export class QQBotDO {
     });
   }
 
-
-
   mediaImagePrepare(meta) {
     return this.qqApi('/v2/media-images/prepare', {
       method: 'POST',
@@ -3703,7 +3607,6 @@ export class QQBotDO {
     return { imageId: done.image_id, url: done.url, ttl: done.ttl, previewUrl: done.preview_url };
   }
 
-
   menuGet() {
     return this.qqApi('/v2/menu', { method: 'GET' });
   }
@@ -3715,7 +3618,6 @@ export class QQBotDO {
       body: JSON.stringify({ menu }),
     });
   }
-
 
   joinRequestList(openid, cursor, limit) {
     const qs = new URLSearchParams();
@@ -3735,7 +3637,6 @@ export class QQBotDO {
       }
     );
   }
-
 
   batchRemoveMembers(openid, memberOpenids, addToBlacklist) {
     return this.qqApi(`/v2/groups/${openid}/batch_remove_members`, {
@@ -3764,7 +3665,6 @@ export class QQBotDO {
     });
   }
 
-  
   async consumeAtEveryone(groupOpenid) {
     const d = new Date(Date.now() + 8 * 3600 * 1000);
     const day = d.toISOString().slice(0, 10);
@@ -4027,7 +3927,6 @@ export class QQBotDO {
     }
   }
 
-
   sessionKey(key) {
     return `sess:${key}`;
   }
@@ -4109,7 +4008,6 @@ export class QQBotDO {
     await this.saveSession(key, session);
   }
 
-
   static get WS_WATCHDOG_MS() {
     return 60 * 1000;
   }
@@ -4181,10 +4079,6 @@ export class QQBotDO {
       : `${this.apiBase()}/v2/groups/${scopeId}/messages`;
     const text = String(content).slice(0, 1400);
     const at = String(atUserId || '').trim();
-    // <qqbot-at-user> is a text-chain tag that ONLY gets parsed in markdown
-    // messages (msg_type=2). Inside a plain text content it leaks verbatim,
-    // which is exactly the "<qqbot-at-user id=...>" the user saw. So when we
-    // need to @ someone, send markdown instead of plain text.
     const useMarkdown = !!at && !isC2C;
     const body = useMarkdown
       ? { msg_type: 2, markdown: { content: `<qqbot-at-user id="${at}" /> ${text}`.slice(0, 1500) } }
@@ -4216,8 +4110,6 @@ export class QQBotDO {
 
   async fireDueReminders() {
     if (!this.isAlive()) return;
-    // Scope everything to this bot: without bot_id every reminder DO would race
-    // for every other bot's reminders and send them from the wrong account.
     const bid = this.botId();
     const due = await dueReminders(this.env, new Date().toISOString(), 5, bid);
     for (const r of due) {
@@ -4247,11 +4139,6 @@ export class QQBotDO {
     }
   }
 
-  // Delivery order:
-  //   1. as-is (C2C reminder -> C2C; group reminder -> group proactive)
-  //   2. if the group proactive push is refused, fall back to a private message
-  // The group push only works when the group owner enabled the proactive switch,
-  // so try it first and degrade gracefully.
   async deliverReminder(r, body) {
     const isC2C = !!r.is_c2c;
     if (isC2C) {
@@ -4260,7 +4147,6 @@ export class QQBotDO {
       return sent.ok ? { ok: true, via: '单聊' } : { ok: false, error: sent.error };
     }
 
-    // Group reminder: try the group first.
     const state = await this.qqBotState(r.scope_id).catch(() => null);
     const groupAllowed = !(state && state.allow_proactive_msg === false);
     const owner = this.reminderOwnerOpenid(r.scope_key);
@@ -4278,19 +4164,16 @@ export class QQBotDO {
       this.logger.warn(`Group proactive failed, falling back to C2C: ${sent.error}`);
     }
 
-    // Fall back to a private message to whoever created the reminder.
     if (!owner) {
       return { ok: false, error: '群主动推送不可用，且找不到发起者 openid 用于私聊兜底' };
     }
     const sent = await this.sendProactive({ isC2C: true, scopeId: owner, content: body })
       .catch((e) => ({ ok: false, error: e.message }));
     if (!sent.ok) return { ok: false, error: sent.error };
-    // Keep the private reminder in the user's chat history so follow-up
     await this.rememberReminderInChat(owner, body);
     return { ok: true, via: '私聊兜底' };
   }
 
-  // Write the reminder into the C2C conversation so the AI has it later.
   async rememberReminderInChat(openid, body) {
     const key = `c2c:${openid}`;
     try {
@@ -4309,7 +4192,6 @@ export class QQBotDO {
         });
         if (res.ok) return;
       }
-      // No ChatDO binding: fall back to the in-memory session history.
       const session = await this.loadSession(key);
       if (session && Array.isArray(session.history)) {
         session.history.push({ role: 'assistant', content: body });
@@ -4323,7 +4205,6 @@ export class QQBotDO {
     }
   }
 
-  // scope_key looks like "group:<groupId>:u:<userOpenid>" / "c2c:<openid>".
   reminderOwnerOpenid(scopeKey) {
     const s = String(scopeKey || '');
     const m = /^group:[^:]+:u:([^:]+)$/.exec(s);
@@ -4332,7 +4213,6 @@ export class QQBotDO {
     if (c) return c[1];
     return '';
   }
-
 
   extractToolCall(reply) {
     const s = String(reply || '');
@@ -4378,10 +4258,6 @@ export class QQBotDO {
     }
   }
 
-  // Member roles cache (openid -> owner/admin/member).
-  // Filled from author.member_role on every group message; the bot_state
-  // endpoint only describes the BOT's own role and may be whitelist-gated,
-  // so it must not be used to judge the requester.
   roleKey(scopeId) {
     return `grole:${scopeId}`;
   }
@@ -4449,8 +4325,6 @@ export class QQBotDO {
 
     if (isC2C) return deny('群管理操作只能在群里用～');
 
-    // Gate on the REQUESTER's role. A missing role means we have never seen
-    // this person speak with a known role, so treat it as "not allowed".
     const role = await this.requesterRole(scopeId, userId);
     if (role !== 'owner' && role !== 'admin') {
       this.logSystem(`拒绝群管理请求（${name}）：请求者角色=${role || '未知'}`);
@@ -4458,7 +4332,6 @@ export class QQBotDO {
     }
 
     const target = String(args.memberOpenid || args.member_openid || '').trim();
-    // Never let a requester moderate someone at or above their own level.
     const targetRole = target ? await this.requesterRole(scopeId, target) : '';
     const isSelf = target && String(target) === String(userId);
     if (target && (targetRole === 'owner' || isSelf)) {
@@ -4506,7 +4379,6 @@ export class QQBotDO {
       }
     }
 
-    // Irreversible actions need an explicit second confirmation.
     if (name === 'kick_member') {
       if (!target) return deny('要移出谁？给我对方的 openid。');
       await this.setPending(scopeId, userId, { kind: 'kick', target });
@@ -4524,7 +4396,6 @@ export class QQBotDO {
     return String((e && e.message) || e).slice(0, 80);
   }
 
-  // Execute a previously confirmed dangerous action.
   async confirmPendingManage({ isC2C, scopeId, msgId, userId }) {
     if (isC2C || !scopeId || !userId) return null;
     const pending = await this.takePending(scopeId, userId);
@@ -4548,8 +4419,6 @@ export class QQBotDO {
 
   async runTool(call, { isC2C, scopeId, key, msgId, userId, userContent, useAiDo }) {
     const name = call.name;
-    // Group management tools are privileged: the bot being an admin is not
-    // enough, the requester must also be the group owner or an admin.
     if (MANAGE_TOOLS.has(name)) {
       return this.runManageTool(call, { isC2C, scopeId, msgId, userId });
     }
