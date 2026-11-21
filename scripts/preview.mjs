@@ -341,18 +341,32 @@ function withFakeBotVolume() {
 
 const MIN = 60 * 1000;
 
-const C2C_A = 'c2c:9F5E6B45B1786BB51AFABA082F0BFB9E';
-const C2C_B = 'c2c:3A7C1D9E4F8B2A6C5D0E7F1B3A9C8D2E';
-const C2C_C = 'c2c:7B2E4F8A1C6D9E3B5A0F7C2D8E4B1A9F';
-const C2C_D = 'c2c:1D8F3A6B9C2E5F7A4B0D8C1E6F3A9B2D';
+const BOT_SCOPE = 'bot:bot-demo1';
+const C2C_A = `${BOT_SCOPE}:c2c:9F5E6B45B1786BB51AFABA082F0BFB9E`;
+const C2C_B = `${BOT_SCOPE}:c2c:3A7C1D9E4F8B2A6C5D0E7F1B3A9C8D2E`;
+const C2C_C = `${BOT_SCOPE}:c2c:7B2E4F8A1C6D9E3B5A0F7C2D8E4B1A9F`;
+const C2C_D = `${BOT_SCOPE}:c2c:1D8F3A6B9C2E5F7A4B0D8C1E6F3A9B2D`;
 
 const G1 = 'D4A8F2C6B1E9D7A3C5F8B2E6D9A1C4F7';
 const G2 = '8E3B7C1D5A9F2E6B4C8D0A3F7E1B5C9D';
-const G1_U1 = `${G1}:u:E5F1A8C3D6B2E9F4A7C1D8B5E2F6A3C9`;
-const G1_U2 = `${G1}:u:A2D7F4B8E1C6A9D3F5B0E8C2A4D7F1B6`;
-const G1_U3 = `${G1}:u:C9B3E6A1F4D8B2E7A5C0F3D9B6E2A8C4`;
-const G2_U1 = `${G2}:u:F1C5A9D3B7E2F6A4C8D1B5E9F3A7C2D6`;
-const G2_U2 = `${G2}:u:B6E2F8A4C1D9B5E3F7A0C6D2B8E4F1A5`;
+const G1_U1 = `${BOT_SCOPE}:group:${G1}:u:E5F1A8C3D6B2E9F4A7C1D8B5E2F6A3C9`;
+const G1_U2 = `${BOT_SCOPE}:group:${G1}:u:A2D7F4B8E1C6A9D3F5B0E8C2A4D7F1B6`;
+const G1_U3 = `${BOT_SCOPE}:group:${G1}:u:C9B3E6A1F4D8B2E7A5C0F3D9B6E2A8C4`;
+const G2_U1 = `${BOT_SCOPE}:group:${G2}:u:F1C5A9D3B7E2F6A4C8D1B5E9F3A7C2D6`;
+const G2_U2 = `${BOT_SCOPE}:group:${G2}:u:B6E2F8A4C1D9B5E3F7A0C6D2B8E4F1A5`;
+
+function isC2CScope(scope) {
+  return /^bot:[^:]+:c2c:/.test(String(scope || ''));
+}
+
+function maskScope(scope) {
+  const s = String(scope || '');
+  const g = /^bot:[^:]+:group:([^:]+):u:/.exec(s);
+  if (g) return g[1];
+  const c = /^bot:[^:]+:c2c:(.+)$/.exec(s);
+  if (c) return c[1];
+  return s;
+}
 
 const SANDBOX_FILES = {
   [C2C_A]: [
@@ -392,8 +406,8 @@ function demoSandboxes() {
     const newest = Math.min(...files.map((f) => f[2]));
     return {
       scope,
-      scopeMasked: scope.replace(/^c2c:/, '').replace(/^group:[^:]+:u:/, ''),
-      kind: scope.startsWith('c2c:') ? 'c2c' : 'group',
+      scopeMasked: maskScope(scope),
+      kind: isC2CScope(scope) ? 'c2c' : 'group',
       runs: files.length + 3,
       files: files.length,
       lastTask: files[0][0].startsWith('affection')
@@ -407,7 +421,7 @@ function demoSandboxes() {
 function demoSandboxDetail(scope) {
   const files = SANDBOX_FILES[scope] || [];
   return {
-    scopeMasked: scope.replace(/^c2c:/, '').replace(/^group:[^:]+:u:/, ''),
+    scopeMasked: maskScope(scope),
     files: files.map(([name, content, ago]) => ({
       path: 'users/' + (scope.includes('u:') ? scope.split('u:').pop() : scope.split(':').pop()) + '/' + name,
       bytes: Buffer.byteLength(content, 'utf8'),
@@ -462,8 +476,8 @@ const WORKSPACE_DATA = {
 function demoWorkspaces() {
   return Object.entries(WORKSPACE_DATA).map(([scope, w]) => ({
     scope,
-    scopeMasked: scope.replace(/^c2c:/, '').replace(/^group:[^:]+:u:/, ''),
-    kind: scope.startsWith('c2c:') ? 'c2c' : 'group',
+    scopeMasked: maskScope(scope),
+    kind: isC2CScope(scope) ? 'c2c' : 'group',
     runs: w.runs,
     tasks: w.tasks.length,
     notes: w.notes.length,
@@ -475,7 +489,7 @@ function demoWorkspaces() {
 function demoWorkspaceDetail(scope) {
   const w = WORKSPACE_DATA[scope] || { tasks: [], notes: [], runs: 0 };
   return {
-    scopeMasked: scope.replace(/^c2c:/, '').replace(/^group:[^:]+:u:/, ''),
+    scopeMasked: maskScope(scope),
     tasks: w.tasks,
     notes: w.notes,
     log: [],
@@ -520,14 +534,13 @@ function demoMenu() {
 }
 
 function demoReminders() {
-  const masked = (openid) => openid.slice(0, 8) + '…' + openid.slice(-4);
   const base = Date.now();
   const mk = (id, text, agoMin, opts = {}) => ({
     id,
     dueAt: base + (opts.dueAheadMin || 60) * MIN,
     text,
     isC2C: !!opts.isC2C,
-    scopeMasked: masked(opts.scope || G1),
+    scopeMasked: maskScope(opts.scope || G1),
     repeatRule: opts.repeatRule || null,
     status: opts.status || 'pending',
     createdAt: base - agoMin * MIN,
@@ -611,7 +624,7 @@ const MEMORY_DATA = {
 
 function demoMemory(scope) {
   const m = MEMORY_DATA[scope] || { messages: 0, summaryLen: 0, summary: '', facts: [], recent: [], sinceCompress: 0 };
-  return { scope, scopeMasked: scope.replace(/^c2c:/, '').replace(/^group:[^:]+:u:/, ''), ...m };
+  return { scope, scopeMasked: maskScope(scope), ...m };
 }
 
 const DEMO_CONVERSATIONS = [

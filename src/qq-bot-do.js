@@ -45,6 +45,7 @@ const EMOJIS = [
 const IMAGE_CAPTIONS = ['画好啦，看看喜不喜欢～', '喏，画好了 ✨', '画出来啦，还满意吗？', '给你画好了，慢慢看～'];
 const IMAGE_WAIT_LINES = ['好，我画一下，大概要一分多钟，等我～', '收到，开始画了，稍等一下下～', '在画了在画了，这个模型有点慢，等我一会儿～'];
 const MEME_CAPTIONS = ['（递上梗图）', '看图你就懂了', '这张太应景了', '来，接梗～'];
+const MAX_SEND_CHARS = 1500;
 
 const MANAGE_TOOLS = new Set(['mute_member', 'unmute_member', 'kick_member', 'join_approve']);
 const DANGER_TOOLS = new Set(['kick_member']);
@@ -118,12 +119,41 @@ const GROUP_CTX_PREFIX = 'gctx:';
 const MEMBER_NAME_PREFIX = 'gnick:';
 const GROUP_CTX_MAX_HARD = 50;
 
+const ROLE_TEXT = { owner: '群主', admin: '管理员' };
+const MEMBER_NO_PREFIX = 'gnum:';
+
+function memberNoKey(scopeId) {
+  return `${MEMBER_NO_PREFIX}${scopeId}`;
+}
+
 function groupCtxKey(scopeId) {
   return `${GROUP_CTX_PREFIX}${scopeId}`;
 }
 
 function memberNameKey(scopeId) {
   return `${MEMBER_NAME_PREFIX}${scopeId}`;
+}
+
+function memberPrevKey(scopeId) {
+  return `gprev:${scopeId}`;
+}
+
+function splitByModelMark(text) {
+  const s = String(text ?? '');
+  if (!s) return [''];
+  const parts = s
+    .split(/\[SEND\]/i)
+    .map((x) => x.trim())
+    .filter(Boolean);
+  const out = [];
+  for (const p of parts.length ? parts : [s]) {
+    if (p.length <= MAX_SEND_CHARS) {
+      out.push(p);
+      continue;
+    }
+    for (let i = 0; i < p.length; i += MAX_SEND_CHARS) out.push(p.slice(i, i + MAX_SEND_CHARS));
+  }
+  return out.length ? out : [s];
 }
 
 function stripToolRecords(text) {
@@ -139,6 +169,15 @@ function stripToolRecords(text) {
     })
     .join('\n')
     .trim();
+}
+
+function stripIdentityMarks(text) {
+  let s = String(text ?? '');
+  s = s.replace(/[（(]\s*(群主|管理员)\s*[）)]/g, '');
+  s = s.replace(/[（(]\s*曾用名[:：][^）)]*[）)]/g, '');
+  s = s.replace(/#\d{1,4}(?![\d])/g, '');
+  s = s.replace(/[ \t]{2,}/g, ' ');
+  return s.replace(/[ \t]+\n/g, '\n').trim();
 }
 
 function toBase64(bytes) {
@@ -193,6 +232,8 @@ export class QQBotDO {
     this.token = null;
     this.tokenExpiry = 0;
     this.sessions = new Map();
+    this.memberNoMaps = new Map();
+    this.memberNoDirty = new Set();
     this.memesCache = null;
     this.heartbeatTimer = null;
     this.config = {};
@@ -548,7 +589,7 @@ export class QQBotDO {
         } else if (t === 'GROUP_ADD_ROBOT') {
           this.state.waitUntil(this.handleGroupAddRobot(d).catch(() => {}));
         } else if (t === 'C2C_MSG_RECEIVE' || t === 'FRIEND_ADD') {
-          this.touchGroup(`c2c:${d.openid || ''}`);
+          this.logger.info(`C2C 事件 ${t}：私聊不写群列表`);
         }
         return Response.json({ ok: true, t });
       }
@@ -860,6 +901,25 @@ export class QQBotDO {
         this.teardown();
         await this.startBot();
         return Response.json({ ok: true, action: 'restarted', running: this.running });
+      }
+      case '/forget': {
+        let body = {};
+        try {
+          body = await request.json();
+        } catch {}
+        const key = String((body && body.key) || '').trim();
+        const group = String((body && body.group) || '').trim();
+        if (!key && !group) return Response.json({ ok: false, error: 'missing key' });
+        if (key) {
+          this.sessions.delete(key);
+          await this.state.storage.delete(this.sessionKey(key));
+        }
+        if (group) {
+          await this.state.storage.delete(groupCtxKey(group));
+          await this.forgetMemberNos(group);
+        }
+        this.logger.info(`已清除记忆 key=${key || '(none)'} group=${group || '(none)'}`);
+        return Response.json({ ok: true, key, group });
       }
       case '/status': {
         const now = Date.now();
@@ -1630,11 +1690,18 @@ export class QQBotDO {
     const scopeId = isC2C ? userId : data.group_openid;
     if (!userId || !scopeId) return;
     const authorName = String(author.username || '').trim().slice(0, 32);
-    const authorRole = String(author.member_role || '').trim().toLowerCase();
-    if (!isC2C && authorName) {
+    const authorRole = String(author.member_role || data.member_role || author.role || '')
+      .trim()
+      .toLowerCase();
+    const authorIsBot =
+      author.bot === true ||
+      author.is_bot === true ||
+      author.isBot === true ||
+      String(author.member_openid || '') === String(this.selfOpenid || '');
+    if (!isC2C && authorName && !authorIsBot) {
       this.rememberMemberNames(scopeId, [{ openid: userId, nick: authorName }]).catch(() => {});
     }
-    if (!isC2C && authorRole) {
+    if (!isC2C && !authorIsBot && (ROLE_TEXT[authorRole] || authorRole === 'member')) {
       this.rememberMemberRole(scopeId, userId, authorRole).catch(() => {});
     }
 
@@ -1660,13 +1727,24 @@ export class QQBotDO {
     const attachments = Array.isArray(data.attachments) ? data.attachments : [];
     let imageUrl = null;
     let fileAttachment = null;
+    let stickerUrl = null;
     for (const a of attachments) {
       if (!a) continue;
       const url = String(a.url || a.src || a.file_url || '').trim();
       if (!url) continue;
       const ct = String(a.content_type || a.contentType || '').toLowerCase();
       const fname = String(a.filename || a.file_name || a.name || '').trim();
+      const stickerish =
+        a.sticker === true ||
+        a.is_sticker === true ||
+        ct.includes('sticker') ||
+        ct.includes('emoji') ||
+        /表情|sticker|emoji/i.test(fname);
       const looksImage = !ct || ct.startsWith('image/') || /\.(png|jpe?g|gif|webp)(\?|$)/i.test(url);
+      if (stickerish && looksImage && !stickerUrl) {
+        stickerUrl = url;
+        continue;
+      }
       if (looksImage && !imageUrl) {
         imageUrl = url;
       } else if (!looksImage && !fileAttachment) {
@@ -1689,11 +1767,13 @@ export class QQBotDO {
     } else if (!attachments.length && !isC2C && /\\[图片\\]|\\[image\\]|图片/.test(content)) {
       this.logger.warn('Group message looks like an image but no attachment url (确认是否 @ 了机器人)');
     }
+    if (stickerUrl && !imageUrl) imageUrl = stickerUrl;
+    const isSticker = !!stickerUrl;
     if (!content && !imageUrl && !fileAttachment) {
       if (!isC2C && mentioned) content = '在吗';
       else return;
     }
-    if (!content) content = imageUrl ? '请描述这张图片' : '（我发了一个文件）';
+    if (!content) content = imageUrl ? '' : '（我发了一个文件）';
     const userText = content;
 
     let fileText = '';
@@ -1757,14 +1837,17 @@ export class QQBotDO {
 
     if (!isC2C) {
       const names = await this.loadMemberNames(scopeId);
+      const memberNo = authorIsBot ? 0 : await this.assignMemberNo(scopeId, userId);
       await this.recordGroupCtx(scopeId, {
         userId,
-        nick: authorName || names[userId] || '',
+        no: memberNo,
+        nick: authorName || (authorIsBot ? '' : names[userId] || ''),
         content,
         imageUrl,
         mentioned,
-        bot: false,
+        bot: authorIsBot,
       });
+      if (authorIsBot) return;
       if (!mentioned && this.config.groupReplyMode !== 'all') {
         const mode = this.config.groupReplyMode || 'smart';
         if (mode === 'at') return;
@@ -1776,9 +1859,9 @@ export class QQBotDO {
       }
     }
 
-    const key = this.ownerKey({ isC2C, scopeId, userId });
+    const key = this.memoryKey({ isC2C, scopeId, userId });
     if (!isC2C) this.touchGroup(scopeId);
-    const job = { isC2C, userId, scopeId, content, imageUrl, msgId: data.id, userText, fileName, fileText };
+    const job = { isC2C, userId, scopeId, content, imageUrl, isSticker, msgId: data.id, userText, fileName, fileText };
 
     this.pendingMessages++;
     const prev = this.messageQueues.get(key) || Promise.resolve();
@@ -1795,7 +1878,7 @@ export class QQBotDO {
   }
 
   async processMessage(key, job) {
-    const { isC2C, userId, scopeId, content, imageUrl, msgId, userText, fileName, fileText } = job;
+    const { isC2C, userId, scopeId, content, imageUrl, isSticker, msgId, userText, fileName, fileText } = job;
 
     await this.loadMsgSeq(msgId);
 
@@ -2111,16 +2194,31 @@ export class QQBotDO {
     if (!isC2C) {
       const ctxList = await this.loadGroupCtx(scopeId);
       const names = await this.loadMemberNames(scopeId);
-      const rendered = this.renderGroupCtx(ctxList, userId, names);
+      const roles = await this.loadMemberRoles(scopeId);
+      const prevs = await this.loadMemberPrev(scopeId);
+      const rendered = this.renderGroupCtx(ctxList, userId, names, roles, prevs);
       if (rendered) {
-        const selfLabel = this.stableMemberLabel(userId, names);
-        const selfNick = names[userId];
-        const selfDesc = selfNick ? `「${selfNick}」` : selfLabel;
+        const selfDesc = this.stableMemberLabel(
+          userId,
+          names,
+          roles[userId],
+          await this.assignMemberNo(scopeId, userId),
+          prevs
+        );
         groupCtxBlock =
           `\n\n【群聊上下文】下面是这个群最近的发言（按时间先后，最后一条就是现在这条）。` +
-          `现在是 ${selfDesc} 在跟你说话（标记为「当前用户」），其他人是群里别的成员（昵称或成员+尾号）。` +
+          `现在是 ${selfDesc} 在跟你说话（标记为「当前用户」），其他人是群里别的成员。` +
+          '每个人的称呼后面都带一个 #编号，这个编号跟着账号走、固定不变；昵称谁都能改、也可能重名，' +
+          '所以判断「是不是同一个人」只看 #编号，不要因为昵称一样就当成同一个人，' +
+          '也不要因为昵称变了就当成新的人——同一个 #编号 就是同一个人，改名前说过的话、' +
+          '你们之前的关系都要继续算在他头上；标了「曾用名」的说明就是同一个人换过称呼。' +
+          '带（群主）/（管理员）后缀的才是真有权限的人，其余都是普通成员。' +
+          '标着「另一个机器人」的是群里别的机器人发的，不是人，别把它当成群友，也别替它说话。' +
           '你不是只在跟一个人私聊，而是在一个群里。需要时可以自然接住群里的话题、' +
           '也可以提到别人刚才说了什么，但不要在回复里提「上下文」「记录」这类词，也不要逐条回应，只回当前这条就好。\n' +
+          '【重要】上面的 #编号 和（群主）（管理员）这些标注只是给你看的内部分类，' +
+          '**绝对不能出现在你的回复里**。要称呼谁就直接叫他昵称，比如「小明你说得对」；' +
+          '不要写「小明#3」「#3（群主）」这种。\n' +
           rendered;
       }
     }
@@ -2147,7 +2245,7 @@ export class QQBotDO {
         if (!out || out.error) throw new Error((out && out.error) || 'ChatDO 无响应');
         const text = stripMentions(out.text);
         const clean = /^@\S+\s+/.test(text) ? text.replace(/^@\S+\s+/, '') : text;
-        const stripped = stripToolRecords(clean);
+        let stripped = stripIdentityMarks(stripToolRecords(clean));
         if (!stripped) throw new Error('AI 只返回了内部记录');
         reply = stripped;
         used = out.provider;
@@ -2163,10 +2261,24 @@ export class QQBotDO {
       if (session.summary) msgs.splice(1, 0, { role: 'system', content: `【早前对话摘要】${session.summary}` });
       if (groupCtxBlock) msgs.splice(1, 0, { role: 'system', content: groupCtxBlock.trim() });
       if (aiImage) {
+        const imgText = content || '（我发了一张图，没有配文字）';
+        const visionRule = isSticker
+          ? '对方发的是一张表情包。你要做的是「看懂情绪，然后接话」：像群友一样自然回应，' +
+            '可以调侃、附和、回一个相近的情绪。不要描述图里画了什么，也不要说「这是一张表情包」这种话。'
+          : '对方发来一张图。你看得见，但不需要向我描述你看见了什么。\n' +
+            '硬性要求（违反即答错）：\n' +
+            '1. 只给结论、判断、意见或下一步，不要把图里的数字、指标、栏目、文字复述一遍；\n' +
+            '2. 不许分点罗列、不许小标题、不许「第X项」，不要翻译图里的内容；\n' +
+            '3. 不许说「这张图显示」「从图中可以看到」「让我为你解读」「综上」；\n' +
+            '4. 一两句说完，最多三句，像人随口回一句，不是写报告；\n' +
+            '5. 只有对方明确要求「念一下」「图里写了什么」「详细说说」「列出数据」时才展开。\n' +
+            '正确示范：「状态挺健康，失败率不到 2%，现在也没积压。」然后就结束。\n' +
+            '错误示范：把仪表盘每一项逐个念一遍，再加一段「总的来说……」。';
+        msgs.splice(1, 0, { role: 'system', content: visionRule });
         msgs[msgs.length - 1] = {
           role: 'user',
           content: [
-            { type: 'text', text: content },
+            { type: 'text', text: imgText },
             { type: 'image_url', image_url: { url: aiImage } },
           ],
         };
@@ -2195,7 +2307,7 @@ export class QQBotDO {
           const text = stripMentions(rawText);
           const clean = /^@\S+\s+/.test(text) ? text.replace(/^@\S+\s+/, '') : text;
           if (!clean) throw new Error('AI 返回空内容');
-          const stripped = stripToolRecords(clean);
+          let stripped = stripIdentityMarks(stripToolRecords(clean));
           if (!stripped) throw new Error('AI 只返回了内部记录');
           reply = stripped;
           used = provider;
@@ -2237,16 +2349,6 @@ export class QQBotDO {
         const caption = reply.slice(0, reply.indexOf('[GEN_IMAGE]')).trim();
         await this.handleImageGen({ isC2C, scopeId, msgId, prompt: genMatch[1].trim(), caption, userId, userContent: content });
         return;
-      }
-      if (/生成好|画好|已生成|出图|做好了|马上画|正在画/.test(reply)) {
-        const prompt = `${content}\n${reply.replace(/\[GEN_IMAGE\]/g, '')}`
-          .trim()
-          .slice(0, 400);
-        if (prompt) {
-          await this.rememberAssistant({ key, session, history, text: '（系统记录：已生成图片并发送给用户）', useAiDo, historyLimit, providers });
-          await this.handleImageGen({ isC2C, scopeId, msgId, prompt, userId, userContent: content });
-          return;
-        }
       }
     }
 
@@ -2356,7 +2458,13 @@ export class QQBotDO {
       '你是一个友好、靠谱、乐于助人的QQ机器人助手。回答保持简洁、自然、口语化，用中文交流。';
     const hasImageGen = !!this.config.imageGenModel || this.config.cfImageGenEnabled !== '0';
     const genHint = hasImageGen
-      ? '\n\n【生图能力】你支持生成图片。当用户要求你画图、绘制或生成图片时，你必须只输出一行：[GEN_IMAGE] <具体的图片描述>。如果想配一句话（比如「画好啦」），写在标记**前面**，图片发完后会跟着发出去；不要写「生成好了」「马上画」这类空话。系统会自动调用生图模型把图片发给用户。用户只是聊天、没有要求画图时正常回答。'
+      ? '\n\n【生图能力】你有画图能力，但**必须用标记触发**，系统只认 [GEN_IMAGE] 这一种写法。' +
+        '\n- 用户要你画图 / 生成图片 / 要一张图时：在回复里单独一行输出 [GEN_IMAGE] <画面描述>，' +
+        '前面可以配一句话（会跟在图片后面发出）。' +
+        '\n- 你只是「介绍自己会画图」「说明画图怎么做」「举例提到画图」时：**绝对不要**输出 [GEN_IMAGE]，' +
+        '也别说「已经画好」「马上画」这类话，正常回答问题即可。' +
+        '\n- 不要假装已经生成图片；有没有真的画，只取决于你有没有输出 [GEN_IMAGE] 标记。' +
+        '\n- 用户只是聊天、问你能做什么、问图怎么画时，正常回答，不要调用生图。'
       : '\n\n【注意】你没有生图能力，也没有图片生成工具。当用户要求画图时，如实说明「需要先在后台配置生图模型才能画」，绝对不要假装已经生成图片或说「生成好了」。';
     const toolHint =
       this.config.toolCalling !== '0'
@@ -2398,13 +2506,21 @@ export class QQBotDO {
       '如果内容确实没读到（提示「无法读取」），才如实告诉用户读不了，并说明原因。' +
       '如果用户问你在哪、沙箱是什么，就按这段如实回答：你在 Cloudflare 的 Durable Object 存储里活动，数据持久化、实例休眠也不会丢。用户要已有的文件时，用 file 工具直接发；不知道路径就让 sandbox 工具列一下并逐个发。不要因为「不能打包成 zip」就拒绝发送文件。'
 
+    const sendHint =
+      '\n\n【分条发送】你自己决定一条消息发多少内容，不要让别人替你切。' +
+      '\n- 一般闲聊：一条就够，不要分条。' +
+      '\n- 内容确实长（介绍能力、列清单、讲步骤）时：在你想分开发的位置插入 [SEND]，系统会拆成多条依次发出。' +
+      '\n- 一条最多 1500 字，超了会被硬切断；与其被切断，不如自己用 [SEND] 在合适的地方分开。' +
+      '\n- [SEND] 本身不会显示给用户，只在行间写，不要解释它。';
+
     return (
       basePrompt +
       workspaceHint +
       '\n\n对话历史里以「（系统记录：…）」开头的句子是系统内部记录，只用来让你知道刚才做过什么，不要复述给用户。' +
       genHint +
       toolHint +
-      memeHint
+      memeHint +
+      sendHint
     );
   }
 
@@ -2489,8 +2605,12 @@ export class QQBotDO {
 
   ownerKey({ isC2C, scopeId, userId }) {
     const base = isC2C ? `c2c:${userId || scopeId}` : `group:${scopeId}:u:${userId || 'unknown'}`;
-    // 必须带 bot 前缀，否则两个机器人的工作区、沙箱、记忆会共用同一份
     return `bot:${this.botId()}:${base}`;
+  }
+
+  memoryKey({ isC2C, scopeId, userId }) {
+    const bid = this.botId();
+    return isC2C ? `bot:${bid}:c2c:${userId || scopeId}` : `bot:${bid}:group:${scopeId}`;
   }
 
   async recordGroupCtx(scopeId, entry) {
@@ -2504,11 +2624,13 @@ export class QQBotDO {
       const list = Array.isArray(buf) ? buf : [];
       list.push({
         u: String(entry.userId || '').slice(0, 64),
+        no: Number.isInteger(entry.no) && entry.no > 0 ? entry.no : 0,
         n: String(entry.nick || '').slice(0, 32),
         c: String(entry.content || '').slice(0, 500),
         img: entry.imageUrl ? 1 : 0,
         at: entry.mentioned ? 1 : 0,
         bot: entry.bot ? 1 : 0,
+        self: entry.self ? 1 : 0,
         t: Date.now(),
       });
       const trimmed = list.slice(-limit);
@@ -2527,16 +2649,34 @@ export class QQBotDO {
     }
   }
 
+  async loadMemberPrev(scopeId) {
+    try {
+      const v = await this.state.storage.get(memberPrevKey(scopeId));
+      return v && typeof v === 'object' ? v : {};
+    } catch {
+      return {};
+    }
+  }
+
   async rememberMemberNames(scopeId, pairs) {
     if (!scopeId || !pairs || !pairs.length) return;
     try {
       const cur = await this.loadMemberNames(scopeId);
+      const prev = await this.loadMemberPrev(scopeId);
       let changed = false;
+      let prevChanged = false;
       for (const p of pairs) {
         const id = String((p && p.openid) || '').trim();
         const nick = String((p && p.nick) || '').trim().slice(0, 32);
         if (!id || !nick) continue;
-        if (cur[id] !== nick) {
+        const old = cur[id];
+        if (old !== nick) {
+          if (old) {
+            const list = Array.isArray(prev[id]) ? prev[id] : [];
+            const merged = [old, ...list.filter((x) => x && x !== old && x !== nick)].slice(0, 3);
+            prev[id] = merged;
+            prevChanged = true;
+          }
           cur[id] = nick;
           changed = true;
         }
@@ -2547,18 +2687,83 @@ export class QQBotDO {
         changed = true;
       }
       if (changed) await this.state.storage.put(memberNameKey(scopeId), cur);
+      if (prevChanged) await this.state.storage.put(memberPrevKey(scopeId), prev);
     } catch (e) {
       this.logger.warn(`Member name cache failed: ${e.message}`);
     }
   }
 
-  stableMemberLabel(openid, names) {
+  stableMemberLabel(openid, names, role, no, prev) {
     const id = String(openid || '');
     if (!id) return '未知成员';
     const nick = names && names[id];
-    if (nick) return `「${nick}」`;
-    const tail = id.length > 4 ? id.slice(-4) : id;
-    return `成员${tail}`;
+    const roleTxt = ROLE_TEXT[String(role || '').toLowerCase()] || '';
+    const head = nick ? `「${nick}」` : '成员';
+    const tag = Number.isInteger(no) && no > 0 ? `#${no}` : '';
+    const prevList = Array.isArray(prev && prev[id]) ? prev[id].filter(Boolean) : [];
+    const prevTxt = nick && prevList.length ? `（曾用名：${prevList.join('、')}）` : '';
+    return `${head}${tag}${prevTxt}${roleTxt ? `（${roleTxt}）` : ''}`;
+  }
+
+  memberNoMap(scopeId) {
+    const key = memberNoKey(scopeId);
+    if (!this.memberNoMaps) this.memberNoMaps = new Map();
+    let p = this.memberNoMaps.get(key);
+    if (!p) {
+      p = (async () => {
+        let raw = {};
+        try {
+          raw = (await this.state.storage.get(key)) || {};
+        } catch {}
+        const m = new Map();
+        for (const [k, v] of Object.entries(raw)) {
+          if (Number.isInteger(v) && v > 0) m.set(k, v);
+        }
+        return m;
+      })();
+      this.memberNoMaps.set(key, p);
+    }
+    return p;
+  }
+
+  async assignMemberNo(scopeId, openid) {
+    const id = String(openid || '').trim();
+    if (!scopeId || !id) return 0;
+    const key = memberNoKey(scopeId);
+    const m = await this.memberNoMap(scopeId);
+    const cur = m.get(id);
+    if (cur) return cur;
+    if (m.size >= 2000) return 0;
+    let max = 0;
+    for (const v of m.values()) if (v > max) max = v;
+    const next = max + 1;
+    m.set(id, next);
+    if (!this.memberNoDirty) this.memberNoDirty = new Set();
+    this.memberNoDirty.add(key);
+    await this.flushMemberNos(scopeId);
+    return next;
+  }
+
+  async flushMemberNos(scopeId) {
+    const key = memberNoKey(scopeId);
+    if (!this.memberNoDirty) this.memberNoDirty = new Set();
+    if (!this.memberNoDirty.has(key)) return;
+    try {
+      const m = await this.memberNoMap(scopeId);
+      const obj = {};
+      for (const [k, v] of m) obj[k] = v;
+      this.memberNoDirty.delete(key);
+      await this.state.storage.put(key, obj);
+    } catch (e) {
+      this.logger.warn(`Member no persist failed: ${e.message}`);
+    }
+  }
+
+  forgetMemberNos(scopeId) {
+    const key = memberNoKey(scopeId);
+    this.memberNoMaps.delete(key);
+    this.memberNoDirty.delete(key);
+    return this.state.storage.delete(key).catch(() => {});
   }
 
   async getSelfOpenid(groupOpenid) {
@@ -2614,18 +2819,20 @@ export class QQBotDO {
     }
   }
 
-  renderGroupCtx(list, selfUserId, names) {
+  renderGroupCtx(list, selfUserId, names, roles, prevs) {
     if (!Array.isArray(list) || !list.length) return '';
     const lines = [];
     for (const e of list) {
       if (!e) continue;
       let who;
-      if (e.bot) {
-        who = '我（机器人）';
+      if (e.self) {
+        who = '我（机器人自己）';
+      } else if (e.bot) {
+        who = e.n ? `另一个机器人「${e.n}」` : '另一个机器人';
       } else if (String(e.u || '') === String(selfUserId || '')) {
-        who = `当前用户${e.n ? '「' + e.n + '」' : ''}`;
+        who = `当前用户${this.stableMemberLabel(e.u, names, roles && roles[e.u], e.no, prevs)}`;
       } else {
-        who = this.stableMemberLabel(e.u, names) || '群成员';
+        who = this.stableMemberLabel(e.u, names, roles && roles[e.u], e.no, prevs) || '群成员';
       }
       let text = String(e.c || '').replace(/\s+/g, ' ').trim();
       if (!text && e.img) text = '[图片]';
@@ -3105,8 +3312,8 @@ export class QQBotDO {
         this.logger.warn(`@全体跳过：${scopeId.slice(0, 8)}... 今日已用过`);
       }
     }
-    finalContent = finalContent.slice(0, 1500);
-    if (!finalContent) finalContent = '……';
+    const chunks = splitByModelMark(finalContent);
+    finalContent = chunks[0] || '……';
 
     const hasAtTag = !isC2C && /<qqbot-at-(user|everyone)\b/.test(finalContent);
     const useMarkdown = hasAtTag || (this.config.markdownReply === '1' && this.isMarkdownSafe(finalContent));
@@ -3168,8 +3375,28 @@ export class QQBotDO {
       }
     })();
 
+    for (let i = 1; i < chunks.length; i++) {
+      const seg = chunks[i];
+      if (!seg) continue;
+      finalContent = seg;
+      payload = buildPayload(!isC2C && hasAtTag ? false : useMarkdown && this.isMarkdownSafe(seg));
+      try {
+        const segTok = await this.getToken();
+        const okId = await withRetry(() => sendOnce(segTok, payload), {
+          maxAttempts: 2,
+          delay: 800,
+          shouldRetry: retryable,
+          onRetry: (err, attempt) => this.logger.warn(`Segment retry ${attempt}: ${err.message}`),
+        });
+        if (!okId) break;
+      } catch (e) {
+        this.logger.warn(`Segment ${i + 1} failed: ${e.message}`);
+        break;
+      }
+    }
+
     if (sentId && !isC2C) {
-      await this.recordGroupCtx(scopeId, { userId: '', content: finalContent, bot: true, mentioned: false });
+      await this.recordGroupCtx(scopeId, { userId: '', content: finalContent, bot: true, self: true, mentioned: false });
     }
     return sentId;
   }
@@ -4158,7 +4385,7 @@ export class QQBotDO {
         atUserId: owner,
       }).catch((e) => ({ ok: false, error: e.message }));
       if (sent.ok) {
-        await this.recordGroupCtx(r.scope_id, { userId: '', content: body, bot: true, mentioned: false });
+        await this.recordGroupCtx(r.scope_id, { userId: '', content: body, bot: true, self: true, mentioned: false });
         return { ok: true, via: '群主动推送' };
       }
       this.logger.warn(`Group proactive failed, falling back to C2C: ${sent.error}`);
@@ -4175,7 +4402,7 @@ export class QQBotDO {
   }
 
   async rememberReminderInChat(openid, body) {
-    const key = `c2c:${openid}`;
+    const key = this.memoryKey({ isC2C: true, scopeId: openid, userId: openid });
     try {
       const chatDoNs = this.env && (this.env.CHAT || this.env.AI_WORKER);
       if (chatDoNs && typeof chatDoNs.idFromName === 'function') {
@@ -4328,6 +4555,9 @@ export class QQBotDO {
     const role = await this.requesterRole(scopeId, userId);
     if (role !== 'owner' && role !== 'admin') {
       this.logSystem(`拒绝群管理请求（${name}）：请求者角色=${role || '未知'}`);
+      if (!role) {
+        return deny('我还不知道你在群里的身份。你 @ 我 说句话让我记一下，或者让群主直接跟我说～');
+      }
       return deny('只有群主和管理员能让我做管理操作～');
     }
 

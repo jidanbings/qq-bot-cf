@@ -1613,8 +1613,9 @@ function convRowHtml(c){
   var prev=c.lastUser?('我：'+c.lastUser):(c.lastReply||'');
   return '<div class="conv" data-scope="'+esc(c.scopeId)+'" data-kind="'+esc(c.kind)+'">'
     +'<span class="conv-av">'+(c.kind==='c2c'?IX.chat:IX.groups)+'</span>'
-    +'<div class="conv-main"><div class="conv-name">'+esc(kindTxt)+' #'+esc(c.scopeId)
-    +'<span class="hint">'+esc(String(c.count))+' 条</span></div>'
+    +'<div class="conv-main"><div class="conv-name">'+esc(kindTxt)
+    +'<span class="hint">'+esc(String(c.count))+' 条</span>'
+    +'<span class="hint conv-code" title="会话内部标识">'+esc(c.scopeId)+'</span></div>'
     +'<div class="conv-prev">'+esc(prev||'（无内容）')+'</div></div>'
     +'<span class="conv-time">'+esc(shortTime(c.lastAt))+'</span>'
     +'<button class="conv-del" type="button" data-del="'+esc(c.scopeId)+'" title="删除这个会话">'+IX.trash+'</button></div>';
@@ -1709,9 +1710,10 @@ function loadThread(scope,before){
   var first=!before;
   if(first&&body)body.innerHTML='<div class="thread-empty">加载中…</div>';
   var bq=botQuery();
+  var sep=bq?'&':'?';
   var q=scope==='system'
-    ? ('/api/system-messages'+bq+(before?((bq?'&':'?')+'before='+before):''))
-    : ('/api/conversations/messages'+bq+'?scope='+encodeURIComponent(scope)+(before?('&before='+before):''));
+    ? ('/api/system-messages'+bq+(before?(sep+'before='+before):''))
+    : ('/api/conversations/messages'+bq+sep+'scope='+encodeURIComponent(scope)+(before?('&before='+before):''));
   return api('GET',q).then(function(d){
     var items=(d&&d.items)||[];
     chatState.hasMore=!!(d&&d.hasMore);
@@ -1748,7 +1750,13 @@ function openConversation(scope,kind){
     for(var i=0;i<rows.length;i++)rows[i].classList.toggle('active',rows[i].getAttribute('data-scope')===scope);
   }
   var title=$('thread-title');
-  if(title)title.textContent=scope==='system'?'系统消息':('会话 #'+scope);
+  if(title){
+    if(scope==='system')title.textContent='系统消息';
+    else{
+      var k=chatState.kind==='c2c'?'私聊':'群聊';
+      title.textContent=k;
+    }
+  }
   var meta=$('thread-meta');
   if(meta)meta.textContent='';
   return loadThread(scope,0);
@@ -2597,11 +2605,8 @@ function wsGroupCardHtml(grp,urows){
 }
 
 function groupOpenidOf(scope){
-  var s=String(scope||'');
-  if(s.indexOf('group:')!==0)return s;
-  var rest=s.slice(6);
-  var idx=rest.indexOf(':u:');
-  return idx>=0?rest.slice(0,idx):rest;
+  var m=/^bot:[^:]+:group:([^:]+):u:/.exec(String(scope||''));
+  return m?m[1]:String(scope||'');
 }
 
 function wsUserBtnHtml(it,kind){
@@ -3225,15 +3230,16 @@ function grpPermHint(msg){
 
 function removeGroupRow(openid){
   confirmDialog({
-    title:'从这个列表移除群？',
-    message:'只影响后台的这个群卡片，不影响机器人继续在该群工作。',
+    title:'移除这个群，并清空它的记录？',
+    message:'会把这个群从列表移除，同时删掉它的聊天记录和对话记忆，机器人之后不再认得这个群。其它群不受影响。',
     detail:openid,
-    confirm:'移除',
+    confirm:'移除并清空',
     danger:true
   }).then(function(yes){
     if(!yes)return;
-    api('POST','/api/groups/remove',{openid:openid}).then(function(){
-      toast('已移除','ok');
+    api('POST','/api/groups/remove'+botQuery(),{openid:openid}).then(function(d){
+      var n=(d&&d.logsDeleted)||0;
+      toast(n?('已移除，清空 '+n+' 条记录'):'已移除','ok');
       return loadWorkspaces();
     }).catch(function(e){toast(e.message,'bad');});
   });

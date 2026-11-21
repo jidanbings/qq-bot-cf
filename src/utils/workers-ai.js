@@ -99,15 +99,14 @@ export async function cfText(env, model, messages, temperature) {
   const inputs = {
     messages,
     max_completion_tokens: CHAT_MAX_TOKENS,
-    // 该模型默认推理强度是 xhigh，会先烧掉大量 token 再写正文，聊天场景会被 QQ 的被动回复窗口卡死
     reasoning_effort: 'low',
   };
+  // low 是必须的：默认 xhigh 会先烧光 token，超出 QQ 被动回复窗口就不回了
   if (Number.isFinite(t)) inputs.temperature = t;
   let out;
   try {
     out = await ai.run(model, inputs);
   } catch (err) {
-    // 图片请求被拒时退回纯文本再问一次，避免整条消息没有回复
     if (!hasImageParts(messages)) throw err;
     out = await ai.run(model, { ...inputs, messages: stripImageParts(messages) });
   }

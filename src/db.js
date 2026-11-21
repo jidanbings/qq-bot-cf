@@ -252,9 +252,6 @@ function upsertConfig(env, key, value, now) {
   ).bind(key, value, now);
 }
 
-// 没有「默认机器人」：每个机器人都有一行 bots 记录，配置一律存成 bot:<id>:<字段>。
-// NO_BOT 只是「没给机器人」时的哨兵值，匹配不到任何真实机器人，读出来就是空，
-// 绝不会串到别人的数据上。
 export const NO_BOT = '__no_bot__';
 export const MAX_BOTS = 5;
 const BOT_KEY_PREFIX = 'bot:';
@@ -855,6 +852,7 @@ export async function deleteConversation(env, scopeId, botId) {
 export async function upsertGroup(env, openid, source, botId) {
   const id = String(openid || '').trim();
   if (!id || id.length > 128) return;
+  if (id.startsWith('c2c:')) return;
   const now = new Date().toISOString();
   await env.DB.prepare(
     'INSERT INTO groups (openid, source, added_at, last_seen, bot_id) VALUES (?1, ?2, ?3, ?3, ?4) ' +
@@ -867,7 +865,8 @@ export async function upsertGroup(env, openid, source, botId) {
 export async function listGroups(env, botId) {
   try {
     const { results } = await env.DB.prepare(
-      'SELECT openid, source, added_at, last_seen FROM groups WHERE bot_id = ?1 ORDER BY COALESCE(last_seen, added_at) DESC'
+      'SELECT openid, source, added_at, last_seen FROM groups WHERE bot_id = ?1 ' +
+        'ORDER BY COALESCE(last_seen, added_at) DESC'
     ).bind(botId || NO_BOT).all();
     return results || [];
   } catch {
@@ -875,8 +874,20 @@ export async function listGroups(env, botId) {
   }
 }
 
-export async function removeGroup(env, openid) {
-  await env.DB.prepare('DELETE FROM groups WHERE openid = ?1').bind(String(openid || '').trim()).run();
+export async function removeGroup(env, openid, botId) {
+  const id = String(openid || '').trim();
+  if (!id) return { removed: 0, logs: 0 };
+  const bid = botId || NO_BOT;
+  const res = await env.DB.prepare('DELETE FROM groups WHERE openid = ?1').bind(id).run();
+  let logs = 0;
+  const scope = await maskId(id);
+  if (scope) {
+    const r = await env.DB.prepare('DELETE FROM chat_log WHERE bot_id = ?1 AND scope_id = ?2')
+      .bind(bid, scope)
+      .run();
+    logs = r.meta?.changes ?? 0;
+  }
+  return { removed: res.meta?.changes ?? 0, logs };
 }
 
 export async function addReminder(env, { scopeKey, isC2C, scopeId, dueAt, text, repeatRule, botId }) {
@@ -1043,9 +1054,56 @@ export async function deleteWorkspace(env, scope) {
   }
 }
 
+export async function purgeGroupScopes(env, botId, groupOpenid) {
+  const bid = botId || NO_BOT;
+  const gid = String(groupOpenid || '').trim();
+  if (!gid) return { scopes: [], workspace: 0, sandbox: 0 };
+  const prefix = `bot:${bid}:group:${gid}:u:`;
+  let scopes = [];
+  try {
+    const { results } = await env.DB.prepare(
+      'SELECT scope FROM workspaces WHERE bot_id = ?1 AND scope LIKE ?2'
+    )
+      .bind(bid, prefix + '%')
+      .all();
+    scopes = (results || []).map((r) => r.scope);
+  } catch {
+    scopes = [];
+  }
+  let workspace = 0;
+  let sandbox = 0;
+  try {
+    const r = await env.DB.prepare('DELETE FROM workspaces WHERE bot_id = ?1 AND scope LIKE ?2')
+      .bind(bid, prefix + '%')
+      .run();
+    workspace = r.meta?.changes ?? 0;
+  } catch {}
+  try {
+    const r = await env.DB.prepare('DELETE FROM sandboxes WHERE bot_id = ?1 AND scope LIKE ?2')
+      .bind(bid, prefix + '%')
+      .run();
+    sandbox = r.meta?.changes ?? 0;
+  } catch {}
+  return { scopes, workspace, sandbox };
+}
+
 export function botIdFromScope(scope) {
   const m = /^bot:([^:]+):/.exec(String(scope || ''));
   return m ? m[1] : NO_BOT;
+}
+
+export function chatKeyFromScope(scope) {
+  const s = String(scope || '');
+  const g = /^bot:([^:]+):group:([^:]+):u:/.exec(s);
+  if (g) return `bot:${g[1]}:group:${g[2]}`;
+  const c = /^bot:([^:]+):c2c:(.+)$/.exec(s);
+  if (c && !c[2].includes(':u:')) return `bot:${c[1]}:c2c:${c[2]}`;
+  return '';
+}
+
+export function groupIdFromScope(scope) {
+  const m = /^bot:[^:]+:group:([^:]+):u:/.exec(String(scope || ''));
+  return m ? m[1] : '';
 }
 
 export async function getSandbox(env, scope, botId) {

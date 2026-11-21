@@ -24,6 +24,7 @@ import {
   listReminders,
   listWorkspaces,
   deleteWorkspace,
+  purgeGroupScopes,
   listSandboxes,
   deleteSandbox,
   normalizeUrl,
@@ -40,6 +41,9 @@ import {
   NO_BOT,
   MAX_BOTS,
   botConfigKey,
+  botIdFromScope,
+  chatKeyFromScope,
+  groupIdFromScope,
   listBots,
   getBot,
   createBot,
@@ -332,7 +336,6 @@ async function handleQqWebhook(request, env, ctx, hintBotId) {
       if (!target && headerAppId) target = await findBotByAppId(env, headerAppId).catch(() => null);
       if (!target) {
         const all = await listBots(env).catch(() => []);
-        // 只有一个机器人时它是唯一的，不算猜测；多个时必须靠专用地址或请求头
         if (all.length === 1) target = { id: all[0].id };
       }
       if (!target) {
@@ -839,8 +842,51 @@ async function handleApi(request, env, url) {
       const body = await readJson(request);
       const openid = String(body?.openid || '').trim();
       if (!openid) throw new HttpError(400, 'invalid_openid', '缺少群 openid');
-      await removeGroup(env, openid);
-      return jsonResult({ openid });
+      const groupBotId = requireBotId(url, body);
+      const result = await removeGroup(env, openid, groupBotId);
+      const purged = await purgeGroupScopes(env, groupBotId, openid);
+      for (const sc of purged.scopes) {
+        if (env.WORK || env.WORKSPACE) {
+          try {
+            const ws = (env.WORK || env.WORKSPACE).get((env.WORK || env.WORKSPACE).idFromName(sc));
+            await ws.fetch('https://ws/reset', { method: 'POST', body: '{}' });
+          } catch {}
+        }
+        if (env.AIDO) {
+          try {
+            const ad = env.AIDO.get(env.AIDO.idFromName(sc));
+            await ad.fetch('https://aido/reset', { method: 'POST', body: '{}' });
+          } catch {}
+        }
+      }
+      const groupChatKey = `bot:${groupBotId}:group:${openid}`;
+      try {
+        const stub = botStub(env, undefined, groupBotId);
+        await stub.fetch('https://qqbot/forget', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key: groupChatKey, group: openid }),
+        });
+      } catch (e) {
+        console.warn('groups/remove: 清记忆失败', redact(String((e && e.message) || e)));
+      }
+      if (env.CHAT) {
+        try {
+          const cstub = env.CHAT.get(env.CHAT.idFromName(groupChatKey));
+          await cstub.fetch('https://ai-do/reset', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key: groupChatKey }),
+          });
+        } catch {}
+      }
+      return jsonResult({
+        openid,
+        removed: result.removed,
+        logsDeleted: result.logs,
+        workspacesDeleted: purged.workspace,
+        memoryCleared: true,
+      });
     }
 
     case '/api/groups/reply': {
@@ -1106,13 +1152,14 @@ async function handleApi(request, env, url) {
       const body = await readJson(request);
       const scope = assertScope(body?.scope);
       if (!env.CHAT) throw new HttpError(503, 'no_chat', 'ChatDO 未绑定');
-      const stub = env.CHAT.get(env.CHAT.idFromName(scope));
+      const chatKey = chatKeyFromScope(scope) || scope;
+      const stub = env.CHAT.get(env.CHAT.idFromName(chatKey));
       const res = await stub.fetch('https://chat/state', {
         method: 'POST',
-        body: JSON.stringify({ key: scope }),
+        body: JSON.stringify({ key: chatKey }),
       });
       const state = await res.json();
-      return jsonResult({ scope, scopeMasked: await maskId(scope), ...state });
+      return jsonResult({ scope, chatKey, scopeMasked: await maskId(scope), ...state });
     }
 
     case '/api/memory/clear': {
@@ -1120,10 +1167,11 @@ async function handleApi(request, env, url) {
       const body = await readJson(request);
       const scope = assertScope(body?.scope);
       if (!env.CHAT) throw new HttpError(503, 'no_chat', 'ChatDO 未绑定');
-      const stub = env.CHAT.get(env.CHAT.idFromName(scope));
+      const chatKey = chatKeyFromScope(scope) || scope;
+      const stub = env.CHAT.get(env.CHAT.idFromName(chatKey));
       await stub.fetch('https://chat/reset', {
         method: 'POST',
-        body: JSON.stringify({ key: scope }),
+        body: JSON.stringify({ key: chatKey }),
       });
       return jsonResult({ cleared: true });
     }
@@ -1162,12 +1210,37 @@ async function handleApi(request, env, url) {
       if (method !== 'POST') throw new HttpError(405, 'method_not_allowed', '请使用 POST');
       const body = await readJson(request);
       const scope = assertScope(body?.scope);
-      if ((env.WORK || env.WORKSPACE)) {
+      if (env.WORK || env.WORKSPACE) {
         const stub = (env.WORK || env.WORKSPACE).get((env.WORK || env.WORKSPACE).idFromName(scope));
         await stub.fetch('https://ws/reset', { method: 'POST', body: '{}' });
       }
       await deleteWorkspace(env, scope);
-      return jsonResult({ cleared: true });
+      const memBot = botIdFromScope(scope);
+      const memKey = chatKeyFromScope(scope);
+      const memGroup = groupIdFromScope(scope);
+      if (memKey && memBot && memBot !== NO_BOT) {
+        try {
+          const stub = botStub(env, undefined, memBot);
+          await stub.fetch('https://qqbot/forget', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key: memKey, group: memGroup }),
+          });
+        } catch (e) {
+          console.warn('workspaces/clear: 清记忆失败', redact(String((e && e.message) || e)));
+        }
+        if (env.CHAT) {
+          try {
+            const cstub = env.CHAT.get(env.CHAT.idFromName(memKey));
+            await cstub.fetch('https://ai-do/reset', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ key: memKey }),
+            });
+          } catch {}
+        }
+      }
+      return jsonResult({ cleared: true, memoryCleared: !!memKey });
     }
 
     case '/api/reminders':
